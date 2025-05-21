@@ -1,21 +1,18 @@
-import logging
 import random
-from datetime import time
 
 from starlette.responses import StreamingResponse
 
-from connectors.aws_s3.aws_s3_client import AWSS3Client
+from connectors.azure_blob_storage.azure_blob_storage_client import AzureBlobClient
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.utils import file_ops
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
-from dsx_connect.utils.async_ops import run_async
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
-from connectors.aws_s3.config import ConfigManager
-from connectors.aws_s3.version import CONNECTOR_VERSION
+from connectors.azure_blob_storage.config import ConfigManager
+from connectors.azure_blob_storage.version import CONNECTOR_VERSION
+from dsx_connect.utils.streaming import stream_blob
 
 random_number_id = random.randint(0, 9999)
-connector_id = f'aws-s3-connector-{random_number_id:04d}'
+connector_id = f'azure-blob-storage-connector-{random_number_id:04d}'
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
@@ -27,16 +24,15 @@ connector = DSXConnector(connector_name=config.name,
                          dsx_connect_url=config.dsx_connect_url,
                          test_mode=config.test_mode)
 
-aws_s3_client = AWSS3Client(s3_endpoint_url=config.s3_endpoint_url, s3_endpoint_verify=config.s3_endpoint_verify)
+abs_client = AzureBlobClient()
+
+_started = False
 
 
 async def startup():
     """
     Create any resources necessary for this connector's operations
     """
-
-
-_started = False
 
 
 @connector.startup
@@ -110,13 +106,10 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
-    for key in aws_s3_client.keys(config.s3_bucket, prefix=config.s3_prefix, recursive=config.s3_recursive):
-        file_name = key['Key']
-        full_path = f"{config.s3_bucket}/{file_name}"
-        status_response = await connector.scan_file_request(
-            ScanRequestModel(location=str(f"{file_name}"), metainfo=full_path))
-        dsx_logging.debug(f'Sent scan request for {full_path}, result: {status_response}')
-
+    for blob in abs_client.keys(config.abs_bucket, prefix=config.abs_prefix, recursive=config.abs_recursive):
+        key = blob['Key']
+        full_path = f"{config.abs_bucket}/{key}"
+        await connector.scan_file_request(ScanRequestModel(location=key, metainfo=full_path))
     return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
 
 
@@ -138,61 +131,20 @@ def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusRespon
         SimpleResponse: A response indicating that the remediation action was performed successfully,
             or an error if the action is not implemented.
     """
-    full_path = scan_event_queue_info.metainfo
-    if config.item_action == ItemActionEnum.NOTHING:
-        dsx_logging.debug(f'Item action {ItemActionEnum.NOTHING} on {full_path} invoked.')
-        return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                              message=f'Item action {config.item_action} was invoked.')
-    elif config.item_action == ItemActionEnum.DELETE:
-        dsx_logging.debug(f'Item action {ItemActionEnum.DELETE} on {full_path} invoked.')
-        # Check if the file exists
-        if aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
-            if aws_s3_client.delete_object(config.s3_bucket, scan_event_queue_info.location):
-                return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                                      message=f'Item action {config.item_action} was invoked. File {full_path} successfully deleted.')
-        return StatusResponse(status=StatusResponseEnum.ERROR,
-                              message=f'Item action {config.item_action} was invoked. Unable to delete  {full_path}.')
+    file_path = scan_event_queue_info.location
+    if config.item_action == ItemActionEnum.DELETE:
+        if abs_client.key_exists(config.abs_bucket, file_path):
+            abs_client.delete_blob(config.abs_bucket, file_path)
+            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File deleted.")
     elif config.item_action == ItemActionEnum.MOVE:
-        dsx_logging.debug(f'Item action {ItemActionEnum.MOVE} on {full_path} invoked.')
-        if aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
-            aws_s3_client.move_object(src_bucket=config.s3_bucket, src_key=scan_event_queue_info.location,
-                                      dest_bucket=config.s3_bucket,
-                                      dest_key=f"{config.item_action_move_prefix}/{scan_event_queue_info.location}")
-            return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                                  message=f'Item action {config.item_action} was invoked. File {full_path} successfully moved to {config.item_action_move_prefix}.')
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message=f'Item action {config.item_action} was invoked, but key {full_path} not found.'
-        )
+        dest_key = f"{config.item_action_move_prefix}/{file_path}"
+        abs_client.move_blob(config.abs_bucket, file_path, config.abs_bucket, dest_key)
+        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File moved.")
     elif config.item_action == ItemActionEnum.TAG:
-        dsx_logging.debug(f'Item action {ItemActionEnum.TAG} on {full_path} invoked.')
-        if aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
-            aws_s3_client.tag_object(config.s3_bucket, scan_event_queue_info.location, tags={"Verdict": "Malicious"})
-            return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                                  message=f'Item action {config.item_action} was invoked. File {full_path} successfully tagged.')
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message=f'Item action {config.item_action} was invoked, but key {full_path} not found.'
-        )
-    elif config.item_action == ItemActionEnum.MOVE_TAG:
-        dsx_logging.debug(f'Item action {ItemActionEnum.MOVE_TAG} on {full_path} invoked.')
-        if aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
-            dest_key = f"{config.item_action_move_prefix}/{scan_event_queue_info.location}"
+        abs_client.tag_blob(config.abs_bucket, file_path, {"Verdict": "Malicious"})
+        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File tagged.")
+    return StatusResponse(status=StatusResponseEnum.NOTHING, message="Item action not implemented")
 
-            aws_s3_client.move_object(src_bucket=config.s3_bucket, src_key=scan_event_queue_info.location,
-                                      dest_bucket=config.s3_bucket, dest_key=dest_key)
-
-            aws_s3_client.tag_object(config.s3_bucket, dest_key, tags={"Verdict": "Malicious"})
-
-            return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                                  message=f'Item action {config.item_action} was invoked. File {full_path} successfully tagged.')
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message=f'Item action {config.item_action} was invoked, but key {full_path} not found.'
-        )
-
-    return StatusResponse(status=StatusResponseEnum.NOTHING,
-                          message=f"Item action {config.item_action} not implemented.")
 
 
 @connector.read_file
@@ -231,14 +183,12 @@ def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse
         FileContentResponse or SimpleResponse: A successful FileContentResponse containing the file's content,
             or a SimpleResponse with an error message if file reading is not supported.
     """
-    bytes_obj = aws_s3_client.get_object(bucket=config.s3_bucket, key=scan_event_queue_info.location)
-
-    # Read the file content
+    # Implement file read (if applicable)
     try:
-        return StreamingResponse(bytes_obj, media_type="application/octet-stream")  # Stream file
+        file_stream = abs_client.get_blob(config.abs_bucket, scan_event_queue_info.location)
+        return StreamingResponse(stream_blob(file_stream), media_type="application/octet-stream")
     except Exception as e:
-        return StatusResponse(status=StatusResponseEnum.ERROR,
-                              message=f"Failed to read file: {str(e)}")
+        return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
 
 
 @connector.repo_check
@@ -251,18 +201,10 @@ def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    if aws_s3_client.test_s3_connection(config.s3_bucket):
-        return StatusResponse(
-            status=StatusResponseEnum.SUCCESS,
-            message=f"Connection to bucket: {config.s3_bucket} successful",
-            description=""
-        )
-
-    return StatusResponse(
-        status=StatusResponseEnum.ERROR,
-        message=f"Connection to bucket: {config.s3_bucket} NOT successful",
-        description=""
-    )
+    if abs_client.test_connection(config.abs_bucket):
+        return StatusResponse(status=StatusResponseEnum.SUCCESS,
+                              message=f"Connection to {config.abs_bucket} successful.")
+    return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.abs_bucket} failed.")
 
 
 @connector.webhook_event
@@ -299,4 +241,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("connectors.framework.dsx_connector:connector_api", host="0.0.0.0",
-                port=8591, reload=False)
+                port=8599, reload=True)

@@ -30,7 +30,7 @@ async def startup():
     Create any resources necessary for this connector's operations
     """
 
-
+_started=False
 @connector.startup
 async def startup_event():
     """
@@ -43,6 +43,10 @@ async def startup_event():
     Returns:
         bool: True if startup completes successfully. Otherwise, implement proper error handling.
     """
+    global _started
+    if _started:
+        return
+    _started = True
     dsx_logging.info(f"Starting up connector {connector.connector_id}")
     await startup()
     dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
@@ -236,4 +240,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("connectors.framework.dsx_connector:connector_api", host="0.0.0.0",
-                port=8595, reload=True)
+                port=8595, reload=False)

@@ -2,7 +2,7 @@ from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
 from dsx_connect.models.connector_models import ItemActionEnum
 
-class GoogleCloudStorageConnectorConfig(BaseSettings):
+class AzureBlobStorageConnectorConfig(BaseSettings):
     """
     Configuration for connector.  Note that configuration is a pydantic base setting class, so we get the benefits of
     type checking, as well as code completion in an IDE.  pydantic settings also allows for overriding these default
@@ -17,18 +17,18 @@ class GoogleCloudStorageConnectorConfig(BaseSettings):
 
     You can also read in an optional .env file, which will be ignored is not available
     """
-    name: str = 'google-cloud-storage-connector'
-    connector_url: HttpUrl = Field(default="http://0.0.0.0:8595",
+    name: str = 'azure-blob-storage-connector'
+    connector_url: HttpUrl = Field(default="http://0.0.0.0:8599",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    item_action: ItemActionEnum = ItemActionEnum.TAG
+    item_action: ItemActionEnum = ItemActionEnum.MOVE
     dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
-    test_mode: bool = True
+    test_mode: bool = False
 
     ### Connector specific configuration
-    gcs_bucket: str = "lg-test-01"
-    gcs_prefix: str = ""
-    gcs_recursive: bool = True
+    abs_bucket: str = "lg-test-01"
+    abs_prefix: str = ""
+    abs_recursive: bool = True
     item_action_move_prefix: str = "dsxconnect-quarantine"
 
     class Config:
@@ -39,17 +39,17 @@ class GoogleCloudStorageConnectorConfig(BaseSettings):
 
 # Singleton with reload capability
 class ConfigManager:
-    _config: GoogleCloudStorageConnectorConfig = None
+    _config: AzureBlobStorageConnectorConfig = None
 
     @classmethod
-    def get_config(cls) -> GoogleCloudStorageConnectorConfig:
+    def get_config(cls) -> AzureBlobStorageConnectorConfig:
         if cls._config is None:
-            cls._config = GoogleCloudStorageConnectorConfig()
+            cls._config = AzureBlobStorageConnectorConfig()
         return cls._config
 
     @classmethod
-    def reload_config(cls) -> GoogleCloudStorageConnectorConfig:
-        cls._config = GoogleCloudStorageConnectorConfig()
+    def reload_config(cls) -> AzureBlobStorageConnectorConfig:
+        cls._config = AzureBlobStorageConnectorConfig()
         return cls._config
 
 

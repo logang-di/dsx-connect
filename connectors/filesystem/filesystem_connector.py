@@ -42,7 +42,8 @@ async def startup():
 
             def file_modified_callback(self, file_path: pathlib.Path):
                 dsx_logging.debug(f'Sending scan request for {file_path}')
-                run_async(connector.scan_file_request(ScanRequestModel(location=str(file_path), metainfo=file_path.name)))
+                run_async(
+                    connector.scan_file_request(ScanRequestModel(location=str(file_path), metainfo=file_path.name)))
 
         monitor_callback = MonitorCallback()
 
@@ -55,8 +56,25 @@ async def startup():
         dsx_logging.info(f"Monitor set to false, {config.location} will not be monitored for new or modified files")
 
 
+_started = False
+
+
 @connector.startup
 async def startup_event():
+    """
+    Startup handler for the DSX Connector.
+
+    This function is invoked by dsx-connector during the startup phase of the connector.
+    It should be used to initialize any required resources, such as setting up connections,
+    starting background tasks, or performing initial configuration checks.
+
+    Returns:
+        bool: True if startup completes successfully. Otherwise, implement proper error handling.
+    """
+    global _started
+    if _started:
+        return
+    _started = True
     await startup()
     dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
     dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
@@ -73,7 +91,8 @@ async def full_scan_handler() -> StatusResponse:
     dsx_logging.debug(f'Scanning files at: {config.location}')
 
     async for file_path in file_ops.get_filepaths_async(config.location, config.recursive):
-        status_response = await connector.scan_file_request(ScanRequestModel(location=str(file_path), metainfo=file_path.name))
+        status_response = await connector.scan_file_request(
+            ScanRequestModel(location=str(file_path), metainfo=file_path.name))
         dsx_logging.debug(f'Sent scan request for {file_path}, result: {status_response}')
 
     return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
@@ -86,7 +105,8 @@ def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusRespon
 
     if config.item_action == ItemActionEnum.NOTHING:
         dsx_logging.debug(f'Item action {ItemActionEnum.NOTHING} on {file_path} invoked.')
-        return StatusResponse(status=StatusResponseEnum.SUCCESS, message=f'Item action {config.item_action} was invoked.')
+        return StatusResponse(status=StatusResponseEnum.SUCCESS,
+                              message=f'Item action {config.item_action} was invoked.')
     elif config.item_action == ItemActionEnum.DELETE:
         dsx_logging.debug(f'Item action {ItemActionEnum.DELETE} on {file_path} invoked.')
         # Check if the file exists

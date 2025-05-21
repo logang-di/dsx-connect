@@ -72,7 +72,7 @@ def get_connector_client(connector_url: str) -> httpx.Client:
     global _connector_clients
     with _client_pool_lock:
         if connector_url not in _connector_clients:
-            _connector_clients[connector_url] = httpx.Client(verify=False)
+            _connector_clients[connector_url] = httpx.Client(verify=False, timeout=30)
             dsx_logging.debug(f"Created new httpx.Client for {connector_url}")
         return _connector_clients[connector_url]
 

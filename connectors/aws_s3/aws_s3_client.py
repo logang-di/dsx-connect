@@ -22,7 +22,6 @@ class AWSS3Client:
         self.s3_endpoint_url = s3_endpoint_url if s3_endpoint_url and s3_endpoint_url.strip() else None
         self.s3_endpoint_verify = s3_endpoint_verify
         self.config = Config(max_pool_connections=concurrent_processing_max)
-        dsx_logging.debug(f"Initialized sync S3 client with endpoint {self.s3_endpoint_url}")
 
         self.s3_client = boto3.client(
             's3',
@@ -30,6 +29,7 @@ class AWSS3Client:
             verify=self.s3_endpoint_verify,
             config=self.config
         )
+        dsx_logging.info(f"Initialized S3 client with endpoint {self.s3_endpoint_url}")
 
     def buckets(self):
         response = self.s3_client.list_buckets()
