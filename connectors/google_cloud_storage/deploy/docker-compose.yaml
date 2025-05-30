@@ -1,5 +1,5 @@
 services:
-  filesystem_connector:
+  google_cloud_storage_connector:
     build:
       context: .
       dockerfile: Dockerfile

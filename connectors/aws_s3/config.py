@@ -20,7 +20,7 @@ class AWSS3ConnectorConfig(BaseSettings):
     name: str = 'aws-s3-connector'
     connector_url: HttpUrl = Field(default="http://0.0.0.0:8591",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    item_action: ItemActionEnum = ItemActionEnum.MOVE_TAG
+    item_action: ItemActionEnum = ItemActionEnum.DELETE
     dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
     test_mode: bool = False

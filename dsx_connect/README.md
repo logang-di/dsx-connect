@@ -96,9 +96,9 @@ You should see output like this:
 2025-04-25 13:00:19,487 INFO     logging.py          : Log level set to INFO
 INFO:     Started server process [75934]
 INFO:     Waiting for application startup.
-2025-04-25 13:00:19,982 INFO     dsx_connect_app.py  : dsx-connect version: <module 'dsx_connect.version' from '/Users/logangilbert/PycharmProjects/SEScripts/build/dist/dsx-connect-0.0.19/dsx_connect/version.py'>
-2025-04-25 13:00:19,982 INFO     dsx_connect_app.py  : dsx-connect configuration: results_database=DatabaseConfig(type='tinydb', loc='data/dsx-connect.db.json', retain=1000) scanner=ScannerConfig(scan_binary_url='http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2')
-2025-04-25 13:00:19,982 INFO     dsx_connect_app.py  : dsx-connect startup completed.
+2025-04-25 13:00:19,982 INFO     dsx_connect_api.py  : dsx-connect version: <module 'dsx_connect.version' from '/Users/logangilbert/PycharmProjects/SEScripts/build/dist/dsx-connect-0.0.19/dsx_connect/version.py'>
+2025-04-25 13:00:19,982 INFO     dsx_connect_api.py  : dsx-connect configuration: results_database=DatabaseConfig(type='tinydb', loc='data/dsx-connect.db.json', retain=1000) scanner=ScannerConfig(scan_binary_url='http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2')
+2025-04-25 13:00:19,982 INFO     dsx_connect_api.py  : dsx-connect startup completed.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8586 (Press CTRL+C to quit)
 ```

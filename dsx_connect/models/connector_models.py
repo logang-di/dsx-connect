@@ -1,6 +1,7 @@
 from enum import Enum
+from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl, Field
 
 
 class ItemActionEnum(str, Enum):
@@ -20,3 +21,18 @@ class ScanRequestModel(BaseModel):
     location: str
     metainfo: str
     connector_url: str = None
+
+
+class ConnectorStatusEnum(str, Enum):
+    READY: str = 'ready'
+    STARTING: str = 'starting'
+    STOPPED: str = 'stopped'
+    FAILED_INIT: str = 'failed'
+
+
+class ConnectorModel(BaseModel):
+    name: str = 'connector'
+    uuid: UUID | None = None
+    meta_info: str | None = None
+    url: str = ''
+    status: ConnectorStatusEnum = ConnectorStatusEnum.STARTING

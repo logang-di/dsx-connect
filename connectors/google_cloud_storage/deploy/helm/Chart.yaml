@@ -1,0 +1,4 @@
+apiVersion: v2
+name: google-cloud-storage-connector
+version: 0.1.0
+appVersion: "0.1.0"

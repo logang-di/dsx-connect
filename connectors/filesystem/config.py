@@ -29,7 +29,7 @@ class FilesystemConnectorConfig(BaseSettings):
     test_mode: bool = True
 
     ## Config settings specific to this Connector
-    location: pathlib.Path = Field(default=pathlib.Path("/Users/logangilbert/Documents/SAMPLES/PDF"),
+    location: pathlib.Path = Field(default=pathlib.Path("/Users/logangilbert/Documents/SAMPLES/1SAMPLES"),
                                    description="Directory to scan for files")
     monitor: bool = False # if true, Connector will monitor location for new or modified files.
     scan_existing: bool = Field(default=False, description="If True, scan existing files in location on startup")

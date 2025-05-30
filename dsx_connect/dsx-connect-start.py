@@ -38,7 +38,7 @@ sys.path.insert(0, str(dist_root))
 
 if __name__ == "__main__":
     uvicorn.run(
-        "dsx_connect.app.dsx_connect_app:app",
+        "dsx_connect.app.dsx_connect_api:app",
         host="0.0.0.0",
         port=8586,
         reload=True,  # Set to False in production with multiple workers

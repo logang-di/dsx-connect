@@ -1,13 +1,15 @@
+import asyncio
 import io
 import logging
 import pathlib
 import hashlib
 import os
+from functools import partial
 
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from azure.core.exceptions import ResourceNotFoundError
 
-from dsx_connect.utils import file_ops
+from dsx_connect.utils import file_ops, async_ops
 from dsx_connect.utils.logging import dsx_logging
 import tenacity
 
@@ -52,17 +54,27 @@ class AzureBlobClient:
                     reraise=True,
                     before_sleep=tenacity.before_sleep_log(dsx_logging, logging.WARN))
     def get_blob(self, container: str, blob_name: str) -> io.BytesIO:
-        try:
-            blob_client = self.service_client.get_blob_client(container=container, blob=blob_name)
-            stream = blob_client.download_blob()
-            content = io.BytesIO(stream.readall())
-            if len(content.getvalue()) == 0:
-                raise ValueError(f"Retrieved blob {blob_name} is empty.")
-            content.seek(0)
-            return content
-        except Exception as e:
-            dsx_logging.error(f"Error downloading blob: {e}")
-            raise
+        blob_client = self.service_client.get_blob_client(
+            container=container, blob=blob_name
+        )
+        # ask the SDK to download in 8 parallel ranges
+        downloader = blob_client.download_blob(max_concurrency=8)
+        content = io.BytesIO()
+        # stream the chunks into your BytesIO
+        for chunk in downloader.chunks():
+            content.write(chunk)
+        content.seek(0)
+        return content
+
+    async def get_blob_async(self, container: str, blob_name: str) -> io.BytesIO:
+        loop = asyncio.get_running_loop()
+        # partial(self._get_blob_sync, ...) fixes the first two args
+        return await loop.run_in_executor(
+            None,
+            partial(self.get_blob, container, blob_name)
+        )
+
+
 
     def keys(self, container: str, prefix: str = '', recursive: bool = True):
         try:

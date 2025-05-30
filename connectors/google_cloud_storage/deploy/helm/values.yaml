@@ -1,0 +1,26 @@
+replicaCount: 1
+
+image:
+    repository: your-repo/google-cloud-storage-connector
+    tag: latest
+    pullPolicy: IfNotPresent
+
+service:
+    type: ClusterIP
+    port: 8595
+
+env:
+    - name: PYTHONUNBUFFERED
+      value: "1"
+    - name: LOG_LEVEL
+      value: "debug"
+    - name: DSXCONNECTOR_CONNECTOR_URL
+      value: "http://google-cloud-storage-connector:8595"
+    - name: DSXCONNECTOR_DSX_CONNECT_URL
+      value: "http://dsx-connect-api:8586"
+    - name: DSXCONNECTOR_LOCATION
+      value: "/app/scan_folder"
+    - name: DSXCONNECTOR_ITEM_ACTION
+      value: "nothing"
+
+command: ["python", "connectors/google_cloud_storage/google_cloud_storage_connector.py"]

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+    name: google-cloud-storage-connector
+spec:
+    selector:
+        app: google-cloud-storage-connector
+    ports:
+        - protocol: TCP
+          port: 8595
+          targetPort: 8595
+    type: ClusterIP

@@ -1,6 +1,6 @@
-from utils.logging import dsx_logging
+from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.taskqueue.celery_app import celery_app
-from taskworkers.taskworkers import init_worker
+from dsx_connect.taskworkers.taskworkers import init_worker
 from dsx_connect.config import ConfigManager
 
 config = ConfigManager.reload_config()

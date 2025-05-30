@@ -1,21 +1,18 @@
-import random
-
 from starlette.responses import StreamingResponse
 
+from connectors.azure_blob_storage.azure_blob_storage_async_client import AzureBlobAsyncClient
 from connectors.azure_blob_storage.azure_blob_storage_client import AzureBlobClient
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
+from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 from connectors.azure_blob_storage.config import ConfigManager
 from connectors.azure_blob_storage.version import CONNECTOR_VERSION
 from dsx_connect.utils.streaming import stream_blob
 
-random_number_id = random.randint(0, 9999)
-connector_id = f'azure-blob-storage-connector-{random_number_id:04d}'
-
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
+connector_id = config.name
 
 # Initialize DSX Connector instance
 connector = DSXConnector(connector_name=config.name,
@@ -26,17 +23,8 @@ connector = DSXConnector(connector_name=config.name,
 
 abs_client = AzureBlobClient()
 
-_started = False
-
-
-async def startup():
-    """
-    Create any resources necessary for this connector's operations
-    """
-
-
 @connector.startup
-async def startup_event():
+async def startup_event(base: ConnectorModel) -> ConnectorModel:
     """
     Startup handler for the DSX Connector.
 
@@ -45,18 +33,17 @@ async def startup_event():
     starting background tasks, or performing initial configuration checks.
 
     Returns:
-        bool: True if startup completes successfully. Otherwise, implement proper error handling.
+        ConnectorModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    global _started
-    if _started:
-        return
-    _started = True
     dsx_logging.info(f"Starting up connector {connector.connector_id}")
-    await startup()
+    # await abs_client.init()
     dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
     dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
 
+    base.status = ConnectorStatusEnum.READY
+    base.meta_info = f"ABS container: {config.abs_bucket}, prefix: {config.abs_prefix}"
+    return base
 
 @connector.shutdown
 async def shutdown_event():
@@ -110,11 +97,12 @@ async def full_scan_handler() -> StatusResponse:
         key = blob['Key']
         full_path = f"{config.abs_bucket}/{key}"
         await connector.scan_file_request(ScanRequestModel(location=key, metainfo=full_path))
+        dsx_logging.debug(f"Sent scan request for {full_path}")
     return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
 
 
 @connector.item_action
-def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
+async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
     """
     Item Action handler for the DSX Connector.
 
@@ -146,9 +134,8 @@ def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusRespon
     return StatusResponse(status=StatusResponseEnum.NOTHING, message="Item action not implemented")
 
 
-
 @connector.read_file
-def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse | StreamingResponse:
+async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse | StreamingResponse:
     """
     Read File handler for the DSX Connector.
 
@@ -192,7 +179,7 @@ def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse
 
 
 @connector.repo_check
-def repo_check_handler() -> StatusResponse:
+async def repo_check_handler() -> StatusResponse:
     """
     Repository connectivity check handler.
 
@@ -208,7 +195,7 @@ def repo_check_handler() -> StatusResponse:
 
 
 @connector.webhook_event
-def webhook_handler(event: dict):
+async def webhook_handler(event: dict):
     """
     Webhook Event handler for the DSX Connector.
 
@@ -226,7 +213,7 @@ def webhook_handler(event: dict):
     dsx_logging.info("Processing webhook event")
     # Example: Extract a file ID from the event and trigger a scan
     file_id = event.get("file_id", "unknown")
-    connector.scan_file_request(ScanRequestModel(
+    await connector.scan_file_request(ScanRequestModel(
         location=f"custom://{file_id}",
         metainfo=event
     ))

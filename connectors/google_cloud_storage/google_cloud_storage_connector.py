@@ -1,20 +1,17 @@
-import random
-
 from starlette.responses import StreamingResponse
 
 from connectors.framework.dsx_connector import DSXConnector
 from connectors.google_cloud_storage.gcs_client import GCSClient
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
+from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 from connectors.google_cloud_storage.config import ConfigManager
 from connectors.google_cloud_storage.version import CONNECTOR_VERSION
-
-random_number_id = random.randint(0, 9999)
-connector_id = f'google-cloud-storage-connector-{random_number_id:04d}'
+from dsx_connect.utils.streaming import stream_blob
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
+connector_id = config.name # I'm not really sure what I want to use this for yet
 
 # Initialize DSX Connector instance
 connector = DSXConnector(connector_name=config.name,
@@ -25,14 +22,9 @@ connector = DSXConnector(connector_name=config.name,
 
 gcs_client = GCSClient()
 
-async def startup():
-    """
-    Create any resources necessary for this connector's operations
-    """
 
-_started=False
 @connector.startup
-async def startup_event():
+async def startup_event(base: ConnectorModel) -> ConnectorModel:
     """
     Startup handler for the DSX Connector.
 
@@ -41,18 +33,17 @@ async def startup_event():
     starting background tasks, or performing initial configuration checks.
 
     Returns:
-        bool: True if startup completes successfully. Otherwise, implement proper error handling.
+        ConnectorModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    global _started
-    if _started:
-        return
-    _started = True
     dsx_logging.info(f"Starting up connector {connector.connector_id}")
-    await startup()
+
     dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
     dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
 
+    base.status = ConnectorStatusEnum.READY
+    base.meta_info = f"GCS Bucket: {config.gcs_bucket}, prefix: {config.gcs_prefix}"
+    return base
 
 
 @connector.shutdown
@@ -109,13 +100,14 @@ async def full_scan_handler() -> StatusResponse:
         await connector.scan_file_request(
             ScanRequestModel(location=key, metainfo=full_path)
         )
+        dsx_logging.debug(f"Sent scan request for {full_path}")
     return StatusResponse(
         status=StatusResponseEnum.SUCCESS,
         message='Full scan invoked and scan requests sent.'
     )
 
 @connector.item_action
-def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
+async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
     """
     Item Action handler for the DSX Connector.
 
@@ -149,7 +141,7 @@ def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusRespon
 
 
 @connector.read_file
-def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse | StreamingResponse:
+async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse | StreamingResponse:
     """
     Read File handler for the DSX Connector.
 
@@ -186,13 +178,13 @@ def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse
     """
     try:
         file_stream = gcs_client.get_object(config.gcs_bucket, scan_event_queue_info.location)
-        return StreamingResponse(file_stream, media_type="application/octet-stream")
+        return StreamingResponse(stream_blob(file_stream), media_type="application/octet-stream")
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
 
 
 @connector.repo_check
-def repo_check_handler() -> StatusResponse:
+async def repo_check_handler() -> StatusResponse:
     """
     Repository connectivity check handler.
 
@@ -207,7 +199,7 @@ def repo_check_handler() -> StatusResponse:
 
 
 @connector.webhook_event
-def webhook_handler(event: dict):
+async def webhook_handler(event: dict):
     """
     Webhook Event handler for the DSX Connector.
 

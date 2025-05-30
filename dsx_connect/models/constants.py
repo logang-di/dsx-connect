@@ -6,6 +6,10 @@ class DSXConnectAPIEndpoints:
     CONNECTION_TEST = "/dsx-connect/test/connection"
     DSXA_CONNECTION_TEST = "/dsx-connect/test/dsxa-connection"
     CONFIG = "/dsx-connect/config"
+    LIST_CONNECTORS = "/dsx-connect/connectors"
+    REGISTER_CONNECTORS = "/dsx-connect/connectors/register"
+    UNREGISTER_CONNECTORS = "/dsx-connect/connectors/unregister/{connector_uuid}"
+    INVOKE_FULLSCAN_CONNECTOR = "/dsx-connect/connectors/full_scan/{connector_uuid}"
 
 
 class ConnectorEndpoints:

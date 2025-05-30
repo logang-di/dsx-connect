@@ -26,6 +26,7 @@ Dependencies:
     - dsx_connect: Internal models, config, and client utilities.
 """
 import threading
+import unicodedata
 from io import BytesIO
 from typing import Dict, Optional
 
@@ -184,7 +185,8 @@ def scan_request_task(scan_request_dict: dict) -> dict:
     # 3. Scan the file with DSXAClient
     dsxa_client = DSXAClient(scan_binary_url=config.scanner.scan_binary_url)
     try:
-        metadata_info = f"file-tag:{scan_request.metainfo}"
+        safe_meta = unicodedata.normalize("NFKD", scan_request.metainfo).encode("ascii", "ignore").decode("ascii")
+        metadata_info = f"file-tag:{safe_meta}"
         if task_id:
             metadata_info += f",task-id:{task_id}"
         dpa_verdict = dsxa_client.scan_binary(
@@ -198,13 +200,14 @@ def scan_request_task(scan_request_dict: dict) -> dict:
         dsx_logging.error(f"Scan failed: {e}", exc_info=True)
         return StatusResponse(
             status=StatusResponseEnum.ERROR,
-            message="Failed to scan file",
+            message=f"Failed to scan file {scan_request.location}",
             description=str(e),
             id=task_id
         ).model_dump()
 
     # 4. Send verdict to verdict queue with original task_id
     try:
+        # TODO - do we need to send benign verdicts if nothing going to happen with it?
         # Send to verdict_action_queue for action-taking
         task1 = celery_app.send_task(
             config.taskqueue.verdict_action_task,

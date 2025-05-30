@@ -82,8 +82,11 @@ def prepare(c):
     c.run(f"cp deploy/Dockerfile {export_folder}/")
     c.run(f"cp deploy/docker-compose.yaml {export_folder}/")
 
+    c.run(f"mkdir {export_folder}/data")
+
     c.run(f"cp version.py {export_folder}/dsx_connect")
     c.run(f"cp dsx-connect-start.py {export_folder}/")
+    c.run(f"cp dsx-connect-workers-start.py {export_folder}/")
     c.run(f"cp requirements.txt {export_folder}/")
     c.run(f"cp README.md {export_folder}/")
 

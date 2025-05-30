@@ -25,6 +25,73 @@
     <ul>
         <li><a href="/docs">API Documentation</a></li>
     </ul>
+
+    <h2>Registered Connectors</h2>
+    <div id="connectorsList">Loading connectors…</div>
+
+    <script>
+        // call your dsx‑connect “list connectors” endpoint
+
+        function fetchConnectors() {
+            fetch('/dsx-connect/connectors')
+                .then(r => r.json())
+                .then(connectors => {
+                    if (!connectors.length) {
+                        return document.getElementById('connectorsList')
+                            .innerHTML = '<p>No connectors registered.</p>';
+                    }
+                    let html = '<ul>';
+                    connectors.forEach((conn, idx) => {
+                        const encodedUuid = encodeURIComponent(conn.uuid);
+                        // build the new invoke‑fullscan path:
+                        const scanPath = `/dsx-connect/connectors/full_scan/${encodedUuid}`;
+                        html += `
+            <li>
+                        <strong>${conn.name}</strong>
+                        <small>UUID: ${conn.uuid}</small>
+                        (<a href="${scanPath}" target="_blank">${scanPath}</a>)
+                        <button onclick="invokeFullScan(${idx}, '${scanPath}')">
+                            Full Scan
+                        </button>
+              <span class="scan-notification" id="scan-note-${idx}"></span>
+            </li>
+          `;
+                    });
+                    html += '</ul>';
+                    document.getElementById('connectorsList').innerHTML = html;
+                })
+                .catch(err => {
+                    console.error('Error loading connectors', err);
+                    document.getElementById('connectorsList')
+                        .textContent = 'Error loading connectors.';
+                });
+        }
+
+        // POST to the connector’s full_scan endpoint
+        function invokeFullScan(idx, scanUrl) {
+            const note = document.getElementById(`scan-note-${idx}`);
+            note.textContent = '…starting scan…';
+            fetch(scanUrl, { method: 'POST' })
+                .then(res => {
+                    if (!res.ok) throw new Error(res.statusText);
+                    return res.json();
+                })
+                .then(json => {
+                    note.textContent = `✅ ${json.message}`;
+                })
+                .catch(err => {
+                    note.textContent = `❌ ${err.message}`;
+                });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchStatus();
+            fetchConfig();
+            fetchConnectors();
+        });
+    </script>
+
+
     <script>
         // Recursively builds an HTML tree from a JSON object.
         function renderTree(obj) {

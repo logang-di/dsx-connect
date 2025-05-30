@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+    name: {{ include "google-cloud-storage-connector.fullname" . }}
+spec:
+    replicas: {{ .Values.replicaCount }}
+    selector:
+        matchLabels:
+            app: {{ include "google-cloud-storage-connector.name" . }}
+    template:
+        metadata:
+            labels:
+                app: {{ include "google-cloud-storage-connector.name" . }}
+        spec:
+            containers:
+                - name: connector
+                  image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+                  imagePullPolicy: {{ .Values.image.pullPolicy }}
+                  ports:
+                      - containerPort: {{ .Values.service.port }}
+                  env:
+            {{- toYaml .Values.env | nindent 12 }}
+                  command: {{ .Values.command }}

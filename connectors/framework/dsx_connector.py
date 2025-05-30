@@ -1,4 +1,9 @@
+import os
+import urllib
+import uuid
+
 import httpx
+from fastapi.encoders import jsonable_encoder
 from httpx import HTTPStatusError
 from requests.exceptions import RequestException, HTTPError, Timeout, ConnectionError
 
@@ -7,7 +12,7 @@ from typing import Callable, Awaitable
 
 from starlette.responses import StreamingResponse
 
-from dsx_connect.models.connector_models import ScanRequestModel
+from dsx_connect.models.connector_models import ScanRequestModel, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 from dsx_connect.utils.logging import dsx_logging
@@ -21,6 +26,9 @@ class DSXConnector:
         self.test_mode = test_mode
         self.connector_name = connector_name
         self.connector_id = connector_id
+
+        # default for UUID... may make this a config setting that would override
+        self.uuid = str(uuid.uuid4())
 
         self.connector_url = f'{str(base_connector_url).rstrip('/')}/{connector_id}'
         self.scan_request_count = 0
@@ -37,7 +45,7 @@ class DSXConnector:
         )
         connector_api.include_router(DSXAConnectorRouter(self))
 
-        self.startup_handler: Callable[[], Awaitable[None]] = None
+        self.startup_handler: Callable[[ConnectorModel], Awaitable[None]] = None
         self.shutdown_handler: Callable[[], Awaitable[None]] = None
 
         self.full_scan_handler: Callable[[ScanRequestModel], StatusResponse] = None
@@ -47,7 +55,7 @@ class DSXConnector:
         self.repo_check_connection_handler: Callable[[], StatusResponse] = None
 
     # Register handlers for startup and shutdown events
-    def startup(self, func: Callable[[], bool]):
+    def startup(self, func: Callable[[ConnectorModel], Awaitable[ConnectorModel]]):
         self.startup_handler = func
         return func
 
@@ -98,7 +106,7 @@ class DSXConnector:
                     )
                     dsx_logging.debug(f'Scan request test returned')
 
-        # Raise an exception for bad responses (4xx and 5xx status codes)
+            # Raise an exception for bad responses (4xx and 5xx status codes)
             response.raise_for_status()
 
             self.scan_request_count += 1  # for reporting purposes
@@ -122,19 +130,81 @@ class DSXConnector:
 
     async def get_status(self):
         dsxa_status = await self.test_dsx_connect()
-        repo_status = self.repo_check_connection_handler() if self.repo_check_connection_handler else False
+        repo_status = await self.repo_check_connection_handler() if self.repo_check_connection_handler else False
 
         return {
             "connector_status": "Active",
-            "dsxa_connectivity": "success" if dsxa_status else "failed",
-            "repo_connectivity": "success" if repo_status else "failed",
+            "dsx-connect connectivity": "success" if dsxa_status else "failed",
+            "repo connectivity": "success" if repo_status else "failed",
             "scan_requests_since_active_count": self.scan_request_count,
         }
+
+    async def register_connector(self, conn_model: ConnectorModel) -> StatusResponse:
+        """
+        Tell dsx-connect about this connector instance.
+        """
+        payload = jsonable_encoder(conn_model)
+
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                resp = await client.post(
+                    f"{self.dsx_connect_url}{DSXConnectAPIEndpoints.REGISTER_CONNECTORS}",
+                    json=payload
+                )
+                resp.raise_for_status()
+                return StatusResponse(**resp.json())
+        except HTTPStatusError as e:
+            dsx_logging.error(f"Failed to register connector: {e}", exc_info=True)
+            return StatusResponse(status=StatusResponseEnum.ERROR,
+                                  message="Registration failed",
+                                  description=str(e))
+        except Exception as e:
+            dsx_logging.error(f"Unexpected error registering connector: {e}", exc_info=True)
+            return StatusResponse(status=StatusResponseEnum.ERROR,
+                                  message="Registration error",
+                                  description=str(e))
+
+    async def unregister_connector(self) -> StatusResponse:
+        """
+        Tell dsx-connect this connector instance is going away.
+        """
+        # URL‑encode the connector URL so it fits safely in the path
+        encoded = urllib.parse.quote(str(self.uuid), safe="")
+        path = DSXConnectAPIEndpoints.UNREGISTER_CONNECTORS.format(connector_uuid=encoded)
+        url = f"{self.dsx_connect_url}{path}"
+
+        try:
+            async with httpx.AsyncClient(verify=False) as client:
+                resp = await client.delete(url)
+                # 204 No Content → success
+                if resp.status_code == 204:
+                    return StatusResponse(
+                        status=StatusResponseEnum.SUCCESS,
+                        message="Unregistered",
+                        description=f"Connector {self.connector_url} : {self.uuid} removed"
+                    )
+                # if they happen to return a body, parse it:
+                resp.raise_for_status()
+                return StatusResponse(**resp.json())
+        except HTTPStatusError as e:
+            dsx_logging.error(f"Failed to unregister connector: {e}", exc_info=True)
+            return StatusResponse(
+                status=StatusResponseEnum.ERROR,
+                message="Unregistration failed",
+                description=str(e)
+            )
+        except Exception as e:
+            dsx_logging.error(f"Unexpected error unregistering connector: {e}", exc_info=True)
+            return StatusResponse(
+                status=StatusResponseEnum.ERROR,
+                message="Unregistration error",
+                description=str(e)
+            )
 
     async def test_dsx_connect(self) -> StatusResponse:
         try:
             async with httpx.AsyncClient(verify=False) as client:
-                response = await client.get(f'{self.dsx_connect_url}{DSXConnectAPIEndpoints.CONNECTION_TEST}')
+                response = await client.get(f'{self.dsx_connect_url}{DSXConnectAPIEndpoints.REGISTER_CONNECTORS}')
             # Raise an exception for bad responses (4xx and 5xx status codes)
             response.raise_for_status()
 
@@ -159,6 +229,8 @@ class DSXAConnectorRouter(APIRouter):
     def __init__(self, connector: DSXConnector):
         super().__init__()
         self._connector = connector
+        self._startup_done = False
+        self._registered   = False
 
         (self.get('/', description='Test for connector availability',
                   response_model=None)
@@ -192,7 +264,7 @@ class DSXAConnectorRouter(APIRouter):
 
     async def post_item_action(self, scan_request_info: ScanRequestModel) -> StatusResponse:
         if self._connector.item_action_handler:
-            return self._connector.item_action_handler(scan_request_info)
+            return await self._connector.item_action_handler(scan_request_info)
         return StatusResponse(status=StatusResponseEnum.ERROR,
                               message="No handler registered for quarantine_action",
                               description="Add a decorator (ex: @connector.item_action) to handle item_action requests")
@@ -212,14 +284,14 @@ class DSXAConnectorRouter(APIRouter):
     async def post_read_file(self, scan_request_info: ScanRequestModel) -> StreamingResponse | StatusResponse:
         dsx_logging.info(f'Receive read_file request for {scan_request_info}')
         if self._connector.read_file_handler:
-            return self._connector.read_file_handler(scan_request_info)
+            return await self._connector.read_file_handler(scan_request_info)
         return StatusResponse(status=StatusResponseEnum.ERROR,
                               message="No event handler registered for read_file",
                               description="Add a decorator (ex: @connector.read_file) to handle read file requests")
 
     async def post_repo_check(self) -> StatusResponse:
         if self._connector.repo_check_connection_handler:
-            return self._connector.repo_check_connection_handler()
+            return await self._connector.repo_check_connection_handler()
         return StatusResponse(status=StatusResponseEnum.ERROR,
                               message="No event handler registered for repo_check",
                               description="Add a decorator (ex: @connector.repo_check) to handle repo check requests")
@@ -239,19 +311,40 @@ class DSXAConnectorRouter(APIRouter):
         # Startup event
 
     async def on_startup_event(self):
-        # Default DSXA Connect connectivity test for all connectors
-        test_response = await self._connector.test_dsx_connect()
-        if not test_response:
-            dsx_logging.warn(
-                f"Connection to dsx-connect at {self._connector.dsx_connect_url} failed. "
-                f"Operations will not allow scanning of files until connectivity is established.")
-        else:
-            dsx_logging.info(
-                f"Connection to dsx-connect at {self._connector.dsx_connect_url} success.")
+        # if we’ve already been here once, do nothing
+        if self._startup_done:
+            return
+        self._startup_done = True
+
+        # construct the “base” model
+        conn_model = ConnectorModel(
+            name=self._connector.connector_name,
+            url=self._connector.connector_url,
+            status=ConnectorStatusEnum.STARTING,
+            uuid=self._connector.uuid
+        )
+        # fire any user‑provided startup logic
         if self._connector.startup_handler:
-            await self._connector.startup_handler()
+            conn_model = await self._connector.startup_handler(conn_model)
+
+        # tell dsx‑connect about ourselves
+        if not self._registered:
+            register_resp = await self._connector.register_connector(conn_model)
+            if register_resp.status == StatusResponseEnum.SUCCESS:
+                dsx_logging.info(f"Registered connector OK: {register_resp.message}")
+                self._registered = True
+            else:
+                dsx_logging.warn(f"Connector registration failed: {register_resp.message}")
 
     # Shutdown event
     async def on_shutdown_event(self):
+        # First tell dsx‑connect we’re going offline
+        unregister_resp = await self._connector.unregister_connector()
+        if unregister_resp.status != StatusResponseEnum.SUCCESS:
+            dsx_logging.warn(f"Connector unregistration failed: {unregister_resp.message}")
+        else:
+            dsx_logging.info(f"Unregistered connector OK: {unregister_resp.message}")
+
+        # Then run any user‑provided cleanup
         if self._connector.shutdown_handler:
             await self._connector.shutdown_handler()

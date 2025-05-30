@@ -22,8 +22,8 @@ class DatabaseConfig(BaseSettings):
         retain (int): Database retention setting. Set to -1 to retain forever, 0 to retain nothing,
         or a positive integer N to retain N records.
     """
-    type: str = ConfigDatabaseType.TINYDB
-    loc: str = "data/dsx-connect.db.json"
+    type: str = ConfigDatabaseType.SQLITE3
+    loc: str = "data/dsx-connect.db"
     retain: int = 1000
 
     scan_stats_db: str = "data/scan-stats.db.json"

@@ -1,5 +1,5 @@
 services:
-  dsx_connect_core:
+  dsx_connect_api:
     build:
       context: .
       dockerfile: Dockerfile
@@ -7,10 +7,12 @@ services:
       - "8586:8586"
     environment:
       - PYTHONUNBUFFERED=1
-      - DSXCONNECT__DATABASE__TYPE=tinydb
-      - DSXCONNECT__DATABASE__LOC=data/dsx-connect.db.json
-      - DSXCONNECT__DATABASE__RETAIN=100
-      - DSXCONNECT__SCANNER__SCAN_BINARY_URL=http://a668960fee4324868b4154722ad9a909-856481437.us-east-1.elb.amazonaws.com/scan/binary/v2
+      - DSXCONNECT_TASKQUEUE__BROKER=redis://redis:6379/0
+      - DSXCONNECT_TASKQUEUE__BACKEND=redis://redis:6379/0
+      - DSXCONNECT_DATABASE__TYPE=tinydb
+      - DSXCONNECT_DATABASE__LOC=data/dsx-connect.db.json
+      - DSXCONNECT_DATABASE__RETAIN=100
+      - DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://dsxa_scanner:5000/scan/binary/v2
       - LOG_LEVEL=debug
     depends_on:
       - redis
@@ -26,19 +28,25 @@ services:
       dockerfile: Dockerfile
     environment:
       - PYTHONUNBUFFERED=1
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://a668960fee4324868b4154722ad9a909-856481437.us-east-1.elb.amazonaws.com/scan/binary/v2
-      - DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_IP=127.0.0.1
-      - DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_PORT=514
+      - DSXCONNECT_TASKQUEUE__BROKER=redis://redis:6379/0
+      - DSXCONNECT_TASKQUEUE__BACKEND=redis://redis:6379/0
+      - DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://dsxa_scanner:5000/scan/binary/v2
+      - DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL=rsyslog
+      - DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT=514
     depends_on:
       - redis
+      - rsyslog
     networks:
       - dsx-network
     command: celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q scan_request_queue,verdict_action_queue,scan_result_queue --concurrency=1
 
   redis:
     image: redis:6
+    networks:
+      - dsx-network
+
+  rsyslog:
+    image: rsyslog/syslog_appliance_alpine:latest
     networks:
       - dsx-network
 

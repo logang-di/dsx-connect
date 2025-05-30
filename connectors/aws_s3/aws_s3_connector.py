@@ -1,24 +1,20 @@
-import logging
-import random
-from datetime import time
-
 from starlette.responses import StreamingResponse
 
 from connectors.aws_s3.aws_s3_client import AWSS3Client
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.utils import file_ops
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
+from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.utils.async_ops import run_async
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 from connectors.aws_s3.config import ConfigManager
 from connectors.aws_s3.version import CONNECTOR_VERSION
+from dsx_connect.utils.streaming import stream_blob
 
-random_number_id = random.randint(0, 9999)
-connector_id = f'aws-s3-connector-{random_number_id:04d}'
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
+connector_id = config.name # I'm not really sure what I want to use this for yet
 
 # Initialize DSX Connector instance
 connector = DSXConnector(connector_name=config.name,
@@ -30,17 +26,8 @@ connector = DSXConnector(connector_name=config.name,
 aws_s3_client = AWSS3Client(s3_endpoint_url=config.s3_endpoint_url, s3_endpoint_verify=config.s3_endpoint_verify)
 
 
-async def startup():
-    """
-    Create any resources necessary for this connector's operations
-    """
-
-
-_started = False
-
-
 @connector.startup
-async def startup_event():
+async def startup_event(base: ConnectorModel) -> ConnectorModel:
     """
     Startup handler for the DSX Connector.
 
@@ -49,18 +36,17 @@ async def startup_event():
     starting background tasks, or performing initial configuration checks.
 
     Returns:
-        bool: True if startup completes successfully. Otherwise, implement proper error handling.
+        ConnectorModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    global _started
-    if _started:
-        return
-    _started = True
     dsx_logging.info(f"Starting up connector {connector.connector_id}")
-    await startup()
+
     dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
     dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
 
+    base.status = ConnectorStatusEnum.READY
+    base.meta_info = f"S3 Bucket: {config.s3_bucket}, prefix: {config.s3_prefix}"
+    return base
 
 @connector.shutdown
 async def shutdown_event():
@@ -121,7 +107,7 @@ async def full_scan_handler() -> StatusResponse:
 
 
 @connector.item_action
-def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
+async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
     """
     Item Action handler for the DSX Connector.
 
@@ -196,7 +182,7 @@ def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusRespon
 
 
 @connector.read_file
-def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse | StreamingResponse:
+async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse | StreamingResponse:
     """
     Read File handler for the DSX Connector.
 
@@ -231,18 +217,17 @@ def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse
         FileContentResponse or SimpleResponse: A successful FileContentResponse containing the file's content,
             or a SimpleResponse with an error message if file reading is not supported.
     """
-    bytes_obj = aws_s3_client.get_object(bucket=config.s3_bucket, key=scan_event_queue_info.location)
-
     # Read the file content
     try:
-        return StreamingResponse(bytes_obj, media_type="application/octet-stream")  # Stream file
+        bytes_obj = aws_s3_client.get_object(bucket=config.s3_bucket, key=scan_event_queue_info.location)
+        return StreamingResponse(stream_blob(bytes_obj), media_type="application/octet-stream")  # Stream file
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR,
                               message=f"Failed to read file: {str(e)}")
 
 
 @connector.repo_check
-def repo_check_handler() -> StatusResponse:
+async def repo_check_handler() -> StatusResponse:
     """
     Repository connectivity check handler.
 
@@ -266,7 +251,7 @@ def repo_check_handler() -> StatusResponse:
 
 
 @connector.webhook_event
-def webhook_handler(event: dict):
+async def webhook_handler(event: dict):
     """
     Webhook Event handler for the DSX Connector.
 

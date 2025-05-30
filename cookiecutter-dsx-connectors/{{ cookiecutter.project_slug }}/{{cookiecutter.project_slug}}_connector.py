@@ -1,19 +1,16 @@
-import random
 
 from starlette.responses import StreamingResponse
 
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
+from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 from connectors.{{ cookiecutter.project_slug }}.config import ConfigManager
 from connectors.{{ cookiecutter.project_slug }}.version import CONNECTOR_VERSION
 
-random_number_id = random.randint(0, 9999)
-connector_id = f'{{ cookiecutter.__release_name }}-{random_number_id:04d}'
-
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
+connector_id = config.name
 
 # Initialize DSX Connector instance
 connector = DSXConnector(connector_name=config.name,
@@ -22,14 +19,9 @@ connector = DSXConnector(connector_name=config.name,
                          dsx_connect_url=config.dsx_connect_url,
                          test_mode=config.test_mode)
 
-async def startup():
-    """
-    Create any resources necessary for this connector's operations
-    """
 
-_started = False
 @connector.startup
-async def startup_event():
+async def startup_event(base: ConnectorModel) -> ConnectorModel:
     """
     Startup handler for the DSX Connector.
 
@@ -38,18 +30,16 @@ async def startup_event():
     starting background tasks, or performing initial configuration checks.
 
     Returns:
-        bool: True if startup completes successfully. Otherwise, implement proper error handling.
+        ConnectorModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    global _started
-    if _started:
-        return
-    _started = True
     dsx_logging.info(f"Starting up connector {connector.connector_id}")
-    await startup()
     dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
     dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
 
+    # modify ConnectorModel as needed and return
+    # base.meta_info = ...
+    return base
 
 
 @connector.shutdown

@@ -8,9 +8,10 @@ from starlette.responses import StreamingResponse
 
 from dsx_connect.utils import file_ops
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
+from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from dsx_connect.utils.streaming import stream_blob
 from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback, ScanFolderModel
 from dsx_connect.utils.async_ops import run_async
 from connectors.filesystem.config import ConfigManager
@@ -19,8 +20,7 @@ from connectors.filesystem.version import CONNECTOR_VERSION
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
 
-random_number_id = random.randint(0, 9999)
-connector_id = f'filesystem-connector-{random_number_id:04d}'
+connector_id = config.name # I'm not really sure what I want to use this for yet
 
 connector = DSXConnector(connector_name=config.name,
                          connector_id=connector_id,
@@ -56,11 +56,8 @@ async def startup():
         dsx_logging.info(f"Monitor set to false, {config.location} will not be monitored for new or modified files")
 
 
-_started = False
-
-
 @connector.startup
-async def startup_event():
+async def startup_event(base: ConnectorModel) -> ConnectorModel:
     """
     Startup handler for the DSX Connector.
 
@@ -69,20 +66,19 @@ async def startup_event():
     starting background tasks, or performing initial configuration checks.
 
     Returns:
-        bool: True if startup completes successfully. Otherwise, implement proper error handling.
+        ConnectorModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    global _started
-    if _started:
-        return
-    _started = True
     await startup()
     dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
     dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
 
+    base.status = ConnectorStatusEnum.READY
+    base.meta_info = f"Filesystem location: {config.location}"
+    return base
 
 @connector.shutdown
-def shutdown_event():
+async def shutdown_event():
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id}  shutdown completed.")
 
 
@@ -99,7 +95,7 @@ async def full_scan_handler() -> StatusResponse:
 
 
 @connector.item_action
-def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
+async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
     file_path = scan_event_queue_info.location
     path_obj = pathlib.Path(file_path)
 
@@ -143,9 +139,15 @@ def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusRespon
     return StatusResponse(status=StatusResponseEnum.NOTHING,
                           message=f"Item action {config.item_action} not implemented.")
 
+def stream_file(file_like, chunk_size: int = 1024 * 1024):
+    while True:
+        chunk = file_like.read(chunk_size)
+        if not chunk:
+            break
+        yield chunk
 
 @connector.read_file
-def read_file_handler(scan_request_info: ScanRequestModel) -> StreamingResponse | StatusResponse:
+async def read_file_handler(scan_request_info: ScanRequestModel) -> StreamingResponse | StatusResponse:
     file_path = pathlib.Path(scan_request_info.location)
 
     # Check if the file exists
@@ -156,14 +158,14 @@ def read_file_handler(scan_request_info: ScanRequestModel) -> StreamingResponse 
     # Read the file content
     try:
         file_like = file_path.open("rb")  # Open file in binary mode
-        return StreamingResponse(file_like, media_type="application/octet-stream")  # Stream file
+        return StreamingResponse(stream_file(file_like), media_type="application/octet-stream")  # Stream file
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR,
                               message=f"Failed to read file: {str(e)}")
 
 
 @connector.repo_check
-def repo_check_handler() -> StatusResponse:
+async def repo_check_handler() -> StatusResponse:
     """
     Repository connectivity check handler.
 
