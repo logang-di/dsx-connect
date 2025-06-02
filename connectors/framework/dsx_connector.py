@@ -204,7 +204,7 @@ class DSXConnector:
     async def test_dsx_connect(self) -> StatusResponse:
         try:
             async with httpx.AsyncClient(verify=False) as client:
-                response = await client.get(f'{self.dsx_connect_url}{DSXConnectAPIEndpoints.REGISTER_CONNECTORS}')
+                response = await client.get(f'{self.dsx_connect_url}{DSXConnectAPIEndpoints.CONNECTION_TEST}')
             # Raise an exception for bad responses (4xx and 5xx status codes)
             response.raise_for_status()
 
@@ -232,7 +232,7 @@ class DSXAConnectorRouter(APIRouter):
         self._startup_done = False
         self._registered   = False
 
-        (self.get('/', description='Test for connector availability',
+        (self.get('/', description='Connector status and availability',
                   response_model=None)
          (self.home))
         self.post(f'/{self._connector.connector_id}{ConnectorEndpoints.ITEM_ACTION}',
@@ -308,7 +308,7 @@ class DSXAConnectorRouter(APIRouter):
         return StatusResponse(status=StatusResponseEnum.ERROR,
                               message="No handler registered for webhook_event",
                               description="Add a decorator (ex: @connector.webhook_event) to handle webhook events")
-        # Startup event
+
 
     async def on_startup_event(self):
         # if we’ve already been here once, do nothing

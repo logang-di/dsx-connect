@@ -76,7 +76,7 @@ export DSXCONNECT__SCANNER__SCAN_BINARY_URL=http://new-url.com/scan/binary/v2
 You can also just make these settings before launching dsx-connect on the same command line.  
 For example, if you wanted to set the LOG_LEVEL to debug, you would simply do something like this:
 ```shell
-LOG_LEVEL=debug python dsx-connect-start.py
+LOG_LEVEL=debug python dsx-connect-api-start.py
 ```
 
 #### Starting the dsx-connect app
@@ -88,7 +88,7 @@ Here's how to launch with overrides to LOG_LEVEL and the SCAN_BINARY_URL
 ```shell
 LOG_LEVEL=debug \
 DSXCONNECT__SCANNER__SCAN_BINARY_URL=http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2 \
-python dsx-connect-start.py
+python dsx-connect-api-start.py
 ```
 
 You should see output like this:

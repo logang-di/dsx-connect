@@ -369,11 +369,11 @@ def scan_result_task(scan_request_dict: dict, verdict_dict: dict, original_task_
 
     from dsx_connect.utils.log_chain import log_verdict_chain
 
-    # After _scan_results_db.insert(scan_result)
+    # Send to syslog
     log_verdict_chain(
         scan_request=scan_request,
         verdict=dpa_verdict,
-        item_action_success=True,
+        item_action_success=True,  # need to actually base this on success or failure
         original_task_id=original_task_id,
         current_task_id=task_id
     )

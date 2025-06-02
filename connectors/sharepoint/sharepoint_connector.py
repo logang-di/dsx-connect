@@ -5,8 +5,8 @@ from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
-from connectors.{{ cookiecutter.project_slug }}.config import ConfigManager
-from connectors.{{ cookiecutter.project_slug }}.version import CONNECTOR_VERSION
+from connectors.sharepoint.config import ConfigManager
+from connectors.sharepoint.version import CONNECTOR_VERSION
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
@@ -213,4 +213,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("connectors.framework.dsx_connector:connector_api", host="0.0.0.0",
-                port={{ cookiecutter.connector_port }}, reload=True)
+                port=8625, reload=True)

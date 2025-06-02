@@ -20,7 +20,7 @@ services:
       dsx-network:
         aliases:
           - dsx-connect-api # this is the name connectors will use to connect to the dsx_connect_core service API on the dsx-connect-network docker network
-    command: uvicorn dsx_connect.app.dsx_connect_app:app --host 0.0.0.0 --port 8586
+    command: uvicorn dsx_connect.app.dsx_connect_api:app --host 0.0.0.0 --port 8586
 
   dsx_connect_workers:
     build:
