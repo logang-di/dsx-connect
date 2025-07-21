@@ -1,0 +1,18 @@
+apiVersion: v2
+name: dsx-connect
+description: A Helm chart for Kubernetes
+type: application
+version: 0.1.0
+dependencies:
+  - name: dsx-connect-api
+    version: 0.1.0
+    repository: file://charts/dsx-connect-api
+  - name: dsx-connect-workers
+    version: 0.1.0
+    repository: file://charts/dsx-connect-workers
+  - name: redis1
+    version: 0.1.0
+    repository: file://charts/redis
+  - name: syslog
+    version: 0.1.0
+    repository: file://charts/syslog

@@ -16,26 +16,36 @@ and the API that it serves can be accessed via:
 {{ cookiecutter.__base_connector_url }}/docs
 ```
 
-## Deploying Filesystem Connector
+## Deploying Connector
 ### Docker Compose
-This package contains an easy to use docker-compose.yaml file for configuration and deployment of the
-Filesystem Connector in a docker environment.
+This deployment model is designed for fast, low-friction evaluation of the DSX Connect platform. It prioritizes
+simplicity and ease of setup over scalability or fault tolerance, making it ideal for:
+* Sales engineer demos
+* Customer proofs of concept
+* Internal development or QA testing
+
+Characteristics:
+* Docker-based deployment using docker-compose
+* Minimal external dependencies
+* Runs on a single VM, developer laptop, or cloud container service
+* Easily portable across AWS, Azure, GCP, and OCI
+
+This model is intended to get users up and running quickly without needing to provision or manage Kubernetes clusters
+or complex infrastructure.
+
+This package contains an easy to use docker-compose.yaml file for configuration and deployment of the Connector in a docker environment.
 
 #### Config via docker-compose
 
 The first part that should be changed, the ports this service listens on (optional), and a
-volume definition.  For the Filesystem Connector you are mounting the folder that you want to
+volume definition (if necessary).  For the Connector you are mounting the folder that you want to
 scan external to the docker environment, and what that maps to within the connector.
 
 ##### Port and Volume Maps
-In the case, the volume mapping is from a local directory to /app/scan_folder.  Note that this /app/scan_folder
-should be mirrored in the configuration specified in the next section (DSXCONNECTOR_LOCATION).
 
 ```yaml
       ports:
-        - "8590:8590"
-      volumes:
-        - /Users/localuser/Documents/SAMPLES:/app/scan_folder  # this directory should have been created in the Dockerfile
+        - "{{ cookiecutter.connector_port }}:{{ cookiecutter.connector_port }}"
 ```
 
 ##### Connector service configuration
@@ -54,13 +64,14 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
 ```yaml
       environment:
         - PYTHONUNBUFFERED=1
-        - DSXCONNECTOR_CONNECTOR_URL=http://filesystem-connector-api:8590 # see aliases below
-        - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_core...
-        - DSXCONNECTOR_LOCATION=/app/scan_folder
         - LOG_LEVEL=debug
-        - DSXCONNECTOR_ITEM_ACTION=nothing
-        - DSXCONNECTOR_ITEM_ACTION_MOVE_DIR=/app/quarantine # this directory should have been created in the Dockerfile
-        - DSXCONNECTOR_RECURSIVE=true
+        - DSXCONNECTOR_CONNECTOR_URL=http://{{ cookiecutter.__release_name }}:{{ cookiecutter.connector_port }} # see aliases below
+        - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_core...
+        - DSXCONNECTOR_ITEM_ACTION=nothing # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)
+        - DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO=dsxconnect-quarantine # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
+          # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector
+        - TEST_MODE=False
+        <connector specific configuration>
 
 ```
 
@@ -73,9 +84,9 @@ DSX Connect uses, if deployed within the same docker environment.
       networks:
         dsx-network:
         aliases:
-          - filesystem-connector-api  # this is how dsx-connect will communicate with this on the network
+          - {{ cookiecutter.__release_name }}  # this is how dsx-connect will communicate with this on the network
       command:
-        python connectors/filesystem/filesystem_connector.py
+        python connectors/{{ cookiecutter.repository }}/{{ cookiecutter.project_slug }}_connector.py
 ```
 
 ```yaml
@@ -87,7 +98,7 @@ networks:
     name: dsx-connect-network  # change this to an existing docker network
 ```
 #### Deployment
-Run docker compose from the same directoy as the docker-compose.yaml file using
+Run docker compose from the same directory as the docker-compose.yaml file using
 up command (-d to detach from execution)
 ```shell
 docker-compose up -d
@@ -96,3 +107,4 @@ To shut down:
 ```shell
 docker-compose down
 ```
+

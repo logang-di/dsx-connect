@@ -20,16 +20,22 @@ class AzureBlobStorageConnectorConfig(BaseSettings):
     name: str = 'azure-blob-storage-connector'
     connector_url: HttpUrl = Field(default="http://0.0.0.0:8599",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    item_action: ItemActionEnum = ItemActionEnum.MOVE
+    # connector_url: HttpUrl = Field(default="http://host.docker.internal:8599",
+    #                                description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
     dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
+    # dsx_connect_url: HttpUrl = Field(default="http://dsx-connect.127.0.0.1.nip.io:8080",
+    #                                  description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
+    item_action: ItemActionEnum = ItemActionEnum.NOTHING
+    item_action_move_metainfo: str = "dsxconnect-quarantine"
+
+    # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
+    asset: str = "lg-test-01"
+    filter: str = ""
+    recursive: bool = True
+
     test_mode: bool = False
 
-    ### Connector specific configuration
-    abs_bucket: str = "lg-test-01"
-    abs_prefix: str = ""
-    abs_recursive: bool = True
-    item_action_move_prefix: str = "dsxconnect-quarantine"
 
     class Config:
         env_prefix = "DSXCONNECTOR_"

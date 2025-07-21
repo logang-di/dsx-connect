@@ -71,6 +71,7 @@ def prepare(c):
     c.run(f"cp config.py {export_folder}/dsx_connect/")
     c.run(f"rsync -av --exclude '__pycache__' app/ {export_folder}/dsx_connect/app/")
     c.run(f"rsync -av --exclude '__pycache__' taskworkers/ {export_folder}/dsx_connect/taskworkers/")
+    c.run(f"rsync -av --exclude '__pycache__' diagrams/ {export_folder}/dsx_connect/diagrams/")
     c.run(f"rsync -av --exclude '__pycache__' database/ {export_folder}/dsx_connect/database/")
     c.run(f"rsync -av --exclude '__pycache__' models/ {export_folder}/dsx_connect/models/")
     c.run(f"rsync -av --exclude '__pycache__' taskqueue/ {export_folder}/dsx_connect/taskqueue/")
@@ -81,6 +82,16 @@ def prepare(c):
     # move docker files to topmost directory for building
     c.run(f"cp deploy/Dockerfile {export_folder}/")
     c.run(f"cp deploy/docker-compose.yaml {export_folder}/")
+    c.run(f"cp deploy/docker-compose-dsxa.yaml {export_folder}/")
+
+    # change the docker compose image: to reflect the new image tag
+    file_path = pathlib.Path(f"{export_folder}/docker-compose.yaml")
+
+    with file_path.open("r") as f:
+        content = f.read()
+        content = content.replace("__VERSION__", version)
+    with file_path.open("w") as f:
+        f.write(content)
 
     c.run(f"mkdir {export_folder}/data")
 
@@ -101,19 +112,28 @@ def zip(c):
 def build(c):
     """Build the Docker image."""
     image_tag = f"{name}:{version}"
+    latest_tag = f"{name}:latest"
     result = c.run(f"docker images -q {image_tag}", hide=True)
     if result.stdout.strip():
         print(f"Image {image_tag} already exists. Skipping build.")
     else:
         print(f"Building docker image {image_tag}...")
         c.run(f"docker build -t {image_tag} {export_folder}")
+        # c.run(f"docker tag {image_tag} {latest_tag}")
 
 @task(pre=[build])
 def push(c):
-    """Push the Docker image to Docker Hub."""
-    print("Pushing image to Docker Hub...")
-    c.run(f"docker tag {name}:{version} {repo_uname}/{name}:{version}")
-    c.run(f"docker push {repo_uname}/{name}:{version}")
+    """Push Docker image to Docker Hub."""
+    remote_version_tag = f"{repo_uname}/{name}:{version}"
+    remote_latest_tag = f"{repo_uname}/{name}:latest"
+
+    print(f"Pushing image {remote_version_tag} to Docker Hub...")
+    c.run(f"docker tag {name}:{version} {remote_version_tag}")
+    c.run(f"docker push {remote_version_tag}")
+
+    #print(f"Pushing {name}:latest as {remote_latest_tag}...")
+    #c.run(f"docker tag {name}:latest {remote_latest_tag}")
+    #c.run(f"docker push {remote_latest_tag}")
 
 @task
 def run(c):

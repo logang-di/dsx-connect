@@ -6,15 +6,14 @@ from dsx_connect.utils import file_ops
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.utils.async_ops import run_async
 from dsx_connect.utils.logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.aws_s3.config import ConfigManager
 from connectors.aws_s3.version import CONNECTOR_VERSION
 from dsx_connect.utils.streaming import stream_blob
 
-
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
-connector_id = config.name # I'm not really sure what I want to use this for yet
+connector_id = config.name  # I'm not really sure what I want to use this for yet
 
 # Initialize DSX Connector instance
 connector = DSXConnector(connector_name=config.name,
@@ -47,6 +46,7 @@ async def startup_event(base: ConnectorModel) -> ConnectorModel:
     base.status = ConnectorStatusEnum.READY
     base.meta_info = f"S3 Bucket: {config.s3_bucket}, prefix: {config.s3_prefix}"
     return base
+
 
 @connector.shutdown
 async def shutdown_event():
@@ -125,60 +125,47 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
             or an error if the action is not implemented.
     """
     full_path = scan_event_queue_info.metainfo
-    if config.item_action == ItemActionEnum.NOTHING:
-        dsx_logging.debug(f'Item action {ItemActionEnum.NOTHING} on {full_path} invoked.')
-        return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                              message=f'Item action {config.item_action} was invoked.')
-    elif config.item_action == ItemActionEnum.DELETE:
+
+    if not aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
+        return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action,
+                                        message="Item action failed.",
+                                        description=f"File does not exist at {full_path}")
+
+    if config.item_action == ItemActionEnum.DELETE:
         dsx_logging.debug(f'Item action {ItemActionEnum.DELETE} on {full_path} invoked.')
-        # Check if the file exists
-        if aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
-            if aws_s3_client.delete_object(config.s3_bucket, scan_event_queue_info.location):
-                return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                                      message=f'Item action {config.item_action} was invoked. File {full_path} successfully deleted.')
-        return StatusResponse(status=StatusResponseEnum.ERROR,
-                              message=f'Item action {config.item_action} was invoked. Unable to delete  {full_path}.')
+        if aws_s3_client.delete_object(config.s3_bucket, scan_event_queue_info.location):
+            return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
+                                            message="File deleted.",
+                                            description=f"File deleted from {config.s3_bucket}: {scan_event_queue_info.location}")
     elif config.item_action == ItemActionEnum.MOVE:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE} on {full_path} invoked.')
-        if aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
-            aws_s3_client.move_object(src_bucket=config.s3_bucket, src_key=scan_event_queue_info.location,
-                                      dest_bucket=config.s3_bucket,
-                                      dest_key=f"{config.item_action_move_prefix}/{scan_event_queue_info.location}")
-            return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                                  message=f'Item action {config.item_action} was invoked. File {full_path} successfully moved to {config.item_action_move_prefix}.')
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message=f'Item action {config.item_action} was invoked, but key {full_path} not found.'
-        )
+        dest_key = f"{config.item_action_move_prefix}/{scan_event_queue_info.location}"
+        aws_s3_client.move_object(src_bucket=config.s3_bucket, src_key=scan_event_queue_info.location,
+                                  dest_bucket=config.s3_bucket,
+                                  dest_key=dest_key)
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
+                                        message="File moved.",
+                                        description=f"File moved from {config.s3_bucket}: {scan_event_queue_info.location} to {config.s3_bucket}: {dest_key}")
     elif config.item_action == ItemActionEnum.TAG:
         dsx_logging.debug(f'Item action {ItemActionEnum.TAG} on {full_path} invoked.')
-        if aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
-            aws_s3_client.tag_object(config.s3_bucket, scan_event_queue_info.location, tags={"Verdict": "Malicious"})
-            return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                                  message=f'Item action {config.item_action} was invoked. File {full_path} successfully tagged.')
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message=f'Item action {config.item_action} was invoked, but key {full_path} not found.'
-        )
+        aws_s3_client.tag_object(config.s3_bucket, scan_event_queue_info.location, tags={"Verdict": "Malicious"})
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
+                                        message="File tagged.",
+                                        description=f"File tagged at {config.s3_bucket}: {scan_event_queue_info.location}")
     elif config.item_action == ItemActionEnum.MOVE_TAG:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE_TAG} on {full_path} invoked.')
-        if aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
-            dest_key = f"{config.item_action_move_prefix}/{scan_event_queue_info.location}"
+        dest_key = f"{config.item_action_move_prefix}/{scan_event_queue_info.location}"
 
-            aws_s3_client.move_object(src_bucket=config.s3_bucket, src_key=scan_event_queue_info.location,
-                                      dest_bucket=config.s3_bucket, dest_key=dest_key)
+        aws_s3_client.move_object(src_bucket=config.s3_bucket, src_key=scan_event_queue_info.location,
+                                  dest_bucket=config.s3_bucket, dest_key=dest_key)
 
-            aws_s3_client.tag_object(config.s3_bucket, dest_key, tags={"Verdict": "Malicious"})
+        aws_s3_client.tag_object(config.s3_bucket, dest_key, tags={"Verdict": "Malicious"})
 
-            return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                                  message=f'Item action {config.item_action} was invoked. File {full_path} successfully tagged.')
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message=f'Item action {config.item_action} was invoked, but key {full_path} not found.'
-        )
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
+                                        message=f'Item action {config.item_action} was invoked. File {full_path} successfully tagged.')
 
-    return StatusResponse(status=StatusResponseEnum.NOTHING,
-                          message=f"Item action {config.item_action} not implemented.")
+    return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action,
+                                    message=f"Item action did nothing or not implemented")
 
 
 @connector.read_file
@@ -259,25 +246,77 @@ async def webhook_handler(event: dict):
     when a new file event occurs. The connector should extract the necessary file details from the event payload
     (for example, a file ID or name) and trigger a scan request via DSX Connect using the connector.scan_file_request method.
 
+    Handles AWS S3-style event:
+    {
+        "Records": [
+            {
+                "s3": {
+                    "bucket": { "name": "my-bucket" },
+                    "object": { "key": "path/to/file.txt" }
+                }
+            }
+        ]
+    }
+
     Args:
         event (dict): The JSON payload sent by the external system containing file event details.
 
     Returns:
         SimpleResponse: A response indicating that the webhook was processed and the file scan request has been initiated,
             or an error if processing fails.
+
     """
-    dsx_logging.info("Processing webhook event")
-    # Example: Extract a file ID from the event and trigger a scan
-    file_id = event.get("file_id", "unknown")
-    connector.scan_file_request(ScanRequestModel(
-        location=f"custom://{file_id}",
-        metainfo=event
-    ))
-    return StatusResponse(
-        status=StatusResponseEnum.SUCCESS,
-        message="Webhook processed",
-        description=""
-    )
+    dsx_logging.debug(f"Processing webhook event: {event}")
+    try:
+        record = event["Records"][0]
+        s3 = record["s3"]
+        bucket = s3["bucket"]["name"]
+        key = s3["object"]["key"]
+
+        if not bucket or not key:
+            raise ValueError("Missing bucket or key in S3 event")
+
+        location = f"{key}"
+        metainfo = str({"bucket": bucket, "key": key})
+
+        dsx_logging.info(f"Received S3 event for {location}")
+        response = await connector.scan_file_request(
+            ScanRequestModel(location=location, metainfo=metainfo)
+        )
+
+        return StatusResponse(
+            status=response.status,
+            message="S3 webhook processed",
+            description=f"Scan request sent for {location}"
+        )
+    except (KeyError, IndexError, TypeError) as parse_err:
+        dsx_logging.error(f"Malformed S3 event payload: {parse_err}")
+        return StatusResponse(
+            status=StatusResponseEnum.ERROR,
+            message="Invalid S3 event format",
+            description=str(parse_err)
+        )
+    except Exception as e:
+        dsx_logging.error(f"Unexpected error in webhook handler: {e}", exc_info=True)
+        return StatusResponse(
+            status=StatusResponseEnum.ERROR,
+            message="Internal error during webhook handling",
+            description=str(e)
+        )
+
+
+@connector.config
+async def config_handler():
+    # override this with any specific configuration details you want to add
+    return {
+        "connector_name": connector.connector_name,
+        "connector_id": connector.connector_id,
+        "uuid": connector.uuid,
+        "dsx_connect_url": connector.dsx_connect_url,
+        "asset": config.asset,
+        "filter": config.filter,
+        "version": CONNECTOR_VERSION
+    }
 
 
 if __name__ == "__main__":

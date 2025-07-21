@@ -2,6 +2,8 @@ from enum import Enum
 
 from pydantic import BaseModel
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictModel2
+from dsx_connect.models.connector_models import ScanRequestModel
+from dsx_connect.models.responses import ItemActionStatusResponse
 
 
 class ScanResultStatusEnum(str, Enum):
@@ -15,7 +17,9 @@ class ScanResultModel(BaseModel):
     id: int = -1
     scan_request_task_id: str
     metadata_tag: str | None = None
-    dpa_verdict: DPAVerdictModel2 | None = None
+    scan_request: ScanRequestModel | None = None
+    verdict: DPAVerdictModel2 | None = None
+    item_action: ItemActionStatusResponse | None = None
     status: str = ScanResultStatusEnum.NOT_SCANNED
 
 

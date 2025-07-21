@@ -18,18 +18,23 @@ class GoogleCloudStorageConnectorConfig(BaseSettings):
     You can also read in an optional .env file, which will be ignored is not available
     """
     name: str = 'google-cloud-storage-connector'
-    connector_url: HttpUrl = Field(default="http://0.0.0.0:8595",
+    connector_url: HttpUrl = Field(default="http://0.0.0.0:8595", # dsx-connect is running within dockers, and this connector is being run on the docker's host system
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    item_action: ItemActionEnum = ItemActionEnum.TAG
+    # connector_url: HttpUrl = Field(default="http://host.docker.internal:8595", # dsx-connect is running within dockers, and this connector is being run on the docker's host system
+    #                                description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
     dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
-    test_mode: bool = True
+    # dsx_connect_url: HttpUrl = Field(default="http://dsx-connect.127.0.0.1.nip.io:8080",
+    #                                  description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
 
-    ### Connector specific configuration
-    gcs_bucket: str = "lg-test-01"
-    gcs_prefix: str = ""
-    gcs_recursive: bool = True
-    item_action_move_prefix: str = "dsxconnect-quarantine"
+    item_action: ItemActionEnum = ItemActionEnum.TAG
+    item_action_move_metainfo: str = "dsxconnect-quarantine"
+
+    asset: str = "lg-test-01"
+    filter: str = "encrypted"
+    recursive: bool = True
+
+    test_mode: bool = False
 
     class Config:
         env_prefix = "DSXCONNECTOR_"

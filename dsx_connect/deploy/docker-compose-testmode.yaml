@@ -9,7 +9,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
     depends_on:
-      - redis
+      - redis1
     networks:
       - dsx-network
     command: uvicorn dsx_connect.app.dsx_connect_app:app --host 0.0.0.0 --port 8080

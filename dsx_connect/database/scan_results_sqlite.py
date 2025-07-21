@@ -37,7 +37,7 @@ class ScanResultsSQLiteDB(ScanResultsBaseDB):
             return  # Do nothing if retain is 0 (store nothing)
 
         """Insert a ScanResultModel into the database and return the doc_id."""
-        verdict_json = model.dpa_verdict.json() if model.dpa_verdict else None
+        verdict_json = model.verdict.json() if model.verdict else None
         with self.lock:
             with self.connection:
                 self.cursor.execute('''
@@ -83,7 +83,7 @@ class ScanResultsSQLiteDB(ScanResultsBaseDB):
             scan_request_task_id=row[1],
             metadata_tag=row[2],
             status=row[3],
-            dpa_verdict=dpa_verdict
+            verdict=dpa_verdict
         )
 
 

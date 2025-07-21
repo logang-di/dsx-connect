@@ -1,0 +1,35 @@
+{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dsx-connect-api.fullname" . }}
+  labels:
+    {{- include "dsx-connect-api.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "dsx-connect-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "dsx-connect-api.selectorLabels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: dsx-connect-api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uvicorn"]
+          args: [
+            "dsx_connect.app.dsx_connect_api:app",
+            "--host", "0.0.0.0",
+            "--port", "{{ .Values.service.port }}"
+          ]
+          ports:
+            - containerPort: {{ .Values.service.port }}
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+            {{- end }}
+{{- end }}

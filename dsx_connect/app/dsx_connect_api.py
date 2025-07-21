@@ -1,29 +1,35 @@
+import asyncio
+import json
 from contextlib import asynccontextmanager
 
 from typing import List
 from uuid import UUID
 
+from redis.asyncio import Redis
 import httpx
 from fastapi import FastAPI, Request, Path
+from fastapi.responses import Response
 from fastapi.staticfiles import StaticFiles
-from fastapi import HTTPException
+
 import uvicorn
 import pathlib
 
-from pydantic import HttpUrl
+from pydantic import HttpUrl, BaseModel
 from starlette import status
-from starlette.responses import FileResponse, Response
+from starlette.responses import FileResponse, StreamingResponse
+
 from dsx_connect.config import ConfigManager
 from dsx_connect.models.connector_models import ConnectorModel
 
 from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.dsxa_client.dsxa_client import DSXAClient
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from dsx_connect.models.scan_models import ScanResultModel
+from dsx_connect.taskqueue.celery_app import celery_app
 from dsx_connect.utils.logging import dsx_logging
 
 from dsx_connect.app.dependencies import static_path
-
-from dsx_connect.app.routers import scan_request, scan_request_test, scan_results
+from dsx_connect.app.routers import scan_request, scan_request_test, scan_results, connectors
 
 from dsx_connect import version
 
@@ -35,9 +41,12 @@ async def lifespan(app: FastAPI):
     dsx_logging.info("dsx-connect startup completed.")
 
     app.state.connectors: List[ConnectorModel] = []
+    # inside an async context (e.g., in lifespan)
+    app.state.redis = Redis.from_url(config.taskqueue.broker)
 
     yield
 
+    await app.state.redis.close()
     dsx_logging.info("dsx-connect shutdown completed.")
 
 
@@ -55,18 +64,7 @@ app.mount("/static", StaticFiles(directory=static_path, html=True), name='static
 app.include_router(scan_request_test.router, tags=["test"])
 app.include_router(scan_request.router, tags=["scan"])
 app.include_router(scan_results.router, tags=["results"])
-
-
-# @app.on_event("startup")
-# async def startup_event():
-#     dpx_logging.info(f"dsx-connect version: {version.DSX_CONNECT_VERSION}")
-#     dpx_logging.info(f"dsx-connect configuration: {get_config()}")
-#     dpx_logging.info("dsx-connect startup completed.")
-#
-#
-# @app.on_event("shutdown")
-# async def shutdown_event():
-#     dpx_logging.info("dsx-connect shutdown completed.")
+app.include_router(connectors.router, tags=["connectors"])
 
 
 @app.get("/")
@@ -96,90 +94,27 @@ async def get_dsxa_test_connection():
     return response
 
 
-# This is mostly for testing purposes, to avoid CORS restrictions on a webapp
-# calling on a dsx-connector to perform a full scan
-@app.post(
-    DSXConnectAPIEndpoints.INVOKE_FULLSCAN_CONNECTOR,
-    response_model=StatusResponse,
-    status_code=status.HTTP_200_OK,
-    tags=["connectors"]
-)
-async def invoke_fullscan_connector(
-        request: Request,
-        connector_uuid: UUID = Path(..., description="The UUID of the connector to invoke")
-):
-    registry: List[ConnectorModel] = request.app.state.connectors
+async def notification_stream():
+    pubsub = app.state.redis.pubsub()
+    await pubsub.subscribe("scan_results")
+    # This loops to see if messages are ready to notify clients...
+    # if no messages coming in on successive loops, start sleeping a little longer, just
+    # so we aren't looping unnecessarily 10 times a second
+    sleep_duration = 0.1
+    while True:
+        msg = await pubsub.get_message(ignore_subscribe_messages=True)
+        if msg and msg["type"] == "message":
+            event = json.loads(msg["data"])
+            yield f"data: {json.dumps(event)}\n\n"
+            sleep_duration = 0.01  # reset after receiving
+        else:
+            sleep_duration = min(sleep_duration * 2, 5.0)  # back off up to 1s
+        await asyncio.sleep(sleep_duration)
 
-    # Find the ConnectorModel in our registry
-    conn = next((c for c in registry if c.uuid == connector_uuid), None)
-    if not conn:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No connector registered with UUID={connector_uuid}"
-        )
 
-    # Build the connector’s own full_scan URL
-    full_scan_url = f"{conn.url}{ConnectorEndpoints.FULL_SCAN}"
-
-    # Call the connector
-    try:
-        async with httpx.AsyncClient(verify=False) as client:
-            resp = await client.post(full_scan_url)
-            resp.raise_for_status()
-            payload = resp.json()
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=e.response.text
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=str(e)
-        )
-
-    # Unpack and return the connector’s StatusResponse
-    return StatusResponse(**payload)
-
-@app.post(
-    DSXConnectAPIEndpoints.REGISTER_CONNECTORS,
-    response_model=StatusResponse,
-    status_code=status.HTTP_201_CREATED,
-    tags=["connectors"]
-)
-async def register_connector(conn: ConnectorModel, request: Request):
-    registry: List[ConnectorModel] = request.app.state.connectors
-    # optional: dedupe by url
-    if any(existing.uuid == conn.uuid for existing in registry):
-        # don't do anything - already registered and there's no harm in re-registering, as the connector model is\
-        # unique for the live and active connector
-        return StatusResponse(status=StatusResponseEnum.NOTHING,
-                              message=f"Registration of {conn.url} : {conn.uuid} already in place",
-                              description="")
-    registry.append(conn)
-    return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                          message="Registration succeeded",
-                          description=f"Registration of {conn.url} : {conn.uuid} succeeded")
-
-@app.delete(
-    DSXConnectAPIEndpoints.UNREGISTER_CONNECTORS,
-    tags=["connectors"])
-async def unregister_connector(
-        request: Request,
-        connector_uuid: UUID = Path(..., description="UUID of the connector to remove")
-):
-    registry: List[ConnectorModel] = request.app.state.connectors
-    app.state.connectors = [c for c in registry if c.uuid != connector_uuid]
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-@app.get(
-    DSXConnectAPIEndpoints.LIST_CONNECTORS,
-    response_model=list[ConnectorModel],
-    status_code=status.HTTP_200_OK,
-    tags=["connectors"]
-)
-async def list_connectors(request: Request):
-    return request.app.state.connectors
+@app.get(DSXConnectAPIEndpoints.NOTIFICATIONS_SCAN_RESULT)
+async def get_notification_scan_result():
+    return StreamingResponse(notification_stream(), media_type="text/event-stream")
 
 
 # Main entry point to start the FastAPI app

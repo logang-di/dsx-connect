@@ -24,6 +24,6 @@ if __name__ == "__main__":
         "worker",
         "--loglevel=info",
         "--pool=solo",  # <== allows for running in debugging mode.
-        f"--queues={config.taskqueue.scan_request_queue},{config.taskqueue.verdict_action_queue},{config.taskqueue.scan_result_queue}",
+        f"--queues={config.taskqueue.scan_request_queue},{config.taskqueue.verdict_action_queue},{config.taskqueue.scan_result_queue},{config.taskqueue.scan_result_notification_queue}",  #,{config.taskqueue.encrypted_file_queue}
         "--concurrency=1"
     ])

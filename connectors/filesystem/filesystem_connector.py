@@ -10,7 +10,7 @@ from dsx_connect.utils import file_ops
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.utils.logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from dsx_connect.utils.streaming import stream_blob
 from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback, ScanFolderModel
 from dsx_connect.utils.async_ops import run_async
@@ -99,22 +99,16 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
     file_path = scan_event_queue_info.location
     path_obj = pathlib.Path(file_path)
 
-    if config.item_action == ItemActionEnum.NOTHING:
-        dsx_logging.debug(f'Item action {ItemActionEnum.NOTHING} on {file_path} invoked.')
-        return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                              message=f'Item action {config.item_action} was invoked.')
-    elif config.item_action == ItemActionEnum.DELETE:
+    if not path_obj.is_file():
+        return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action, message="Item action failed.", description=f"File does not exist at {file_path}")
+
+    if config.item_action == ItemActionEnum.DELETE:
         dsx_logging.debug(f'Item action {ItemActionEnum.DELETE} on {file_path} invoked.')
-        # Check if the file exists
-        if not path_obj.is_file():
-            return StatusResponse(
-                status=StatusResponseEnum.ERROR,
-                message=f'File {file_path} not found for deletion.',
-                description=''
-            )
         path_obj.unlink()
-        return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                              message=f'Item action {config.item_action} was invoked. File {file_path} successfully deleted.')
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS,
+                                        item_action=config.item_action,
+                                        message=f'File deleted.',
+                                        description=f"File deleted from {file_path}")
     elif config.item_action == ItemActionEnum.MOVE:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE} on {file_path} invoked.')
         # Ensure the destination directory exists
@@ -124,20 +118,22 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
         new_path = move_dir / path_obj.name
         try:
             path_obj.rename(new_path)
-            return StatusResponse(
+            return ItemActionStatusResponse(
                 status=StatusResponseEnum.SUCCESS,
-                message=f'Item action {config.item_action} was invoked. File {file_path} successfully moved to {new_path}.'
+                item_action=config.item_action,
+                message="File moved",
+                description=f'Item action {config.item_action} was invoked. File {file_path} successfully moved to {new_path}.'
             )
         except Exception as e:
             error_msg = f'Failed to move file {file_path}: {e}'
             dsx_logging.error(error_msg)
-            return StatusResponse(
+            return ItemActionStatusResponse(
                 status=StatusResponseEnum.ERROR,
-                message=error_msg
+                message=error_msg,
+                item_action=config.item_action
             )
 
-    return StatusResponse(status=StatusResponseEnum.NOTHING,
-                          message=f"Item action {config.item_action} not implemented.")
+    return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action, message="Item action did nothing or not implemented")
 
 def stream_file(file_like, chunk_size: int = 1024 * 1024):
     while True:
@@ -185,9 +181,20 @@ async def repo_check_handler() -> StatusResponse:
             description="")
 
 
-# Add the distribution root (directory containing this script) to sys.path
-# dist_root = pathlib.Path(__file__).resolve().parent.parent
-# sys.path.insert(0, str(dist_root))
+@connector.config
+def config_handler():
+    # override this with any specific configuration details you want to add
+    return {
+        "connector_name": connector.connector_name,
+        "connector_id": connector.connector_id,
+        "uuid": connector.uuid,
+        "dsx_connect_url": connector.dsx_connect_url,
+        "location": config.location,
+        "monitor": config.monitor,
+        "scan_existing": config.scan_existing,
+        "version": CONNECTOR_VERSION
+    }
+
 
 # Main entry point to start the FastAPI app
 if __name__ == "__main__":

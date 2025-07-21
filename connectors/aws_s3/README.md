@@ -1,13 +1,13 @@
-# AWS S3 Connector
+# AWS S3 Connector Implementation Guide
 
-This project implements a DSX Connector based on the DSX Connector framework.
+This project implements a AWS S3 Connector based on the DSX Connector framework.  This README is a guide for how to
+implement, debug and create releases.
 
-
-## Overview
+Documenation for deploying a release should be in file: deploy/README.md will
 
 
 ## Development and Debugging
-Implement the following in `aws_s3.py`:
+Implement the following in `aws_s3_connector.py`:
 - **Startup/Shutdown:** Initialize and clean up resources.
 
 and the following API endpoints as applicable:
@@ -28,16 +28,15 @@ Local running Docker instance: if building a Docker image (a "release")
 ### Using invoke
 ```python
 pip install invoke
-pip install pipreqs # used to generate requirements...
 ```
 Navigate to the root directory (where the tasks.py file resides) and use invoke cli to run tasks
 ```python
 invoke release
 ```
 * Files will be bundled up in the dist folder.
-* A requirements.txt file will be generated with all modules needed
 * If docker is running locally, a docker image will be built.
 * If access to a docker repository is given, the docker image will be pushed to that repository
+* Docker images tagged with aws-s3-connector:<version> and aws-s3-connector:latest
 
 Other invoke options:
 * bump - increments the patch version in version.py (e.g., 1.0.0 to 1.0.1).

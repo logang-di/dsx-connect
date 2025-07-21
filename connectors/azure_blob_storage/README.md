@@ -1,9 +1,9 @@
-# Azure Blob Storage Connector
+# Azure Blob Storage Connector Implementation Guide
 
-This project implements a DSX Connector based on the DSX Connector framework.
+This project implements a DSX Connector based on the DSX Connector framework.  This README is a guide for how to
+implement, debug and create releases.
 
-
-## Overview
+Documenation for deploying a release should be in file: deploy/README.md will
 
 
 ## Development
@@ -92,7 +92,7 @@ or by adding this setting in a .env file.  The format for overriding a setting i
 ```DSXCONNECTOR_<capitalized config variable>```
 
 
-### Build a Deployment Release
+## Build a Deployment Release
 
 Connectors use Invoke to manage tasks for bundling up files, creating requirements (for pip) and
 building a Docker image.  All the steps needed to prepare a new release for deployment.
@@ -103,16 +103,15 @@ Local running Docker instance: if building a Docker image (a "release")
 #### Using invoke
 ```python
 pip install invoke
-pip install pipreqs # used to generate requirements...
 ```
 Navigate to the root directory (where the tasks.py file resides) and use invoke cli to run tasks
 ```python
 invoke release
 ```
 * Files will be bundled up in the dist folder.
-* A requirements.txt file will be generated with all modules needed
 * If docker is running locally, a docker image will be built.
 * If access to a docker repository is given, the docker image will be pushed to that repository
+* Docker images tagged with {{ cookiecutter.__release_name }}:<version> and {{ cookiecutter.__release_name }}:latest
 
 Other invoke options:
 * bump - increments the patch version in version.py (e.g., 1.0.0 to 1.0.1).

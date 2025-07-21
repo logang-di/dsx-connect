@@ -1,0 +1,21 @@
+enabled: true
+image:
+  repository: logangilbert/dsx-connect
+  tag: "0.1.34"
+  pullPolicy: IfNotPresent
+
+env:
+  PYTHONUNBUFFERED: "1"
+  DSXCONNECT_SCANNER__SCAN_BINARY_URL: http://dsxa_scanner:5000/scan/binary/v2
+  DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL: syslog
+  DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT: "514"
+  DSXCONNECT_TASKQUEUE__BROKER: redis://redis:6379/0
+  DSXCONNECT_TASKQUEUE__BACKEND: redis://redis:6379/0
+  LOG_LEVEL: debug
+
+queues:
+  - scan_request_queue
+  - verdict_action_queue
+  - scan_result_queue
+
+concurrency: 1

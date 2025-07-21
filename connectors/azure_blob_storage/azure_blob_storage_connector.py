@@ -5,7 +5,7 @@ from connectors.azure_blob_storage.azure_blob_storage_client import AzureBlobCli
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.utils.logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.azure_blob_storage.config import ConfigManager
 from connectors.azure_blob_storage.version import CONNECTOR_VERSION
 from dsx_connect.utils.streaming import stream_blob
@@ -22,6 +22,7 @@ connector = DSXConnector(connector_name=config.name,
                          test_mode=config.test_mode)
 
 abs_client = AzureBlobClient()
+
 
 @connector.startup
 async def startup_event(base: ConnectorModel) -> ConnectorModel:
@@ -42,8 +43,9 @@ async def startup_event(base: ConnectorModel) -> ConnectorModel:
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
-    base.meta_info = f"ABS container: {config.abs_bucket}, prefix: {config.abs_prefix}"
+    base.meta_info = f"ABS container: {config.asset}, prefix: {config.filter}"
     return base
+
 
 @connector.shutdown
 async def shutdown_event():
@@ -93,16 +95,16 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
-    for blob in abs_client.keys(config.abs_bucket, prefix=config.abs_prefix, recursive=config.abs_recursive):
+    for blob in abs_client.keys(config.asset, prefix=config.filter, recursive=config.recursive):
         key = blob['Key']
-        full_path = f"{config.abs_bucket}/{key}"
+        full_path = f"{config.asset}/{key}"
         await connector.scan_file_request(ScanRequestModel(location=key, metainfo=full_path))
         dsx_logging.debug(f"Sent scan request for {full_path}")
     return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
 
 
 @connector.item_action
-async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
+async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> ItemActionStatusResponse:
     """
     Item Action handler for the DSX Connector.
 
@@ -120,18 +122,37 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
             or an error if the action is not implemented.
     """
     file_path = scan_event_queue_info.location
+    if not abs_client.key_exists(config.asset, file_path):
+        return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action,
+                                        message="Item action failed.",
+                                        description=f"File does not exist at {config.asset}: {file_path}")
+
     if config.item_action == ItemActionEnum.DELETE:
-        if abs_client.key_exists(config.abs_bucket, file_path):
-            abs_client.delete_blob(config.abs_bucket, file_path)
-            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File deleted.")
+        abs_client.delete_blob(config.asset, file_path)
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
+                                        message="File deleted.",
+                                        description=f"File deleted from {config.asset}: {file_path}")
     elif config.item_action == ItemActionEnum.MOVE:
-        dest_key = f"{config.item_action_move_prefix}/{file_path}"
-        abs_client.move_blob(config.abs_bucket, file_path, config.abs_bucket, dest_key)
-        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File moved.")
+        dest_key = f"{config.item_action_move_metainfo}/{file_path}"
+        abs_client.move_blob(config.asset, file_path, config.asset, dest_key)
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
+                                        message="File moved.",
+                                        description=f"File moved from {config.asset}: {file_path} to {dest_key}")
     elif config.item_action == ItemActionEnum.TAG:
-        abs_client.tag_blob(config.abs_bucket, file_path, {"Verdict": "Malicious"})
-        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File tagged.")
-    return StatusResponse(status=StatusResponseEnum.NOTHING, message="Item action not implemented")
+        abs_client.tag_blob(config.asset, file_path, {"Verdict": "Malicious"})
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
+                                        message="File tagged.",
+                                        description=f"File tagged at {config.asset}: {file_path}")
+    elif config.item_action == ItemActionEnum.MOVE_TAG:
+        abs_client.tag_blob(config.asset, file_path, {"Verdict": "Malicious"})
+        dest_key = f"{config.item_action_move_metainfo}/{file_path}"
+        abs_client.move_blob(config.asset, file_path, config.asset, dest_key)
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
+                                        message="File tagged and moved",
+                                        description=f"File moved from {config.asset}: {file_path} to {dest_key} and tagged.")
+
+    return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action,
+                                    message=f"Item action did nothing or not implemented")
 
 
 @connector.read_file
@@ -172,7 +193,7 @@ async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusRe
     """
     # Implement file read (if applicable)
     try:
-        file_stream = abs_client.get_blob(config.abs_bucket, scan_event_queue_info.location)
+        file_stream = abs_client.get_blob(config.asset, scan_event_queue_info.location)
         return StreamingResponse(stream_blob(file_stream), media_type="application/octet-stream")
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
@@ -188,10 +209,10 @@ async def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    if abs_client.test_connection(config.abs_bucket):
+    if abs_client.test_connection(config.asset):
         return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                              message=f"Connection to {config.abs_bucket} successful.")
-    return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.abs_bucket} failed.")
+                              message=f"Connection to {config.asset} successful.")
+    return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.asset} failed.")
 
 
 @connector.webhook_event
@@ -222,6 +243,20 @@ async def webhook_handler(event: dict):
         message="Webhook processed",
         description=""
     )
+
+
+@connector.config
+async def config_handler():
+    # override this with any specific configuration details you want to add
+    return {
+        "connector_name": connector.connector_name,
+        "connector_id": connector.connector_id,
+        "uuid": connector.uuid,
+        "dsx_connect_url": connector.dsx_connect_url,
+        "asset": config.asset,
+        "filter": config.filter,
+        "version": CONNECTOR_VERSION
+    }
 
 
 if __name__ == "__main__":

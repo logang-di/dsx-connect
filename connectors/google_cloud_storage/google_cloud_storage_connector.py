@@ -4,7 +4,7 @@ from connectors.framework.dsx_connector import DSXConnector
 from connectors.google_cloud_storage.gcs_client import GCSClient
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
 from dsx_connect.utils.logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.google_cloud_storage.config import ConfigManager
 from connectors.google_cloud_storage.version import CONNECTOR_VERSION
 from dsx_connect.utils.streaming import stream_blob
@@ -42,7 +42,7 @@ async def startup_event(base: ConnectorModel) -> ConnectorModel:
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
-    base.meta_info = f"GCS Bucket: {config.gcs_bucket}, prefix: {config.gcs_prefix}"
+    base.meta_info = f"GCS Bucket: {config.asset}, prefix: {config.filter}"
     return base
 
 
@@ -94,9 +94,9 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
-    for blob in gcs_client.keys(config.gcs_bucket, prefix=config.gcs_prefix, recursive=config.gcs_recursive):
+    for blob in gcs_client.keys(config.asset, prefix=config.filter, recursive=config.recursive):
         key = blob['Key']
-        full_path = f"{config.gcs_bucket}/{key}"
+        full_path = f"{config.asset}/{key}"
         await connector.scan_file_request(
             ScanRequestModel(location=key, metainfo=full_path)
         )
@@ -125,18 +125,20 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
             or an error if the action is not implemented.
     """
     file_path = scan_event_queue_info.location
+    if not gcs_client.key_exists(config.asset, file_path):
+        return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action, message="Item action failed.", description=f"File does not exist at {config.asset}: {file_path}")
+
     if config.item_action == ItemActionEnum.DELETE:
-        if gcs_client.key_exists(config.gcs_bucket, file_path):
-            gcs_client.delete_object(config.gcs_bucket, file_path)
-            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File deleted.")
+            gcs_client.delete_object(config.asset, file_path)
+            return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=ItemActionEnum.DELETE, message="File deleted.", description=f"File deleted from {config.asset}: {file_path}")
     elif config.item_action == ItemActionEnum.MOVE:
         dest_key = f"{config.item_action_move_prefix}/{file_path}"
-        gcs_client.move_object(config.gcs_bucket, file_path, config.gcs_bucket, dest_key)
-        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File moved.")
+        gcs_client.move_object(config.asset, file_path, config.asset, dest_key)
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=ItemActionEnum.MOVE, message="File moved.", description=f"File moved from {config.asset}: {file_path} to {dest_key}")
     elif config.item_action == ItemActionEnum.TAG:
-        gcs_client.tag_object(config.gcs_bucket, file_path, {"Verdict": "Malicious"})
-        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="File tagged.")
-    return StatusResponse(status=StatusResponseEnum.NOTHING, message="Item action not implemented")
+        gcs_client.tag_object(config.asset, file_path, {"Verdict": "Malicious"})
+        return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=ItemActionEnum.TAG, message="File tagged.", description=f"File tagged at {config.asset}: {file_path}")
+    return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action, message="Item action did nothing or not implemented")
 
 
 
@@ -177,7 +179,7 @@ async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusRe
             or a SimpleResponse with an error message if file reading is not supported.
     """
     try:
-        file_stream = gcs_client.get_object(config.gcs_bucket, scan_event_queue_info.location)
+        file_stream = gcs_client.get_object(config.asset, scan_event_queue_info.location)
         return StreamingResponse(stream_blob(file_stream), media_type="application/octet-stream")
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
@@ -193,9 +195,9 @@ async def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    if gcs_client.test_gcs_connection(bucket=config.gcs_bucket):
-        return StatusResponse(status=StatusResponseEnum.SUCCESS, message=f"Connection to {config.gcs_bucket} successful.")
-    return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.gcs_bucket} failed.")
+    if gcs_client.test_gcs_connection(bucket=config.asset):
+        return StatusResponse(status=StatusResponseEnum.SUCCESS, message=f"Connection to {config.asset} successful.")
+    return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.asset} failed.")
 
 
 @connector.webhook_event
@@ -226,6 +228,20 @@ async def webhook_handler(event: dict):
         message="Webhook processed",
         description=""
     )
+
+
+@connector.config
+def config_handler():
+    # override this with any specific configuration details you want to add
+    return {
+        "connector_name": connector.connector_name,
+        "connector_id": connector.connector_id,
+        "uuid": connector.uuid,
+        "dsx_connect_url": connector.dsx_connect_url,
+        "asset": config.asset,
+        "filter": config.filter,
+        "version": CONNECTOR_VERSION
+    }
 
 
 if __name__ == "__main__":

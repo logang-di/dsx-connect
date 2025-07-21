@@ -2,6 +2,7 @@ from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
 from dsx_connect.models.connector_models import ItemActionEnum
 
+
 class AWSS3ConnectorConfig(BaseSettings):
     """
     Configuration for connector.  Note that configuration is a pydantic base setting class, so we get the benefits of
@@ -20,26 +21,29 @@ class AWSS3ConnectorConfig(BaseSettings):
     name: str = 'aws-s3-connector'
     connector_url: HttpUrl = Field(default="http://0.0.0.0:8591",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    item_action: ItemActionEnum = ItemActionEnum.DELETE
     dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
+    item_action: ItemActionEnum = ItemActionEnum.MOVE
+    item_action_move_metainfo: str = "dsxconnect-quarantine"
+
     test_mode: bool = False
+
+    # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
+    asset: str = "lg-test-02"
+    filter: str = ""
+    recursive: bool = True
 
     ### Connector specific configuration
     s3_endpoint_url: str | None = None
     s3_endpoint_verify: bool = True
-    s3_bucket: str = "lg-test-02"
-    s3_prefix: str = ""
-    s3_recursive: bool = True
-    item_action_move_prefix: str = Field(default="dsxconnect-quarantine",
-                                         description="Prefix to move files when item_action is MOVE")
 
 
 class Config:
-        env_prefix = "DSXCONNECTOR_"
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "forbid"
+    env_prefix = "DSXCONNECTOR_"
+    env_file = ".env"
+    env_file_encoding = "utf-8"
+    extra = "forbid"
+
 
 # Singleton with reload capability
 class ConfigManager:
@@ -58,4 +62,3 @@ class ConfigManager:
 
 
 config = ConfigManager.get_config()
-

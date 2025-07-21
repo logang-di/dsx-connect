@@ -32,4 +32,5 @@ Note that project_name now defaults to "GCP Buckets Connector" and project_slug 
 - **docker_repo** - remote docker hub repo to use when creating releases.  
 
 # Using
-Once the template code is generated 
+Once the template code is generated move the directory and files created under "some_output_folder" to the 
+"connectors" module in this project.

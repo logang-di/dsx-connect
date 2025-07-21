@@ -1,0 +1,13 @@
+enabled: true
+
+image:
+  repository: balabit/syslog-ng
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 514
+  protocol: UDP
+
+resources: {}

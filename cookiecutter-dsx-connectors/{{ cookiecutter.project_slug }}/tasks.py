@@ -90,24 +90,45 @@ def prepare(c):
     # move Dockerfile and docker-compose to topmost directory
     c.run(f"rsync -av {project_root_dir}/connectors/{{ cookiecutter.project_slug }}/deploy/ {export_folder}")
 
+    # change the docker compose image: to reflect the new image tag
+    file_path = pathlib.Path(f"{export_folder}/docker-compose.yaml")
 
-@task(pre=[prepare])
+    with file_path.open("r") as f:
+        content = f.read()
+        content = content.replace("__VERSION__", version)
+    with file_path.open("w") as f:
+        f.write(content)
+
+
+@task(pre=[zip])
 def build(c):
     """Build Docker image from distribution."""
     image_tag = f"{name}:{version}"
+    latest_tag = f"{name}:latest"
+
     result = c.run(f"docker images -q {image_tag}", hide=True)
     if result.stdout.strip():
         print(f"Image {image_tag} already exists. Skipping build.")
     else:
         print(f"Building docker image {image_tag}...")
         c.run(f"docker build -t {image_tag} {export_folder}")
+        # print(f"Tagging {image_tag} as {latest_tag}")
+        # c.run(f"docker tag {image_tag} {latest_tag}")
+
 
 @task(pre=[build])
 def push(c):
     """Push Docker image to Docker Hub."""
-    print("Pushing image to Docker Hub...")
-    c.run(f"docker tag {name}:{version} {repo_uname}/{name}:{version}")
-    c.run(f"docker push {repo_uname}/{name}:{version}")
+    remote_version_tag = f"{repo_uname}/{name}:{version}"
+    remote_latest_tag = f"{repo_uname}/{name}:latest"
+
+    print(f"Pushing image {remote_version_tag} to Docker Hub...")
+    c.run(f"docker tag {name}:{version} {remote_version_tag}")
+    c.run(f"docker push {remote_version_tag}")
+
+    # print(f"Tagging and pushing {name}:latest as {remote_latest_tag}...")
+    # c.run(f"docker tag {name}:latest {remote_latest_tag}")
+    # c.run(f"docker push {remote_latest_tag}")
 
 # @task
 # def run(c):

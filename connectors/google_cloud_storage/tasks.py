@@ -85,11 +85,18 @@ def prepare(c):
     c.run(f"cp start.py {export_folder}")
 
     # Generate requirements.txt
-    c.run(f"pipreqs {export_folder} --force --savepath {export_folder}/requirements.txt")
+    # c.run(f"pipreqs {export_folder} --force --savepath {export_folder}/requirements.txt")
 
-    # move Dockerfile and docker-compose to topmost directory
+    # move Dockerfile, docker-compose and requirements to topmost directory
     c.run(f"rsync -av {project_root_dir}/connectors/google_cloud_storage/deploy/ {export_folder}")
+    # change the docker compose image: to reflect the new image tag
+    file_path = pathlib.Path(f"{export_folder}/docker-compose.yaml")
 
+    with file_path.open("r") as f:
+        content = f.read()
+        content = content.replace("__VERSION__", version)
+    with file_path.open("w") as f:
+        f.write(content)
 
 @task(pre=[prepare])
 def build(c):

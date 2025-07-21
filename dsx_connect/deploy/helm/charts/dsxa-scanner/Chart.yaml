@@ -1,0 +1,6 @@
+apiVersion: v2
+name: dsxa-scanner
+description: DSXA Scanner service
+type: application
+version: 0.1.0
+appVersion: "4.0.0.2007"

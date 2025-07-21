@@ -1,10 +1,9 @@
-# {{ cookiecutter.project_name }}
+# {{ cookiecutter.project_name }} Implementation Guide
 
-This project implements a DSX Connector based on the DSX Connector framework.
+This project implements a DSX Connector based on the DSX Connector framework.  This README is a guide for how to
+implement, debug and create releases.
 
-
-## Overview
-
+Documenation for deploying a release should be in file: deploy/README.md will
 
 ## Development
 Implement the following in `{{ cookiecutter.project_slug }}_connector.py`:
@@ -17,7 +16,7 @@ and the following API endpoints as applicable:
 - **repo_check:** Request that the connector checks its connectivity to its repository
 - **webhook_event:** Process external webhook events.
 
-### Running/Testing in an IDE/Debugger
+## Running/Testing in an IDE/Debugger
 All connectors can be run from the command-line or via an IDE/Debugger.  In this directory, there is both a start.py
 file and `{{ cookiecutter.project_slug }}_connector.py` script either of which can be use to start the connector.
 
@@ -30,17 +29,20 @@ You should see output similar to this:
 INFO:     Started server process [81998]
 INFO:     Waiting for application startup.
 2025-05-21 13:36:15,723 INFO     dsx_connector.py    : Connection to dsx-connect at http://0.0.0.0:8586 success.
-2025-05-21 13:36:15,723 INFO     {{ cookiecutter.project_slug }}_connector.py: Starting up connector google-cloud-storage-connector-9788
-2025-05-21 13:36:15,723 INFO     {{ cookiecutter.project_slug }}_connector.py: {{ cookiecutter.__release_name }}-9788 version: 0.1.0.
-2025-05-21 13:36:15,724 INFO     {{ cookiecutter.project_slug }}_connector.py: {{ cookiecutter.__release_name }}-9788 configuration: name='{{ cookiecutter.__release_name }}' connector_url=HttpUrl('http://0.0.0.0:8595/') item_action=<ItemActionEnum.TAG: 'tag'> dsx_connect_url=HttpUrl('http://0.0.0.0:8586/') test_mode=True gcs_bucket='lg-test-01' gcs_prefix='' gcs_recursive=True item_action_move_prefix='dsxconnect-quarantine'.
-2025-05-21 13:36:15,724 INFO     {{ cookiecutter.project_slug }}_connector.py: {{ cookiecutter.__release_name }}:{{ cookiecutter.__release_name }}-9788 startup completed.
+2025-05-21 13:36:15,723 INFO     {{ cookiecutter.project_slug }}_connector.py: Starting up connector {{ cookiecutter.project_slug }}
+2025-05-21 13:36:15,723 INFO     {{ cookiecutter.project_slug }}_connector.py: {{ cookiecutter.__release_name }} version: 0.1.0.
+...
 2025-05-21 13:36:15,733 INFO     dsx_connector.py    : Connection to dsx-connect at http://0.0.0.0:8586 success.
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://0.0.0.0:8595 (Press CTRL+C to quit)
+...
 ```
 
-#### Changing Configuration
-The easiest method is to edit config.py directly, however, just keep in mind that config.py file defines all of the default config values. When you good to release a connector, you will likely want your defaults to make sense (i.e. most of the time, the default value suffices), as opposed to whatever settings you tested the connector with. The best way to test connectors with various configuration settings, without permanently changing the defaults, is to override settings with environment settings.
+### Changing Configuration
+The easiest method is to edit config.py directly, however, just keep in mind that config.py file defines all of
+the default config values. When you release a connector, you will likely want your defaults to make sense
+(i.e. most of the time, the default value suffices), as opposed to whatever settings you tested the connector with.
+The best way to test connectors with various configuration settings, without permanently changing the defaults, is to
+override settings with environment settings.
 
 For example, in the config file:
 
@@ -66,27 +68,29 @@ or by adding this setting in a .env file. The format for overriding a setting is
 
 
 
-### Build a Deployment Release
+## Build a Deployment Release
 
 Connectors use Invoke to manage tasks for bundling up files, creating requirements (for pip) and
 building a Docker image.  All the steps needed to prepare a new release for deployment.
 
-#### Prerequisites
+### Prerequisites
 Local running Docker instance: if building a Docker image (a "release")
 
-#### Using invoke
+Ideally, also a remote docker hub instance that you can push the image to.  This can be configured in the tasks.py file by setting the following:
+repo_uname = "<your repo>"
+
+### Using invoke
 ```python
 pip install invoke
-pip install pipreqs # used to generate requirements...
 ```
 Navigate to the root directory (where the tasks.py file resides) and use invoke cli to run tasks
 ```python
 invoke release
 ```
 * Files will be bundled up in the dist folder.
-* A requirements.txt file will be generated with all modules needed
 * If docker is running locally, a docker image will be built.
 * If access to a docker repository is given, the docker image will be pushed to that repository
+* Docker images tagged with {{ cookiecutter.__release_name }}:<version> and {{ cookiecutter.__release_name }}:latest
 
 Other invoke options:
 * bump - increments the patch version in version.py (e.g., 1.0.0 to 1.0.1).

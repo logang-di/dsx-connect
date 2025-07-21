@@ -16,27 +16,16 @@ and the API that it serves can be accessed via:
 http://0.0.0.0:8591/docs
 ```
 
-## Deploying Filesystem Connector
+## Deploying AWS S3 Connector
 ### Docker Compose
 This package contains an easy to use docker-compose.yaml file for configuration and deployment of the
-Filesystem Connector in a docker environment.
+AWS S3 Connector in a docker environment.
 
 #### Config via docker-compose
 
 The first part that should be changed, the ports this service listens on (optional), and a
 volume definition.  For the Filesystem Connector you are mounting the folder that you want to
 scan external to the docker environment, and what that maps to within the connector.
-
-##### Port and Volume Maps
-In the case, the volume mapping is from a local directory to /app/scan_folder.  Note that this /app/scan_folder
-should be mirrored in the configuration specified in the next section (DSXCONNECTOR_LOCATION).
-
-```yaml
-      ports:
-        - "8590:8590"
-      volumes:
-        - /Users/localuser/Documents/SAMPLES:/app/scan_folder  # this directory should have been created in the Dockerfile
-```
 
 ##### Connector service configuration
 This connector's configuration has defaults defined in the config.py file in this same directory, a Pydantic
@@ -54,13 +43,13 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
 ```yaml
       environment:
         - PYTHONUNBUFFERED=1
-        - DSXCONNECTOR_CONNECTOR_URL=http://filesystem-connector-api:8590 # see aliases below
+        - DSXCONNECTOR_CONNECTOR_URL=http://aws-s3-connector-api:8591 # see aliases below
         - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_core...
-        - DSXCONNECTOR_LOCATION=/app/scan_folder
-        - LOG_LEVEL=debug
         - DSXCONNECTOR_ITEM_ACTION=nothing
-        - DSXCONNECTOR_ITEM_ACTION_MOVE_DIR=/app/quarantine # this directory should have been created in the Dockerfile
-        - DSXCONNECTOR_RECURSIVE=true
+        - DSXCONNECTOR_S3_BUCKET=lg-test-02
+        - DSXCONNECTOR_S3_PREFIX=
+        - DSXCONNECTOR_S3_RECURSIVE=True
+        - DSXCONNECTOR_ITEM_ACTION_MOVE_PREFIX=dsxconnect-quarantine
 
 ```
 

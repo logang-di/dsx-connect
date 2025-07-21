@@ -55,7 +55,7 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
       environment:
         - PYTHONUNBUFFERED=1
         - DSXCONNECTOR_CONNECTOR_URL=http://filesystem-connector-api:8590 # see aliases below
-        - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_core...
+        - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api1:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_core...
         - DSXCONNECTOR_LOCATION=/app/scan_folder
         - LOG_LEVEL=debug
         - DSXCONNECTOR_ITEM_ACTION=nothing

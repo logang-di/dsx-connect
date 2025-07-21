@@ -1,7 +1,15 @@
-# dsx-connect Installation Quick Start
+# dsx-connect Deployment
+
+## Table of Contents
+- [Distribution Structure](#distribution-structure)
+- [dsx-connect Components](#dsx-connect-components)
+- [Test Deployment](#test-deployment-quick-start)
+  - [Running on the Command Line](#running-on-the-command-line)
+- [API Reference](#api-reference)
+
 
 ## Distribution Structure
-The distribution (dsx-connect-<version>/) contains:
+This distribution (dsx-connect-<version>/) contains:
 
 dsx_connect/: Core application code (FastAPI app, Celery workers, etc.).
 utils/: Shared modules.
@@ -17,8 +25,8 @@ README.md: This file.
 * dsx-connect app: 
   * a FastAPI app, that provides the API endpoints that Connectors talk to.  
   * Manages configuration of architecture
-* Scan Request Queue and Verdict Queue - implemented as a Redis queues.  
-* Scan Request Worker and Verdict Worker - Celery apps which can be deployed individually or together
+* Scan Request, Verdict, and Scan Result Queue - implemented as Celery/Redis queues.  
+* Scan Request, Verdict and Scan Result Workers - Celery apps which can be deployed individually or together
 
 ## Deployment
 There are two modes for deploying dsx-connect.  One mode is a testing mode in which only the dsx-connect app 
@@ -76,7 +84,7 @@ export DSXCONNECT__SCANNER__SCAN_BINARY_URL=http://new-url.com/scan/binary/v2
 You can also just make these settings before launching dsx-connect on the same command line.  
 For example, if you wanted to set the LOG_LEVEL to debug, you would simply do something like this:
 ```shell
-LOG_LEVEL=debug python dsx-connect-api-start.py
+LOG_LEVEL=debug python dsx-connect-api1-start.py
 ```
 
 #### Starting the dsx-connect app
@@ -88,7 +96,7 @@ Here's how to launch with overrides to LOG_LEVEL and the SCAN_BINARY_URL
 ```shell
 LOG_LEVEL=debug \
 DSXCONNECT__SCANNER__SCAN_BINARY_URL=http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2 \
-python dsx-connect-api-start.py
+python dsx-connect-api1-start.py
 ```
 
 You should see output like this:
@@ -168,7 +176,87 @@ inv push  # Push to Docker Hub
 
 # Deployment via Docker Compose
 
-Deployment via Docker Compose
+## Create a docker network
+
+dsx-connect and connectors running in docker via docker compose expect that a docker "network" has been created 
+that they can communicate on within the docker environment.  
+```docker network create dsx-connect-network --driver bridge```
+
+## docker compose file and Configuration
+In the docker-compose.yaml file, note that it will be run a few services:
+* dsx_connect_api - the API service which connectors talk to and provides API access to scan results and statistics 
+* dsx_connect_workers - Celery apps which dequeue and execute tasks in the task queues
+* redis - used by celery as a task broker
+* rsyslog (optional) - Optional syslog container where dsx-connect's scan results worker will send syslog results 
+
+### dsx_connect_workers Service Configuration
+
+Default configuration is defined in the `config.py` file.  This can be edited directly, however, just keep in mind 
+that config.py file defines default config values for all future deployments.  Best practice deployment is 
+to override settings with environment settings in the deployment script.  
+
+NOTE: config.fy is an implementation of Pydantic's BaseSettings and as such, provides a handy way to pass environment
+settings or .env file to override default settings during deployments.
+
+```yaml
+dsx_connect_api:
+  build:
+    context: .
+    dockerfile: Dockerfile
+  ports:
+    - "8586:8586"
+  environment:
+  - PYTHONUNBUFFERED=1
+  - DSXCONNECT_TASKQUEUE__BROKER=redis1://redis1:6379/0
+  - DSXCONNECT_TASKQUEUE__BACKEND=redis1://redis1:6379/0
+  - DSXCONNECT_DATABASE__TYPE=tinydb
+  - DSXCONNECT_DATABASE__LOC=data/dsx-connect.db.json
+  - DSXCONNECT_DATABASE__RETAIN=100
+  - DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://dsxa_scanner:5000/scan/binary/v2
+  - LOG_LEVEL=debug
+  depends_on:
+  - redis1
+  networks:
+    dsx-network:
+      aliases:
+        - dsx-connect-api1 # this is the name connectors will use to connect to the dsx_connect_core service API on the dsx-connect-network docker network
+  command: uvicorn dsx_connect.app.dsx_connect_api:app --host 0.0.0.0 --port 8586
+```
+
+#### Environment Overrides
+
+- **DSXCONNECT_SCANNER__SCAN_BINARY_URL:** DSXA's scan/binary/v2 URL.  In this example, DSXA has been deployed via the docker-compose-dsxa.yaml file, in which case it will reside on the same netowrk as this service, under the name dsxa_scanner.  Otherwise, this could refer to a complete URL to a running DSXA instance, such as: http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2
+
+Next there are settings to change the type of scan results database and retention policy.  Note that the dsx-connect databases are meant for ease of reviewing scan results - both benign and malicious verdicts.  
+- **DSXCONNECT_DATABASE__TYPE:** one of memory, tinydb, sqlite3, mongodb.  
+  - Scan results are stored here.
+    - memory - scan results stored in memory only, gone after 
+    - tinydb - scan results persisted to a tinydb plain text json "database" (for ease of reading results int the raw) 
+    - sqlite3 - scan results stored in a file based database - good when there's thousands of results to persist
+    - mongodb - for use when you want to persist all scan results - and need to offload database services to a separately running process
+- **DSXCONNECT_DATABASE__LOC:** sets the "location" of the database, which will vary based on the database type
+  - memory - not used
+  - tinydb - the filepath to the tinydb database
+  - sqlite3 - the filepath to the sqlite3 database
+  - mongodb - the URL to the mongo instance
+- **DSXCONNECT_DATABASE__RETAIN**: sets the retention policy for the scan results database.  Given that there can be thousands, if not millions or billions of results, in memory, tinydb, and sqlite3 are not appropriate for large amounts of data.  Memory and Tinydb should be limited to 10,000 results, and sqlite3 can typically handle hundreds of thousands of records.
+  - Settings:
+  - -1: retain forever
+  - 0: retain nothing
+  - n: retain n records
+
+### dsx_connect_workers Service Configuration
+The Workers follow a similar method of overriding default configurations.   
+
+#### Environment Overrides
+
+- **DSXCONNECT_SCANNER__SCAN_BINARY_URL:** DSXA's scan/binary/v2 URL.  In this example, DSXA has been deployed via the docker-compose-dsxa.yaml file, in which case it will reside on the same netowrk as this service, under the name dsxa_scanner.  Otherwise, this could refer to a complete URL to a running DSXA instance, such as: http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2.  
+  - Yes, this should be the same as the dsx_connect_api scan binary URL.  This is a little hokey, but this docker compose method was intended for simplicity in deployment.  Ideally one could use an .env file to set environments for all services, or, something like helm charts for deployment in clustered environments.
+- **DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL:** default 'rsyslog' - the service defined in the same docker-compose file, otherwise, use the complete URL to a syslog server 
+- **DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT:** the port the syslog server is listening on
+
+
+## Using Docker Compose
 To deploy DSX-Connect using Docker Compose:
 
 1. Navigate to the Distribution:
@@ -179,7 +267,7 @@ Use invoke release (see above) or
 ```docker build -t dsx-connect:<version> .```
 
 3. Start the Services:
-```docker-compose up -d```
+```docker-compose up -d``` or ```docker compose up -d```
 
 Should result in this (replacing 0110 with the version of the image used):
 ```

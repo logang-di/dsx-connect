@@ -1,5 +1,6 @@
 from enum import Enum
 
+from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
 
 from dsx_connect.dsxa_client.verdict_models import DPASeverityEnum
@@ -55,9 +56,15 @@ class TaskQueueConfig(BaseSettings):
     scan_request_queue: str = "scan_request_queue"
     verdict_action_queue: str = "verdict_action_queue"
     scan_result_queue: str = "scan_result_queue"
+    data_classification_queue: str = "data_classification_queue"
+    encrypted_file_queue: str = "encrypted_file_queue"
+    scan_result_notification_queue: str = "scan_result_notification_queue"
     scan_request_task: str = "dsx_connect.taskworkers.taskworkers.scan_request_task"
     verdict_action_task: str = "dsx_connect.taskworkers.taskworkers.verdict_action_task"
-    scan_result_task: str = "dsx_connect.taskworkers.taskworkers.scan_result_task"  # New task
+    scan_result_task: str = "dsx_connect.taskworkers.taskworkers.scan_result_task"
+    data_classification_task: str = "dsx_connect.taskworkers.taskworkers.data_classification_task"
+    encrypted_file_task: str = "dsx_connect.taskworkers.taskworkers.encrypted_file_task"
+    scan_result_notification_task: str = "dsx_connect.taskworkers.taskworkers.scan_result_notification_task"
 
 
 class SecurityConfig(BaseSettings):

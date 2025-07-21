@@ -1,0 +1,12 @@
+enabled: true
+
+image:
+  repository: redis
+  tag: "6"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 6379
+
+resources: {}

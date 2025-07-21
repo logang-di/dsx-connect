@@ -17,8 +17,7 @@ async def post_scan_request(scan_request_info: ScanRequestModel) -> StatusRespon
         result = celery_app.send_task(
             ConfigManager.get_config().taskqueue.scan_request_task,
             queue=ConfigManager.get_config().taskqueue.scan_request_queue,
-            args=[scan_request_info.dict()],
-            expires=3600)
+            args=[scan_request_info.dict()])
         return StatusResponse(
             status=StatusResponseEnum.SUCCESS,
             description=f"Scan task queued for connector: {scan_request_info.connector_url}",

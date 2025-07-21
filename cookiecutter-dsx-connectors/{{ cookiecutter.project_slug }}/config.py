@@ -20,10 +20,16 @@ class {{ cookiecutter.__package_config_class_name }}(BaseSettings):
     name: str = '{{ cookiecutter.__release_name }}'
     connector_url: HttpUrl = Field(default="http://0.0.0.0:{{ cookiecutter.connector_port }}",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    item_action: ItemActionEnum = ItemActionEnum.NOTHING
     dsx_connect_url: HttpUrl = Field(default="{{ cookiecutter.__dsx_connect_url }}",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
+    item_action: ItemActionEnum = ItemActionEnum.NOTHING # action to take on files - NOTHING, DELETE, MOVE, TAG, MOVE_TAG
+    item_action_move_metainfo: str = "dsxconnect-quarantine"
     test_mode: bool = True
+
+    # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
+    asset: str = ""
+    filter: str = ""
+    recursive: bool = True
 
     ### Connector specific configuration
 

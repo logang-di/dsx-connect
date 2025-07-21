@@ -1,6 +1,8 @@
 from pydantic import BaseModel
 from enum import Enum
 
+from dsx_connect.models.connector_models import ItemActionEnum
+
 
 class StatusResponseEnum(str, Enum):
     SUCCESS: str = 'success'
@@ -13,3 +15,7 @@ class StatusResponse(BaseModel):
     message: str
     description: str | None = None
     id: str | None = None
+
+
+class ItemActionStatusResponse(StatusResponse):
+    item_action: ItemActionEnum = ItemActionEnum.NOTHING

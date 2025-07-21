@@ -1,0 +1,36 @@
+{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dsx-connect-workers.fullname" . }}
+  labels:
+    app: {{ include "dsx-connect-workers.name" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "dsx-connect-workers.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "dsx-connect-workers.name" . }}
+    spec:
+      containers:
+        - name: worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["celery"]
+          args:
+            - -A
+            - dsx_connect.taskqueue.celery_app
+            - worker
+            - --loglevel=info
+            - --concurrency={{ .Values.concurrency }}
+            - -Q
+            - {{ join "," .Values.queues }}
+          env:
+            {{- range $key, $value := .Values.env }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+            {{- end }}
+{{- end }}

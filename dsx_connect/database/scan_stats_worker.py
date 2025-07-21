@@ -47,9 +47,9 @@ class ScanStatsWorker:
     def _calculate_stats(self, stats: ScanStatsModel, scan_result: ScanResultModel):
         # Update cumulative stats
         stats.files_scanned += 1
-        stats.total_scan_time_in_microseconds += scan_result.dpa_verdict.scan_duration_in_microseconds
+        stats.total_scan_time_in_microseconds += scan_result.verdict.scan_duration_in_microseconds
         stats.total_scan_time_in_seconds = stats.total_scan_time_in_microseconds / 1000000
-        stats.total_file_size += scan_result.dpa_verdict.file_info.file_size_in_bytes
+        stats.total_file_size += scan_result.verdict.file_info.file_size_in_bytes
 
         # Calculate averages
         stats.avg_file_size = int(stats.total_file_size / stats.files_scanned)
@@ -58,18 +58,18 @@ class ScanStatsWorker:
         stats.avg_scan_time_in_seconds = stats.avg_scan_time_in_milliseconds / 1000
 
         # Update longest scan time if applicable
-        if scan_result.dpa_verdict.scan_duration_in_microseconds > stats.longest_scan_time_in_microseconds:
-            stats.longest_scan_time_in_microseconds = scan_result.dpa_verdict.scan_duration_in_microseconds
+        if scan_result.verdict.scan_duration_in_microseconds > stats.longest_scan_time_in_microseconds:
+            stats.longest_scan_time_in_microseconds = scan_result.verdict.scan_duration_in_microseconds
             stats.longest_scan_time_in_milliseconds = stats.longest_scan_time_in_microseconds / 1000
             stats.longest_scan_time_in_seconds = stats.longest_scan_time_in_milliseconds / 1000
             stats.longest_scan_time_file = scan_result.metadata_tag
-            stats.longest_scan_time_file_size_in_bytes = scan_result.dpa_verdict.file_info.file_size_in_bytes
+            stats.longest_scan_time_file_size_in_bytes = scan_result.verdict.file_info.file_size_in_bytes
 
         # Add scan time to the median tracker and update the median
-        self.scan_time_median_tracker.add_value(scan_result.dpa_verdict.scan_duration_in_microseconds)
+        self.scan_time_median_tracker.add_value(scan_result.verdict.scan_duration_in_microseconds)
         stats.median_scan_time_in_microseconds = self.scan_time_median_tracker.get_median()
 
-        self.file_size_median_tracker.add_value(scan_result.dpa_verdict.file_info.file_size_in_bytes)
+        self.file_size_median_tracker.add_value(scan_result.verdict.file_info.file_size_in_bytes)
         stats.median_file_size_in_bytes = self.file_size_median_tracker.get_median()
 
     def get_scan_stats(self) -> ScanStatsModel:

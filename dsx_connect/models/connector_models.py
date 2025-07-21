@@ -5,6 +5,7 @@ from pydantic import BaseModel, HttpUrl, Field
 
 
 class ItemActionEnum(str, Enum):
+    NOT_IMPLEMENTED = 'not implemented'
     NOTHING = 'nothing'
     DELETE = 'delete'
     MOVE = 'move'

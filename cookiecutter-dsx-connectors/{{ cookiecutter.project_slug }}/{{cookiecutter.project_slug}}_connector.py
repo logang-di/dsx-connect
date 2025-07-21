@@ -4,7 +4,7 @@ from starlette.responses import StreamingResponse
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel
 from dsx_connect.utils.logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.{{ cookiecutter.project_slug }}.config import ConfigManager
 from connectors.{{ cookiecutter.project_slug }}.version import CONNECTOR_VERSION
 
@@ -98,7 +98,7 @@ async def full_scan_handler() -> StatusResponse:
 
 
 @connector.item_action
-async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
+async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> ItemActionStatusResponse:
     """
     Item Action handler for the DSX Connector.
 
@@ -115,8 +115,10 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
         SimpleResponse: A response indicating that the remediation action was performed successfully,
             or an error if the action is not implemented.
     """
-    return StatusResponse(status=StatusResponseEnum.NOTHING,
-                          message=f"Item action not implemented.")
+    return ItemActionStatusResponse(
+        status=StatusResponseEnum.NOTHING,
+        item_action=ItemActionEnum.NOT_IMPLEMENTED,
+        message=f"Item action not implemented.")
 
 
 @connector.read_file
@@ -208,6 +210,18 @@ async def webhook_handler(event: dict):
         description=""
     )
 
+@connector.config
+def config_handler():
+    # override this with any specific configuration details you want to add
+    return {
+        "connector_name": connector.connector_name,
+        "connector_id": connector.connector_id,
+        "uuid": connector.uuid,
+        "dsx_connect_url": connector.dsx_connect_url,
+        "asset": config.asset,
+        "filter": config.filter,
+        "version": CONNECTOR_VERSION
+    }
 
 if __name__ == "__main__":
     import uvicorn
