@@ -41,6 +41,6 @@ if __name__ == "__main__":
         "dsx_connect.app.dsx_connect_api:app",
         host="0.0.0.0",
         port=8586,
-        reload=True,  # Set to False in production with multiple workers
+        reload=False,  # Set to False in production with multiple workers
         workers=1
     )

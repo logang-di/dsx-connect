@@ -132,7 +132,7 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
             gcs_client.delete_object(config.asset, file_path)
             return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=ItemActionEnum.DELETE, message="File deleted.", description=f"File deleted from {config.asset}: {file_path}")
     elif config.item_action == ItemActionEnum.MOVE:
-        dest_key = f"{config.item_action_move_prefix}/{file_path}"
+        dest_key = f"{config.item_action_move_metainfo}/{file_path}"
         gcs_client.move_object(config.asset, file_path, config.asset, dest_key)
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=ItemActionEnum.MOVE, message="File moved.", description=f"File moved from {config.asset}: {file_path} to {dest_key}")
     elif config.item_action == ItemActionEnum.TAG:
@@ -231,7 +231,7 @@ async def webhook_handler(event: dict):
 
 
 @connector.config
-def config_handler():
+async def config_handler():
     # override this with any specific configuration details you want to add
     return {
         "connector_name": connector.connector_name,

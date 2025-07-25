@@ -30,7 +30,7 @@ from dsx_connect.utils.logging import dsx_logging
 
 from dsx_connect.app.dependencies import static_path
 from dsx_connect.app.routers import scan_request, scan_request_test, scan_results, connectors
-
+from dsx_connect.connector_registration.connector_heartbeat import heartbeat_all_connectors
 from dsx_connect import version
 
 
@@ -41,12 +41,16 @@ async def lifespan(app: FastAPI):
     dsx_logging.info("dsx-connect startup completed.")
 
     app.state.connectors: List[ConnectorModel] = []
+    app.state.heartbeat_task = asyncio.create_task(heartbeat_all_connectors(app))
+
     # inside an async context (e.g., in lifespan)
-    app.state.redis = Redis.from_url(config.taskqueue.broker)
+    app.state.redis = Redis.from_url(config.redis_url)
 
     yield
 
+    app.state.heartbeat_task.cancel()
     await app.state.redis.close()
+
     dsx_logging.info("dsx-connect shutdown completed.")
 
 
@@ -78,6 +82,10 @@ def get_get_config():
     return config
 
 
+@app.get(DSXConnectAPIEndpoints.VERSION, description='Get version')
+def get_get_version():
+    return version.DSX_CONNECT_VERSION
+
 @app.get(DSXConnectAPIEndpoints.CONNECTION_TEST, description="Test connection to dsx-connect.", tags=["test"])
 async def get_test_connection():
     return StatusResponse(
@@ -108,14 +116,28 @@ async def notification_stream():
             yield f"data: {json.dumps(event)}\n\n"
             sleep_duration = 0.01  # reset after receiving
         else:
-            sleep_duration = min(sleep_duration * 2, 5.0)  # back off up to 1s
+            sleep_duration = min(sleep_duration * 2, 1.0)  # back off up to 1s
         await asyncio.sleep(sleep_duration)
-
 
 @app.get(DSXConnectAPIEndpoints.NOTIFICATIONS_SCAN_RESULT)
 async def get_notification_scan_result():
     return StreamingResponse(notification_stream(), media_type="text/event-stream")
 
+
+@app.get(DSXConnectAPIEndpoints.NOTIFICATIONS_CONNECTOR_REGISTERED)
+async def connector_registered_stream():
+    pubsub = app.state.redis.pubsub()
+    await pubsub.subscribe("connector_registered")
+
+    async def event_generator():
+        while True:
+            msg = await pubsub.get_message(ignore_subscribe_messages=True)
+            if msg and msg["type"] == "message":
+                event = json.loads(msg["data"])
+                yield f"data: {json.dumps(event)}\n\n"
+            await asyncio.sleep(0.1)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 # Main entry point to start the FastAPI app
 if __name__ == "__main__":

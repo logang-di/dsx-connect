@@ -1,25 +1,37 @@
+import typer
 import uvicorn
 from dsx_connect.utils.logging import dsx_logging
-import socket
-import os
 
-def get_random_port():
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('0.0.0.0', 0))
-        s.listen()
-        _, port = s.getsockname()
-        return port
+# Ensure connector is registered via decorators
+import connectors.google_cloud_storage.google_cloud_storage_connector  # noqa: F401
+
+app = typer.Typer(help="Start the Google Cloud Storage Connector.")
+
+
+@app.command()
+def start(
+    host: str = typer.Option("0.0.0.0", help="Host to bind the FastAPI server."),
+    port: int = typer.Option(8595, help="Port to bind the FastAPI server."),
+    reload: bool = typer.Option(False, help="Enable autoreload (development only)."),
+    workers: int = typer.Option(1, help="Number of Uvicorn worker processes.")
+):
+    """
+    Launch the Google Cloud Storage Connector FastAPI app.
+    """
+    dsx_logging.info(
+        f"Starting Google Cloud Storage Connector on {host}:{port} "
+        f"(reload={'on' if reload else 'off'}, workers={workers})"
+    )
+
+    uvicorn.run(
+        "connectors.framework.dsx_connector:connector_api",
+        host=host,
+        port=port,
+        reload=reload,
+        workers=workers
+    )
+
 
 if __name__ == "__main__":
-    # Import google_cloud_storage to register decorators
-    import connectors.google_cloud_storage.google_cloud_storage_connector  # noqa: F401
+    app()
 
-    # Now import connector_api, which includes filesystem_connector's handlers
-    from connectors.framework.dsx_connector import connector_api
-
-    # port = get_random_port()
-    port = 8595
-    # os.environ["PORT"] = str(port)
-    dsx_logging.info(f"Starting Google Cloud Storage Connector FastAPI app on port {port}")
-
-    uvicorn.run(connector_api, host="0.0.0.0", port=port, reload=False, workers=1)

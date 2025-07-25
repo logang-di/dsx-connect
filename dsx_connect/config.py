@@ -78,6 +78,10 @@ class DSXConnectConfig(BaseSettings):
 
     scan_result_task_worker: ScanResultTaskWorkerConfig = ScanResultTaskWorkerConfig()
 
+    @property
+    def redis_url(self) -> str:
+        return self.taskqueue.broker  # Or define a separate redis_url if broker/backend differ
+
     class Config:
         env_nested_delimiter = "__"
         env_prefix = "DSXCONNECT_"

@@ -14,6 +14,7 @@ COPY dsx_connect/ dsx_connect/
 COPY start.py .
 
 ENV PYTHONPATH=/app
+RUN mkdir -p data && chown appuser:appuser data
 
 USER appuser
 

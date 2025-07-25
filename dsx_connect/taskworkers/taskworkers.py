@@ -36,6 +36,7 @@ import httpx
 import pyzipper
 import redis
 from celery.signals import worker_process_init
+from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
 from dsx_connect.database.scan_stats_worker import ScanStatsWorker
@@ -165,7 +166,7 @@ def scan_request_task(scan_request_dict: dict) -> dict:
         client = get_connector_client(scan_request.connector_url)
         response = client.post(
             f'{scan_request.connector_url}{ConnectorEndpoints.READ_FILE}',
-            json=scan_request.model_dump()
+            json=jsonable_encoder(scan_request)
         )
         response.raise_for_status()  # Raises HTTPError for 4xx/5xx responses
         bytes_content = BytesIO(response.content)
@@ -309,7 +310,7 @@ def verdict_action_task(scan_request_dict: dict, verdict_dict: dict, original_ta
             client = get_connector_client(scan_request.connector_url)
             response = client.put(
                 f'{scan_request.connector_url}{ConnectorEndpoints.ITEM_ACTION}',
-                json=scan_request.model_dump()
+                json=jsonable_encoder(scan_request)
             )
             response.raise_for_status()
             try:
@@ -474,9 +475,10 @@ def scan_result_notify_task(scan_result_dict: dict):
     Receives scan result dict and forwards it to the FastAPI app via redis pubsub.
     """
     try:
+        scan_result = ScanResultModel.model_validate(scan_result_dict)
         r = redis.Redis.from_url(config.taskqueue.broker)
-        r.publish("scan_results", json.dumps(scan_result_dict))
-        dsx_logging.debug("[SSE Notify] Published scan result to Redis channel.")
+        r.publish("scan_results", json.dumps(jsonable_encoder(scan_result)))
+        dsx_logging.debug(f"[SSE Notify] Published scan result {scan_result} to Redis channel.")
     except Exception as e:
         dsx_logging.error(f"[SSE Notify] Failed to publish to Redis: {e}", exc_info=True)
 
@@ -492,7 +494,7 @@ def encrypted_file_task(scan_request_dict: dict, original_task_id: str = None) -
         client = get_connector_client(scan_request.connector_url)
         response = client.post(
             f'{scan_request.connector_url}{ConnectorEndpoints.READ_FILE}',
-            json=scan_request.model_dump()
+            json=jsonable_encoder(scan_request)
         )
         response.raise_for_status()  # Raises HTTPError for 4xx/5xx responses
         bytes_content = BytesIO(response.content)
@@ -585,7 +587,7 @@ def encrypted_file_task(scan_request_dict: dict, original_task_id: str = None) -
 #             client = get_connector_client(scan_request.connector_url)
 #             response = client.post(
 #                 f'{scan_request.connector_url}{ConnectorEndpoints.READ_FILE}',
-#                 json=scan_request.model_dump()
+#                 json=jsonable_encoder(scan_request)
 #             )
 #             response.raise_for_status()  # Raises HTTPError for 4xx/5xx responses
 #             bytes_content = BytesIO(response.content)

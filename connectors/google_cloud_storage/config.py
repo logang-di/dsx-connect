@@ -31,7 +31,7 @@ class GoogleCloudStorageConnectorConfig(BaseSettings):
     item_action_move_metainfo: str = "dsxconnect-quarantine"
 
     asset: str = "lg-test-01"
-    filter: str = "encrypted"
+    filter: str = ""
     recursive: bool = True
 
     test_mode: bool = False

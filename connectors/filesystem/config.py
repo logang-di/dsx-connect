@@ -26,7 +26,7 @@ class FilesystemConnectorConfig(BaseSettings):
     item_action: ItemActionEnum = ItemActionEnum.NOTHING
     dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586/",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
-    test_mode: bool = True
+    test_mode: bool = False
 
     ## Config settings specific to this Connector
     location: pathlib.Path = Field(default=pathlib.Path("/Users/logangilbert/Documents/SAMPLES/1SAMPLES"),

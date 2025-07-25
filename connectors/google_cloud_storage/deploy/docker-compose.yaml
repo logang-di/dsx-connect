@@ -26,7 +26,7 @@ services:
         aliases:
           - google-cloud-storage-connector  # this is how dsx-connect will communicate with this on the network
     command:
-      python connectors/google_cloud_storage/google_cloud_storage_connector.py
+      ["python", "connectors/google_cloud_storage/start.py", "--workers", "1"]
 
 # The following assumes an already created docker network like this:
 # docker network create dsx-connect-network --driver bridge

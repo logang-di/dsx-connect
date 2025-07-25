@@ -58,6 +58,13 @@
             padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer;
         }
         .connector-card button:hover { background: #0056b3; }
+        .asset-line, .filter-line {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            display: block;
+        }
         .scan-note { display: block; margin-top: 0.5rem; font-size: 0.9rem; }
         .scan-results-panel {
             margin-top: 2rem;
@@ -82,8 +89,24 @@
         }
         .verdict-malicious { color: red; }
         .verdict-benign { color: green; }
+        .verdict-unknown { color: darkgray; }
         tr.clickable-row { cursor: pointer; }
         tr.clickable-row:hover { background: #f2f2f2; }
+
+        .file-icon {
+            margin-right: 4px;
+        }
+        .icon-pdf { color: red; }
+        .icon-pe { color: black; }
+        .icon-exe {
+            color: #0078D6;  /* Windows-blue */
+        }
+        .icon-macho {
+            color: #333; /* or whatever accent you like */
+        }
+        .icon-office { color: blue; }
+        .icon-zip { color: purple; }
+        .icon-generic { color: gray; }
     </style>
 </head>
 <body>
@@ -143,6 +166,8 @@
 <script>
     const gearIcon = document.getElementById('gearIcon');
     const configSidebar = document.getElementById('configSidebar');
+    const seenConnectors = new Set();
+
     gearIcon.addEventListener('click', () => {
         configSidebar.classList.toggle('active');
         gearIcon.classList.toggle('white');
@@ -213,27 +238,25 @@
             .then(res => res.json())
             .then(connectors => {
                 const container = document.getElementById('connectorsGrid');
-                if (!connectors.length) {
-                    container.innerHTML = '<p>No connectors registered.</p>'; return;
-                }
+
                 Promise.all(connectors.map(conn =>
                     fetch(`/dsx-connect/connectors/config/${conn.uuid}`)
                         .then(res => res.json())
                         .then(cfg => ({ conn, cfg }))
                         .catch(() => ({ conn, cfg: {} }))
                 )).then(results => {
-                    container.innerHTML = results.map(({ conn, cfg }, idx) => {
-                        const scanUrl = `/dsx-connect/connectors/full_scan/${encodeURIComponent(conn.uuid)}`;
-                        return `
-              <div class="connector-card">
-                <h4>${conn.name}</h4>
-                <div>Asset: ${cfg.asset || 'n/a'}</div>
-                <div>Filter: ${cfg.filter || 'n/a'}</div>
-                <button onclick="invokeFullScan(${idx}, '${scanUrl}')">Full Scan</button>
-                <span class="scan-note" id="scan-note-${idx}"></span>
-              </div>
-            `;
-                    }).join('');
+                    container.innerHTML = ''; // Clear container
+
+                    if (!results.length) {
+                        container.innerHTML = '<p>No connectors registered.</p>';
+                        return;
+                    }
+
+                    results.forEach(({ conn, cfg }, idx) => {
+                        seenConnectors.add(conn.uuid);
+                        const card = renderConnectorCard(conn, cfg, idx);
+                        container.appendChild(card);
+                    });
                 });
             })
             .catch(() => {
@@ -250,16 +273,47 @@
             .catch(err => { note.textContent = `❌ ${err.message}`; });
     }
 
+    function renderConnectorCard(conn, cfg = {}, idx = 0) {
+        const scanUrl = `/dsx-connect/connectors/full_scan/${encodeURIComponent(conn.uuid)}`;
+        const card = document.createElement('div');
+        card.classList.add('connector-card');
+        card.innerHTML = `
+        <h4>${conn.name}</h4>
+        <div class="asset-line" title="${cfg.asset}">Asset: ${cfg.asset || 'n/a'}</div>
+        <div class="filter-line" title="${cfg.filter}">Filter: ${cfg.filter || 'n/a'}</div>
+        <button onclick="invokeFullScan(${idx}, '${scanUrl}')">Full Scan</button>
+        <span class="scan-note" id="scan-note-${idx}"></span>
+    `;
+        return card;
+    }
+
+
     function renderScanResult(data) {
         const tableBody = document.getElementById('scanResultsBody');
         const noResultsRow = document.getElementById('noResultsRow');
         if (noResultsRow) noResultsRow.remove(); // Remove placeholder
 
-        const verdict = data.verdict?.verdict || 'Unknown';
-        const verdictClass = verdict.toLowerCase() === 'malicious' ? 'verdict-malicious' : 'verdict-benign';
-        const verdictIcon = verdict === 'Malicious' ? 'fa-virus' : verdict === 'Benign' ? 'fa-check-circle' : 'fa-exclamation-triangle';
+        const verdict = data.verdict;
+        let verdictClass = 'verdict-unknown';
+        let verdictIcon = 'fa-exclamation-triangle';
+
+        if (verdict?.verdict) {
+            const v = verdict.verdict.toLowerCase();
+            const reason = verdict.verdict_details?.reason?.toLowerCase();
+
+            if (v === 'not scanned' && reason === 'encrypted file') {
+                verdictIcon = 'fa-lock';
+            } else if (v === 'malicious') {
+                verdictClass = 'verdict-malicious';
+                verdictIcon = 'fa-virus';
+            } else if (v === 'benign') {
+                verdictClass = 'verdict-benign';
+                verdictIcon = 'fa-check-circle';
+            }
+        }
+
         const fileType = data.verdict?.file_info?.file_type || '';
-        const [fileIconClass] = getFileTypeIcon(fileType);
+        const [fileIconClass, colorClass] = getFileTypeIcon(fileType);
         const uniqueId = `expand-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
         const row = document.createElement('tr');
@@ -268,9 +322,17 @@
         row.innerHTML = `
             <td>
                 <i class="fas ${verdictIcon} verdict-icon ${verdictClass}"></i>
-                <i class="${fileIconClass}" style="margin-left: 6px;"></i>
+                <i class="${fileIconClass} ${colorClass}" style="margin-left: 6px;"></i>
             </td>
-            <td>${data.scan_request?.metainfo || '-'}</td>
+            <td>
+                <span style="display: inline-flex; align-items: center; max-width: 50ch; overflow: hidden; text-overflow: ellipsis;" title="${data.scan_request?.metainfo}">
+                    ${getConnectorIcon(data.scan_request?.connector?.name)}
+                    <span style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        ${data.scan_request?.metainfo}
+                    </span>
+                </span>
+            </td>
+
             <td>${data.item_action?.message || '-'}</td>
         `;
 
@@ -304,21 +366,32 @@
 
     function getFileTypeIcon(file_type) {
         switch (file_type) {
-            case 'PDFFileType': return ['fas fa-file-pdf file-icon'];
+            case 'PDFFileType': return ['fas fa-file-pdf file-icon', 'icon-pdf'];
             case 'PEFileType':
             case 'PE32FileType':
-            case 'PE64FileType': return ['fab fa-windows file-icon'];
+            case 'PE64FileType': return ['fab fa-windows file-icon', 'icon-exe'];
             case 'OfficeFileType':
-            case 'OOXMLFileType': return ['fas fa-file-word file-icon'];
-            case 'ZipFileType': return ['fas fa-file-archive file-icon'];
+            case 'OOXMLFileType': return ['fas fa-file-word file-icon', 'icon-office'];
+            case 'ZipFileType': return ['fas fa-file-archive file-icon', 'icon-zip'];
             case 'MachoFATFileType':
             case 'Macho32FileType':
-            case 'Macho64FileType': return ['fab fa-apple file-icon'];
+            case 'Macho64FileType': return ['fab fa-apple file-icon', 'icon-macho'];
             case 'ELF32FileType':
-            case 'ELF64FileType': return ['fab fa-linux file-icon'];
+            case 'ELF64FileType': return ['fab fa-linux file-icon', 'icon-generic'];
             default: return ['fas fa-file file-icon'];
         }
     }
+
+    function getConnectorIcon(name = '') {
+        const lower = name.toLowerCase();
+        if (lower.startsWith('google')) return '<i class="fab fa-google" style="margin-right: 6px;"></i>';
+        if (lower.startsWith('azure')) return '<i class="fab fa-microsoft" style="margin-right: 6px;"></i>';
+        if (lower.startsWith('aws')) return '<i class="fab fa-aws" style="margin-right: 6px;"></i>';
+        if (lower.startsWith('filesystem')) return '<i class="fas fa-folder" style="margin-right: 6px;"></i>';  // or use 'fa-hdd'
+
+        return '';  // fallback: no icon
+    }
+
 
     document.addEventListener('DOMContentLoaded', () => {
         fetchStatus();
@@ -330,6 +403,35 @@
             console.log('Received scan result:', message);
             renderScanResult(message);
         };
+
+
+        const connectorEvents = new EventSource('/dsx-connect/notifications/connector-registered');
+        connectorEvents.onmessage = async (event) => {
+            const newConnector = JSON.parse(event.data);
+            if (seenConnectors.has(newConnector.uuid)) return;
+            seenConnectors.add(newConnector.uuid);
+
+            const container = document.getElementById('connectorsGrid');
+
+            // Remove "No connectors registered" message if present
+            if (container.textContent.includes("No connectors registered")) {
+                container.innerHTML = '';
+            }
+
+            let config = {};
+            try {
+                const res = await fetch(`/dsx-connect/connectors/config/${newConnector.uuid}`);
+                config = await res.json();
+            } catch (e) {
+                console.warn('Error fetching config for new connector', e);
+            }
+
+            const idx = container.children.length;
+            const card = renderConnectorCard(newConnector, config, idx);
+            container.prepend(card);
+        };
+
+
     });
 </script>
 </body>

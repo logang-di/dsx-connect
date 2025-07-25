@@ -211,7 +211,7 @@ async def webhook_handler(event: dict):
     )
 
 @connector.config
-def config_handler():
+async def config_handler():
     # override this with any specific configuration details you want to add
     return {
         "connector_name": connector.connector_name,

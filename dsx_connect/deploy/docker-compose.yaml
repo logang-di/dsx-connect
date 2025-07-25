@@ -63,7 +63,7 @@ services:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=debug
       - DSXCONNECT_TASKQUEUE__BROKER=redis://redis:6379/0
-      - DSXCONNECT_TASKQUEUE__BACKEND=redis://redis:637s9/0
+      - DSXCONNECT_TASKQUEUE__BACKEND=redis://redis:6379/0
     depends_on:
       - redis
     networks:
@@ -89,6 +89,10 @@ services:
 
   redis:
     image: redis:6
+    ## add for persistence
+    # volumes:
+    #  - redis-data:/data
+    # command: [ "redis-server", "--appendonly", "yes" ]
     networks:
       - dsx-network
 

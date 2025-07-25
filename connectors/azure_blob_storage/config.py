@@ -26,7 +26,7 @@ class AzureBlobStorageConnectorConfig(BaseSettings):
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
     # dsx_connect_url: HttpUrl = Field(default="http://dsx-connect.127.0.0.1.nip.io:8080",
     #                                  description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
-    item_action: ItemActionEnum = ItemActionEnum.NOTHING
+    item_action: ItemActionEnum = ItemActionEnum.MOVE
     item_action_move_metainfo: str = "dsxconnect-quarantine"
 
     # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)

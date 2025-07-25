@@ -6,6 +6,8 @@ from datetime import datetime
 
 from typing import Optional
 
+from fastapi.encoders import jsonable_encoder
+
 from dsx_connect.config import SecurityConfig
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum
 from dsx_connect.models.responses import ItemActionStatusResponse
@@ -78,7 +80,7 @@ def log_verdict_chain(scan_result: ScanResultModel, original_task_id: str, curre
             "verdict": scan_result.verdict.model_dump(),
             "item_action": scan_result.item_action.model_dump()
         }
-        syslog_message = json.dumps(log_data)
+        syslog_message = json.dumps(jsonable_encoder(log_data))
         syslog_logger.info(syslog_message)
 
         dsx_logging.debug(f"Sent verdict chain to syslog: {syslog_message}")

@@ -1,32 +1,33 @@
 services:
-  {{ cookiecutter.project_slug }}_connector:
+  {{ cookiecutter.project_slug }}_connector: # if deploying two of more of this service within a single docker, this name must be unique for each instance
     image: {{ cookiecutter.__release_name }}:__VERSION__
     # Uncomment if you want to use docker compose to build the image
     #build:
     #  context: .
     #  dockerfile: Dockerfile
-    ports:
-      - "{{ cookiecutter.connector_port }}:{{ cookiecutter.connector_port }}"
+
+    # ports: # uncomment this if you need to expose this service on an external port
+    #  - "{{ cookiecutter.connector_port }}:{{ cookiecutter.connector_port }}"
     #volumes:
         # map any external folders
     environment:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=debug
       - DSXCONNECTOR_CONNECTOR_URL=http://{{ cookiecutter.__release_name }}:{{ cookiecutter.connector_port }} # see aliases below
-      - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_core...
+      - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_api...
       - DSXCONNECTOR_ITEM_ACTION=nothing # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)
       - DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO=dsxconnect-quarantine # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
         # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector
-      - DSXCONNECTOR_ASSET=lg-test-02 # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
+      - DSXCONNECTOR_ASSET=test_bucket # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
       - DSXCONNECTOR_FILTER=  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
       - DSXCONNECTOR_RECURSIVE=True
       - TEST_MODE=False
     networks:
       dsx-network:
         aliases:
-          - {{ cookiecutter.__release_name }}  # this is how dsx-connect will communicate with this on the network
+          - {{ cookiecutter.__release_name }}  # this is how dsx-connect will communicate with this on the network. if deploying two of more of this service within a single docker, this name must be unique for each instance
     command:
-      python connectors/{{ cookiecutter.project_slug }}/{{ cookiecutter.project_slug }}_connector.py
+      ["python", "connectors/{{ cookiecutter.project_slug }}/start.py", "--workers", "1", "--port", "{{ cookiecutter.connector_port }}"]
 
 # The following assumes an already created docker network like this:
 # docker network create dsx-connect-network --driver bridge

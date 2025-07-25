@@ -10,6 +10,7 @@ from dsx_connect.models.connector_models import ScanRequestModel, ConnectorModel
 
 from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from dsx_connect.connector_registration.connector_registration import register_or_refresh_connector_from_redis, unregister_connector_from_redis
 
 router = APIRouter()
 
@@ -76,6 +77,7 @@ async def register_connector(conn: ConnectorModel, request: Request):
                               message=f"Registration of {conn.url} : {conn.uuid} already in place",
                               description="")
     registry.append(conn)
+    await register_or_refresh_connector_from_redis(conn)
     return StatusResponse(status=StatusResponseEnum.SUCCESS,
                           message="Registration succeeded",
                           description=f"Registration of {conn.url} : {conn.uuid} succeeded")
@@ -90,6 +92,7 @@ async def unregister_connector(
 ):
     registry: List[ConnectorModel] = request.app.state.connectors
     request.app.state.connectors = [c for c in registry if c.uuid != connector_uuid]
+    await unregister_connector_from_redis(connector_uuid)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

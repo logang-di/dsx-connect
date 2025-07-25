@@ -23,7 +23,7 @@ services:
         aliases:
           - filesystem-connector  # this is how dsx-connect will communicate with this on the network
     command:
-      python connectors/filesystem/filesystem_connector.py
+      [ "python", "connectors/filesystem/start.py", "--workers", "1" ]
 
 # The following assumes an already created docker network like this:
 # docker network create dsx-connect-network --driver bridge

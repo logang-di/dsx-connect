@@ -24,7 +24,7 @@ services:
         aliases:
           - aws-s3-connector  # this is how dsx-connect will communicate with this on the network
     command:
-      python connectors/aws_s3/aws_s3_connector.py
+      ["python", "connectors/aws_s3/start.py", "--workers", "1"]
 
 # The following assumes an already created docker network like this:
 # docker network create dsx-connect-network --driver bridge

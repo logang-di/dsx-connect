@@ -182,14 +182,14 @@ async def repo_check_handler() -> StatusResponse:
 
 
 @connector.config
-def config_handler():
+async def config_handler():
     # override this with any specific configuration details you want to add
     return {
         "connector_name": connector.connector_name,
         "connector_id": connector.connector_id,
         "uuid": connector.uuid,
         "dsx_connect_url": connector.dsx_connect_url,
-        "location": config.location,
+        "asset": config.location,
         "monitor": config.monitor,
         "scan_existing": config.scan_existing,
         "version": CONNECTOR_VERSION

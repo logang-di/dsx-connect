@@ -44,7 +44,7 @@ async def startup_event(base: ConnectorModel) -> ConnectorModel:
     dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
-    base.meta_info = f"S3 Bucket: {config.s3_bucket}, prefix: {config.s3_prefix}"
+    base.meta_info = f"S3 Bucket: {config.asset}, prefix: {config.filter}"
     return base
 
 
@@ -96,9 +96,9 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
-    for key in aws_s3_client.keys(config.s3_bucket, prefix=config.s3_prefix, recursive=config.s3_recursive):
+    for key in aws_s3_client.keys(config.asset, prefix=config.filter, recursive=config.recursive):
         file_name = key['Key']
-        full_path = f"{config.s3_bucket}/{file_name}"
+        full_path = f"{config.asset}/{file_name}"
         status_response = await connector.scan_file_request(
             ScanRequestModel(location=str(f"{file_name}"), metainfo=full_path))
         dsx_logging.debug(f'Sent scan request for {full_path}, result: {status_response}')
@@ -126,40 +126,40 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
     """
     full_path = scan_event_queue_info.metainfo
 
-    if not aws_s3_client.key_exists(config.s3_bucket, scan_event_queue_info.location):
+    if not aws_s3_client.key_exists(config.asset, scan_event_queue_info.location):
         return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action,
                                         message="Item action failed.",
                                         description=f"File does not exist at {full_path}")
 
     if config.item_action == ItemActionEnum.DELETE:
         dsx_logging.debug(f'Item action {ItemActionEnum.DELETE} on {full_path} invoked.')
-        if aws_s3_client.delete_object(config.s3_bucket, scan_event_queue_info.location):
+        if aws_s3_client.delete_object(config.asset, scan_event_queue_info.location):
             return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                             message="File deleted.",
-                                            description=f"File deleted from {config.s3_bucket}: {scan_event_queue_info.location}")
+                                            description=f"File deleted from {config.asset}: {scan_event_queue_info.location}")
     elif config.item_action == ItemActionEnum.MOVE:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE} on {full_path} invoked.')
-        dest_key = f"{config.item_action_move_prefix}/{scan_event_queue_info.location}"
-        aws_s3_client.move_object(src_bucket=config.s3_bucket, src_key=scan_event_queue_info.location,
-                                  dest_bucket=config.s3_bucket,
+        dest_key = f"{config.item_action_move_metainfo}/{scan_event_queue_info.location}"
+        aws_s3_client.move_object(src_bucket=config.asset, src_key=scan_event_queue_info.location,
+                                  dest_bucket=config.asset,
                                   dest_key=dest_key)
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message="File moved.",
-                                        description=f"File moved from {config.s3_bucket}: {scan_event_queue_info.location} to {config.s3_bucket}: {dest_key}")
+                                        description=f"File moved from {config.asset}: {scan_event_queue_info.location} to {config.asset}: {dest_key}")
     elif config.item_action == ItemActionEnum.TAG:
         dsx_logging.debug(f'Item action {ItemActionEnum.TAG} on {full_path} invoked.')
-        aws_s3_client.tag_object(config.s3_bucket, scan_event_queue_info.location, tags={"Verdict": "Malicious"})
+        aws_s3_client.tag_object(config.asset, scan_event_queue_info.location, tags={"Verdict": "Malicious"})
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message="File tagged.",
-                                        description=f"File tagged at {config.s3_bucket}: {scan_event_queue_info.location}")
+                                        description=f"File tagged at {config.asset}: {scan_event_queue_info.location}")
     elif config.item_action == ItemActionEnum.MOVE_TAG:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE_TAG} on {full_path} invoked.')
-        dest_key = f"{config.item_action_move_prefix}/{scan_event_queue_info.location}"
+        dest_key = f"{config.item_action_move_metainfo}/{scan_event_queue_info.location}"
 
-        aws_s3_client.move_object(src_bucket=config.s3_bucket, src_key=scan_event_queue_info.location,
-                                  dest_bucket=config.s3_bucket, dest_key=dest_key)
+        aws_s3_client.move_object(src_bucket=config.asset, src_key=scan_event_queue_info.location,
+                                  dest_bucket=config.asset, dest_key=dest_key)
 
-        aws_s3_client.tag_object(config.s3_bucket, dest_key, tags={"Verdict": "Malicious"})
+        aws_s3_client.tag_object(config.asset, dest_key, tags={"Verdict": "Malicious"})
 
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message=f'Item action {config.item_action} was invoked. File {full_path} successfully tagged.')
@@ -206,7 +206,7 @@ async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusRe
     """
     # Read the file content
     try:
-        bytes_obj = aws_s3_client.get_object(bucket=config.s3_bucket, key=scan_event_queue_info.location)
+        bytes_obj = aws_s3_client.get_object(bucket=config.asset, key=scan_event_queue_info.location)
         return StreamingResponse(stream_blob(bytes_obj), media_type="application/octet-stream")  # Stream file
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR,
@@ -223,16 +223,16 @@ async def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    if aws_s3_client.test_s3_connection(config.s3_bucket):
+    if aws_s3_client.test_s3_connection(config.asset):
         return StatusResponse(
             status=StatusResponseEnum.SUCCESS,
-            message=f"Connection to bucket: {config.s3_bucket} successful",
+            message=f"Connection to bucket: {config.asset} successful",
             description=""
         )
 
     return StatusResponse(
         status=StatusResponseEnum.ERROR,
-        message=f"Connection to bucket: {config.s3_bucket} NOT successful",
+        message=f"Connection to bucket: {config.asset} NOT successful",
         description=""
     )
 

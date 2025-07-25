@@ -1,4 +1,5 @@
 import os
+import pathlib
 import urllib
 import uuid
 from contextlib import asynccontextmanager
@@ -17,6 +18,7 @@ from dsx_connect.models.connector_models import ScanRequestModel, ConnectorModel
 from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from dsx_connect.utils.logging import dsx_logging
+from connectors.framework.connector_id import get_or_create_connector_uuid
 
 connector_api = None
 
@@ -25,12 +27,13 @@ class DSXConnector:
     def __init__(self, connector_name: str, connector_id: str, base_connector_url: str, dsx_connect_url: str,
                  test_mode: bool = False):
         self.test_mode = test_mode
+        self.connector_model = None
+        # populated in the lifespan handler
         self.connector_name = connector_name
         self.connector_id = connector_id
 
-        # default for UUID... may make this a config setting that would override
-        self.uuid = str(uuid.uuid4())
-
+        self.uuid = get_or_create_connector_uuid()
+        dsx_logging.debug(f"Logical connector {connector_id} using UUID: {self.uuid}")
         self.connector_url = f'{str(base_connector_url).rstrip('/')}/{connector_id}'
         self.scan_request_count = 0
 
@@ -61,6 +64,8 @@ class DSXConnector:
             # 1b) call the user’s @connector.startup decorated function, if any:
             if self.startup_handler:
                 conn_model = await self.startup_handler(conn_model)
+
+            self.connector_model = conn_model
 
             # 1c) register with dsx-connect
             register_resp = await self.register_connector(conn_model)
@@ -93,6 +98,7 @@ class DSXConnector:
             lifespan=lifespan
         )
         connector_api.include_router(DSXAConnectorRouter(self))
+
 
     # Register handlers for startup and shutdown events
     def startup(self, func: Callable[[ConnectorModel], Awaitable[ConnectorModel]]):
@@ -134,13 +140,23 @@ class DSXConnector:
         return func
 
     async def scan_file_request(self, scan_request: ScanRequestModel) -> StatusResponse:
+        # Skip if location includes the configured quarantine/metainfo path
+        # if self.config.item_action_move_metainfo in scan_request.location:
+        #     dsx_logging.info(f"Skipping scan for file in quarantine path: {scan_request.location}")
+        #     return StatusResponse(
+        #         status=StatusResponseEnum.NOTHING,
+        #         description="File in quarantine path, skipping scan",
+        #         message=f"Scan skipped for: {scan_request.location}"
+        #     )
+
+        scan_request.connector = self.connector_model
         scan_request.connector_url = self.connector_url
         try:
             async with httpx.AsyncClient(verify=False) as client:
                 if not self.test_mode:
                     response = await client.post(
                         f'{self.dsx_connect_url}{DSXConnectAPIEndpoints.SCAN_REQUEST}',
-                        json=scan_request.dict()
+                        json=jsonable_encoder(scan_request)
                     )
                     dsx_logging.debug(f'Scan request returned')
 

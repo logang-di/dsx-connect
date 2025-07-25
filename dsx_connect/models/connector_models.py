@@ -18,12 +18,6 @@ class ItemActionModel(BaseModel):
     action_meta: str = None
 
 
-class ScanRequestModel(BaseModel):
-    location: str
-    metainfo: str
-    connector_url: str = None
-
-
 class ConnectorStatusEnum(str, Enum):
     READY: str = 'ready'
     STARTING: str = 'starting'
@@ -37,3 +31,10 @@ class ConnectorModel(BaseModel):
     meta_info: str | None = None
     url: str = ''
     status: ConnectorStatusEnum = ConnectorStatusEnum.STARTING
+
+
+class ScanRequestModel(BaseModel):
+    connector: ConnectorModel = None
+    location: str
+    metainfo: str
+    connector_url: str = None

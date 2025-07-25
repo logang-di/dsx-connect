@@ -1,5 +1,6 @@
 class DSXConnectAPIEndpoints:
     NOTIFICATIONS_SCAN_RESULT = "/dsx-connect/notifications/scan-result"
+    NOTIFICATIONS_CONNECTOR_REGISTERED = "/dsx-connect/notifications/connector-registered"
     SCAN_REQUEST = "/dsx-connect/scan-request"
     SCAN_REQUEST_TEST = "/dsx-connect/test/scan-request"
     SCAN_RESULTS = "/dsx-connect/scan-results"
@@ -7,6 +8,7 @@ class DSXConnectAPIEndpoints:
     CONNECTION_TEST = "/dsx-connect/test/connection"
     DSXA_CONNECTION_TEST = "/dsx-connect/test/dsxa-connection"
     CONFIG = "/dsx-connect/config"
+    VERSION = "/version"
     LIST_CONNECTORS = "/dsx-connect/connectors"
     REGISTER_CONNECTORS = "/dsx-connect/connectors/register"
     UNREGISTER_CONNECTORS = "/dsx-connect/connectors/unregister/{connector_uuid}"
@@ -21,3 +23,4 @@ class ConnectorEndpoints:
     WEBHOOK_EVENT = "/webhook/event"
     REPO_CHECK = "/repo_check"
     CONFIG = "/config"
+

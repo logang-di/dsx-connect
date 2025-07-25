@@ -98,7 +98,7 @@ class DSXAClient:
             if scan_request.protected_entity:
                 headers["protected_entity"] = scan_request.protected_entity
             if scan_request.metadata_info:
-                headers["X-Custom-Metadata"] = scan_request.metadata_info
+                headers["X-Custom-Metadata"] = scan_request.metadata_info.encode("utf-8", errors="ignore").decode("ascii", errors="ignore")
             scan_request.binary_data.seek(0)  # Reset the stream position just in case
 
             response = await self.aclient.post(
