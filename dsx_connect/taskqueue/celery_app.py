@@ -23,6 +23,9 @@ celery_app.conf.task_routes = {
 celery_app.conf.task_serializer = "json"
 celery_app.conf.result_serializer = "json"
 celery_app.conf.accept_content = ["json"]
+celery_app.conf.task_annotations = {'*': {'rate_limit': '10/s'}}
+celery_app.conf.task_always_eager = False
+celery_app.conf.worker_concurrency = 1  # still limits concurrency per worker
 
 
 def get_celery():

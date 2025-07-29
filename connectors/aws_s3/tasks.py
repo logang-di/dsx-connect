@@ -81,8 +81,8 @@ def prepare(c):
     c.run(f"touch {export_folder}/connectors/__init__.py")
     c.run(f"touch {export_folder}/dsx_connect/__init__.py")
 
-    # Copy start.py to to
-    c.run(f"cp start.py {export_folder}")
+    # Copy start.py to export folder
+    c.run(f"cp {project_root_dir}/connectors/filesystem/start.py {export_folder}")
 
     # move Dockerfile and docker-compose to topmost directory
     c.run(f"rsync -av {project_root_dir}/connectors/aws_s3/deploy/ {export_folder}")

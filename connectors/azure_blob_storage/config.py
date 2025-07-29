@@ -1,8 +1,11 @@
 from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
+
+from connectors.framework.base_config import BaseConnectorConfig
 from dsx_connect.models.connector_models import ItemActionEnum
 
-class AzureBlobStorageConnectorConfig(BaseSettings):
+
+class AzureBlobStorageConnectorConfig(BaseConnectorConfig):
     """
     Configuration for connector.  Note that configuration is a pydantic base setting class, so we get the benefits of
     type checking, as well as code completion in an IDE.  pydantic settings also allows for overriding these default
@@ -36,12 +39,12 @@ class AzureBlobStorageConnectorConfig(BaseSettings):
 
     test_mode: bool = False
 
-
     class Config:
         env_prefix = "DSXCONNECTOR_"
         env_file = ".env"
         env_file_encoding = "utf-8"
         extra = "forbid"
+
 
 # Singleton with reload capability
 class ConfigManager:
@@ -60,4 +63,3 @@ class ConfigManager:
 
 
 config = ConfigManager.get_config()
-

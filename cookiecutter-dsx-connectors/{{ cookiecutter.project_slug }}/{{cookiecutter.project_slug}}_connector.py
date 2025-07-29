@@ -2,7 +2,7 @@
 from starlette.responses import StreamingResponse
 
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel
+from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.{{ cookiecutter.project_slug }}.config import ConfigManager
@@ -10,18 +10,12 @@ from connectors.{{ cookiecutter.project_slug }}.version import CONNECTOR_VERSION
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
-connector_id = config.name
-
 # Initialize DSX Connector instance
-connector = DSXConnector(connector_name=config.name,
-                         connector_id=connector_id,
-                         base_connector_url=config.connector_url,
-                         dsx_connect_url=config.dsx_connect_url,
-                         test_mode=config.test_mode)
+connector = DSXConnector(config)
 
 
 @connector.startup
-async def startup_event(base: ConnectorModel) -> ConnectorModel:
+async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     """
     Startup handler for the DSX Connector.
 
@@ -30,12 +24,12 @@ async def startup_event(base: ConnectorModel) -> ConnectorModel:
     starting background tasks, or performing initial configuration checks.
 
     Returns:
-        ConnectorModel: the base dsx-connector will have populated this model, modify as needed and return
+        ConnectorInstanceModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    dsx_logging.info(f"Starting up connector {connector.connector_id}")
+    dsx_logging.info(f"Starting up connector {base.name}")
     dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
-    dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
-    dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
+    dsx_logging.info(f"{base.name} configuration: {config}.")
+    dsx_logging.info(f"{base.name} startup completed.")
 
     # modify ConnectorModel as needed and return
     # base.meta_info = ...
@@ -200,7 +194,7 @@ async def webhook_handler(event: dict):
     dsx_logging.info("Processing webhook event")
     # Example: Extract a file ID from the event and trigger a scan
     file_id = event.get("file_id", "unknown")
-    connector.scan_file_request(ScanRequestModel(
+    await connector.scan_file_request(ScanRequestModel(
         location=f"custom://{file_id}",
         metainfo=event
     ))
@@ -210,18 +204,6 @@ async def webhook_handler(event: dict):
         description=""
     )
 
-@connector.config
-async def config_handler():
-    # override this with any specific configuration details you want to add
-    return {
-        "connector_name": connector.connector_name,
-        "connector_id": connector.connector_id,
-        "uuid": connector.uuid,
-        "dsx_connect_url": connector.dsx_connect_url,
-        "asset": config.asset,
-        "filter": config.filter,
-        "version": CONNECTOR_VERSION
-    }
 
 if __name__ == "__main__":
     import uvicorn

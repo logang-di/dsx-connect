@@ -81,7 +81,7 @@ def prepare(c):
     c.run(f"touch {export_folder}/dsx_connect/__init__.py")
 
     # Copy start.py to root folder
-    c.run(f"mv {project_root_dir}/connectors/filesystem/start.py {export_folder}")
+    c.run(f"cp {project_root_dir}/connectors/filesystem/start.py {export_folder}")
 
     #
     # c.run(f"mv {project_root_dir}/connectors/filesystem/README.md {export_folder}/README.md")
@@ -93,13 +93,14 @@ def prepare(c):
     c.run(f"rsync -av {project_root_dir}/connectors/filesystem/deploy/ {export_folder}")
 
     # change the docker compose image: to reflect the new image tag
-    file_path = pathlib.Path(f"{export_folder}/docker-compose.yaml")
+    file_path = pathlib.Path(f"{export_folder}/docker-compose-filesystem-connector.yaml")
 
     with file_path.open("r") as f:
         content = f.read()
         content = content.replace("__VERSION__", version)
     with file_path.open("w") as f:
         f.write(content)
+
 @task(pre=[prepare])
 def build(c):
     """Build Docker image from distribution."""

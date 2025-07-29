@@ -91,7 +91,7 @@ def prepare(c):
     c.run(f"rsync -av {project_root_dir}/connectors/{{ cookiecutter.project_slug }}/deploy/ {export_folder}")
 
     # change the docker compose image: to reflect the new image tag
-    file_path = pathlib.Path(f"{export_folder}/docker-compose.yaml")
+    file_path = pathlib.Path(f"{export_folder}/docker-compose-{{ cookiecutter.__release_name }}.yaml")
 
     with file_path.open("r") as f:
         content = f.read()

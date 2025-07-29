@@ -19,7 +19,7 @@ from starlette import status
 from starlette.responses import FileResponse, StreamingResponse
 
 from dsx_connect.config import ConfigManager
-from dsx_connect.models.connector_models import ConnectorModel
+from dsx_connect.models.connector_models import ConnectorInstanceModel
 
 from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.dsxa_client.dsxa_client import DSXAClient
@@ -30,7 +30,8 @@ from dsx_connect.utils.logging import dsx_logging
 
 from dsx_connect.app.dependencies import static_path
 from dsx_connect.app.routers import scan_request, scan_request_test, scan_results, connectors
-from dsx_connect.connector_registration.connector_heartbeat import heartbeat_all_connectors
+from dsx_connect.connector_utils import connector_client
+from dsx_connect.connector_utils.connector_heartbeat import heartbeat_all_connectors
 from dsx_connect import version
 
 
@@ -40,7 +41,7 @@ async def lifespan(app: FastAPI):
     dsx_logging.info(f"dsx-connect configuration: {config}")
     dsx_logging.info("dsx-connect startup completed.")
 
-    app.state.connectors: List[ConnectorModel] = []
+    app.state.connectors: List[ConnectorInstanceModel] = []
     app.state.heartbeat_task = asyncio.create_task(heartbeat_all_connectors(app))
 
     # inside an async context (e.g., in lifespan)
@@ -135,7 +136,7 @@ async def connector_registered_stream():
             if msg and msg["type"] == "message":
                 event = json.loads(msg["data"])
                 yield f"data: {json.dumps(event)}\n\n"
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 

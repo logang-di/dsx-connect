@@ -9,7 +9,7 @@ services:
       FLAVOR: "rest,config"
       NO_SSL: "true"
     ports:
-      - "5000:5000"
+      - "8080:5000"
     networks:
       - dsx-network
 

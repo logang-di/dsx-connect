@@ -12,11 +12,11 @@ from dsx_connect.database.database_factory import database_scan_stats_factory, d
 router = APIRouter()
 
 config = ConfigManager().reload_config()
-_results_database = database_scan_results_factory(config.results_database.type,
-                                                  database_loc=config.results_database.loc,
-                                                  retain=config.results_database.retain)
+_results_database = database_scan_results_factory(config.database.type,
+                                                  database_loc=config.database.loc,
+                                                  retain=config.database.retain)
 
-_stats_database = database_scan_stats_factory(database_loc=config.results_database.scan_stats_db)
+_stats_database = database_scan_stats_factory(database_loc=config.database.scan_stats_db)
 
 
 @router.get(DSXConnectAPIEndpoints.SCAN_RESULTS, description="Review scan results.")

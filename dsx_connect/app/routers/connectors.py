@@ -6,11 +6,12 @@ from fastapi import APIRouter, Request, Path, HTTPException
 from starlette import status
 from starlette.responses import FileResponse, Response
 from dsx_connect.utils.logging import dsx_logging
-from dsx_connect.models.connector_models import ScanRequestModel, ConnectorModel
+from dsx_connect.models.connector_models import ScanRequestModel, ConnectorInstanceModel
 
 from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
-from dsx_connect.connector_registration.connector_registration import register_or_refresh_connector_from_redis, unregister_connector_from_redis
+from dsx_connect.connector_utils.connector_registration import register_or_refresh_connector_from_redis, unregister_connector_from_redis
+from dsx_connect.connector_utils.connector_client import get_connector_client, get_async_connector_client
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ async def invoke_fullscan_connector(
         request: Request,
         connector_uuid: UUID = Path(..., description="The UUID of the connector to invoke")
 ):
-    registry: List[ConnectorModel] = request.app.state.connectors
+    registry: List[ConnectorInstanceModel] = request.app.state.connectors
 
     # Find the ConnectorModel in our registry
     conn = next((c for c in registry if c.uuid == connector_uuid), None)
@@ -42,10 +43,10 @@ async def invoke_fullscan_connector(
 
     # Call the connector
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            resp = await client.post(full_scan_url)
-            resp.raise_for_status()
-            payload = resp.json()
+        client = await get_async_connector_client(full_scan_url)
+        resp = await client.post(full_scan_url)
+        resp.raise_for_status()
+        payload = resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(
             status_code=e.response.status_code,
@@ -67,8 +68,8 @@ async def invoke_fullscan_connector(
     status_code=status.HTTP_201_CREATED,
     tags=["connectors"]
 )
-async def register_connector(conn: ConnectorModel, request: Request):
-    registry: List[ConnectorModel] = request.app.state.connectors
+async def register_connector(conn: ConnectorInstanceModel, request: Request):
+    registry: List[ConnectorInstanceModel] = request.app.state.connectors
     # optional: dedupe by url
     if any(existing.uuid == conn.uuid for existing in registry):
         # don't do anything - already registered and there's no harm in re-registering, as the connector model is\
@@ -76,8 +77,10 @@ async def register_connector(conn: ConnectorModel, request: Request):
         return StatusResponse(status=StatusResponseEnum.NOTHING,
                               message=f"Registration of {conn.url} : {conn.uuid} already in place",
                               description="")
+
     registry.append(conn)
     await register_or_refresh_connector_from_redis(conn)
+
     return StatusResponse(status=StatusResponseEnum.SUCCESS,
                           message="Registration succeeded",
                           description=f"Registration of {conn.url} : {conn.uuid} succeeded")
@@ -90,7 +93,7 @@ async def unregister_connector(
         request: Request,
         connector_uuid: UUID = Path(..., description="UUID of the connector to remove")
 ):
-    registry: List[ConnectorModel] = request.app.state.connectors
+    registry: List[ConnectorInstanceModel] = request.app.state.connectors
     request.app.state.connectors = [c for c in registry if c.uuid != connector_uuid]
     await unregister_connector_from_redis(connector_uuid)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -98,7 +101,7 @@ async def unregister_connector(
 
 @router.get(
     DSXConnectAPIEndpoints.LIST_CONNECTORS,
-    response_model=list[ConnectorModel],
+    response_model=list[ConnectorInstanceModel],
     status_code=status.HTTP_200_OK,
     tags=["connectors"]
 )
@@ -116,7 +119,7 @@ async def fetch_connector_config(
         request: Request,
         connector_uuid: UUID = Path(..., description="The UUID of the connector to fetch config from")
 ):
-    registry: List[ConnectorModel] = request.app.state.connectors
+    registry: List[ConnectorInstanceModel] = request.app.state.connectors
     conn = next((c for c in registry if c.uuid == connector_uuid), None)
     if not conn:
         raise HTTPException(status_code=404, detail=f"No connector found with UUID={connector_uuid}")
@@ -125,11 +128,12 @@ async def fetch_connector_config(
     config_url = f"{conn.url}{ConnectorEndpoints.CONFIG}"
 
     try:
-        async with httpx.AsyncClient(verify=False) as client:
-            resp = await client.get(config_url)
-            resp.raise_for_status()
-            return resp.json()
+        client = await get_async_connector_client(config_url)
+        resp = await client.get(config_url)
+        resp.raise_for_status()
+        return resp.json()
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
     except Exception as e:
+        dsx_logging.debug(f"Call to {config_url} failed.")
         raise HTTPException(status_code=502, detail=str(e))

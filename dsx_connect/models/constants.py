@@ -23,4 +23,5 @@ class ConnectorEndpoints:
     WEBHOOK_EVENT = "/webhook/event"
     REPO_CHECK = "/repo_check"
     CONFIG = "/config"
+    HEARTBEAT = "/heartbeat"
 

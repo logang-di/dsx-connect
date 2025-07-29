@@ -25,16 +25,19 @@ class ConnectorStatusEnum(str, Enum):
     FAILED_INIT: str = 'failed'
 
 
-class ConnectorModel(BaseModel):
+class ConnectorInstanceModel(BaseModel):
     name: str = 'connector'
     uuid: UUID | None = None
     meta_info: str | None = None
     url: str = ''
     status: ConnectorStatusEnum = ConnectorStatusEnum.STARTING
+    item_action_move_metainfo: str = ''
+    asset: str = ''
+    filter: str = ''
 
 
 class ScanRequestModel(BaseModel):
-    connector: ConnectorModel = None
+    connector: ConnectorInstanceModel = None
     location: str
     metainfo: str
     connector_url: str = None

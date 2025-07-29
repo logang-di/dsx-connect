@@ -25,6 +25,7 @@ Dependencies:
     - celery: For task queue management.
     - dsx_connect: Internal models, config, and client utilities.
 """
+import asyncio
 import io
 import json
 import threading
@@ -49,44 +50,29 @@ from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from dsx_connect.models.scan_models import ScanResultModel, ScanResultStatusEnum, ScanStatsModel
+from dsx_connect.connector_utils.connector_client import get_connector_client, get_async_connector_client
 from dsx_connect.taskqueue.celery_app import celery_app
 from dsx_connect.config import DatabaseConfig, ConfigDatabaseType
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.config import ConfigManager
 
 # Shared client pools and scan client per worker process
-_connector_clients: Dict[str, httpx.Client] = {}
+# _connector_clients: Dict[str, httpx.Client] = {}
 # Lock for thread-safe access to the client pool
-_client_pool_lock = threading.Lock()
+# _client_pool_lock = threading.Lock()
 _redis_client = None
 _scan_results_db: Optional[ScanResultsBaseDB] = None  # Assuming initialized via database_scan_results_factory
 _scan_stats_db: Optional[ScanStatsBaseDB] = None  # Assuming initialized via database_scan_stats_factory
 _scan_stats_worker: Optional[ScanStatsWorker] = None  # Assuming initialized via passing _scan_stats_db
 
-config = ConfigManager.reload_config()
-
-
-def get_connector_client(connector_url: str) -> httpx.Client:
-    """
-    Retrieve or create an httpx.Client for the given connector_url.
-
-    Args:
-        connector_url (str): The URL of the connector.
-
-    Returns:
-        httpx.Client: The HTTP client for the connector.
-    """
-    global _connector_clients
-    with _client_pool_lock:
-        if connector_url not in _connector_clients:
-            _connector_clients[connector_url] = httpx.Client(verify=False, timeout=30)
-            dsx_logging.debug(f"Created new httpx.Client for {connector_url}")
-        return _connector_clients[connector_url]
+config = ConfigManager.get_config()
 
 
 @worker_process_init.connect
 def init_worker(**kwargs):
     """Initialize shared httpx.Client for scan requests and empty connector client pool."""
+    global config
+    config = ConfigManager.reload_config()
     global _connector_clients
     global _scan_results_db
     global _scan_stats_db
@@ -95,20 +81,19 @@ def init_worker(**kwargs):
     dsx_logging.debug("Initialized shared httpx.Client for scan requests and empty connector pool")
 
     from dsx_connect.database.database_factory import database_scan_results_factory
-    db_config = DatabaseConfig()
     _scan_results_db = database_scan_results_factory(
-        database_type=db_config.type,
-        database_loc=db_config.loc,
-        retain=db_config.retain,
+        database_type=config.database.type,
+        database_loc=config.database.loc,
+        retain=config.database.retain,
         collection_name="scan_results"
     )
-    dsx_logging.info(f"Initialized scan results database of type {db_config.type} at {db_config.loc}")
+    dsx_logging.info(f"Initialized scan results database of type {config.database.type} at {config.database.loc}")
 
     from dsx_connect.database.database_factory import database_scan_stats_factory
     from dsx_connect.database.scan_stats_worker import ScanStatsWorker
     _scan_stats_db = database_scan_stats_factory(
         database_type=ConfigDatabaseType.TINYDB,
-        database_loc=db_config.scan_stats_db,
+        database_loc=config.database.scan_stats_db,
         collection_name="scan_stats"
     )
     _scan_stats_worker = ScanStatsWorker(_scan_stats_db)
@@ -163,13 +148,14 @@ def scan_request_task(scan_request_dict: dict) -> dict:
 
     # 2. Fetch file content from connector
     try:
-        client = get_connector_client(scan_request.connector_url)
-        response = client.post(
-            f'{scan_request.connector_url}{ConnectorEndpoints.READ_FILE}',
-            json=jsonable_encoder(scan_request)
-        )
-        response.raise_for_status()  # Raises HTTPError for 4xx/5xx responses
-        bytes_content = BytesIO(response.content)
+        async def _fetch():
+            client = await get_async_connector_client(scan_request.connector_url)
+            response = await client.post(
+                f'{scan_request.connector_url}{ConnectorEndpoints.READ_FILE}',
+                json=jsonable_encoder(scan_request))
+            response.raise_for_status()
+            return response.content
+        bytes_content = BytesIO(asyncio.run(_fetch()))
         bytes_content.seek(0)
         dsx_logging.debug(f"Received {bytes_content.getbuffer().nbytes} bytes")
     except httpx.HTTPError as e:
@@ -196,12 +182,17 @@ def scan_request_task(scan_request_dict: dict) -> dict:
         metadata_info = f"file-tag:{safe_meta}"
         if task_id:
             metadata_info += f",task-id:{task_id}"
-        dpa_verdict = dsxa_client.scan_binary(
-            scan_request=DSXAScanRequest(
-                binary_data=bytes_content,
-                metadata_info=metadata_info
+
+        async def _scan():
+            dpa_verdict = await dsxa_client.scan_binary_async(
+                scan_request=DSXAScanRequest(
+                    binary_data=bytes_content,
+                    metadata_info=metadata_info
+                )
             )
-        )
+            return dpa_verdict
+        dpa_verdict = asyncio.run(_scan())
+
         dsx_logging.debug(f"Verdict: {dpa_verdict.verdict}")
     except Exception as e:
         dsx_logging.error(f"Scan failed: {e}", exc_info=True)
@@ -425,21 +416,22 @@ def scan_result_task(scan_request_dict: dict, verdict_dict: dict, item_action_di
             id=task_id
         ).model_dump()
 
-    # 1. Store scan result in database
+    # 1a. Store scan result in database
     try:
         _scan_results_db.insert(scan_result)
         dsx_logging.info(f"Stored scan result for {scan_request.location} in database")
 
+    except Exception as e:
+        # Failure to save scan results should log an error but should not stop processing scan results
+        dsx_logging.error(f"Failed to store scan result: {e}", exc_info=True)
+
+    # 1b. Store scan result in database
+    try:
         _scan_stats_worker.insert(scan_result)
         dsx_logging.info(f"Stored scan stats for {scan_request.location} in database")
-
     except Exception as e:
+        # Failure to save scan results should log an error but should not stop processing scan results
         dsx_logging.error(f"Failed to store scan result: {e}", exc_info=True)
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message="Failed to store scan result",
-            description=f"str(e) for task_id= {task_id}",
-        ).model_dump()
 
     # 2. Send to syslog
     from dsx_connect.utils.log_chain import log_verdict_chain

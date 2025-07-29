@@ -5,7 +5,7 @@ from starlette.responses import StreamingResponse
 from connectors.azure_blob_storage.azure_blob_storage_async_client import AzureBlobAsyncClient
 from connectors.azure_blob_storage.azure_blob_storage_client import AzureBlobClient
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
+from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, ConnectorStatusEnum
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.azure_blob_storage.config import ConfigManager
@@ -17,17 +17,13 @@ config = ConfigManager.reload_config()
 connector_id = config.name
 
 # Initialize DSX Connector instance
-connector = DSXConnector(connector_name=config.name,
-                         connector_id=connector_id,
-                         base_connector_url=config.connector_url,
-                         dsx_connect_url=config.dsx_connect_url,
-                         test_mode=config.test_mode)
+connector = DSXConnector(config)
 
 abs_client = AzureBlobClient()
 
 
 @connector.startup
-async def startup_event(base: ConnectorModel) -> ConnectorModel:
+async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     """
     Startup handler for the DSX Connector.
 
@@ -36,13 +32,13 @@ async def startup_event(base: ConnectorModel) -> ConnectorModel:
     starting background tasks, or performing initial configuration checks.
 
     Returns:
-        ConnectorModel: the base dsx-connector will have populated this model, modify as needed and return
+        ConnectorInstanceModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    dsx_logging.info(f"Starting up connector {connector.connector_id}")
+    dsx_logging.info(f"Starting up connector {base.name}")
     # await abs_client.init()
-    dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
-    dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
-    dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
+    dsx_logging.info(f"{base.name} version: {CONNECTOR_VERSION}.")
+    dsx_logging.info(f"{base.name} configuration: {config}.")
+    dsx_logging.info(f"{base.name} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
     base.meta_info = f"ABS container: {config.asset}, prefix: {config.filter}"
@@ -247,18 +243,17 @@ async def webhook_handler(event: dict):
     )
 
 
-@connector.config
-async def config_handler():
-    # override this with any specific configuration details you want to add
-    return {
-        "connector_name": connector.connector_name,
-        "connector_id": connector.connector_id,
-        "uuid": connector.uuid,
-        "dsx_connect_url": connector.dsx_connect_url,
-        "asset": config.asset,
-        "filter": config.filter,
-        "version": CONNECTOR_VERSION
-    }
+# @connector.config
+# async def config_handler(connector_running_config: ConnectorInstanceModel):
+#     # override the connector_running_config with any specific configuration details you want to add
+#     return {
+#         "connector_name": connector.connector_running_model.name,
+#         "uuid": connector.connector_running_model.uuid,
+#         "dsx_connect_url": connector.connector_running_model.url,
+#         "asset": config.asset,
+#         "filter": config.filter,
+#         "version": CONNECTOR_VERSION
+#     }
 
 
 if __name__ == "__main__":

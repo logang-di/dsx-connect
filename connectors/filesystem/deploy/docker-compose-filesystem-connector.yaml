@@ -1,0 +1,39 @@
+services:
+  filesystem_connector:
+    image: filesystem-connector:__VERSION__
+    # Uncomment if you want to use docker compose to build the image
+    #build:
+    #  context: .
+    #  dockerfile: Dockerfile
+    ports:
+      - "8590:8590"
+    volumes:
+      - /Users/logangilbert/Documents/SAMPLES/PDF:/app/scan_folder  # <host directory>:<docker container directory> - modify the <host directory> to the directory to be scanned and monitored
+      - /Users/logangilbert/Documents/SAMPLES/PDF/dsxconnect-quarantine:/app/quarantine  # <quarantine directory>:<docker container directory> - modify the <quarantine directory> to the location files will be moved to
+    environment:
+      PYTHONUNBUFFERED: 1
+      LOG_LEVEL: debug
+      DSXCONNECTOR_CONNECTOR_URL: "http://filesystem-connector:8590" # see aliases below
+      DSXCONNECTOR_DSX_CONNECT_URL: "http://dsx-connect-api:8586" # note, this works if running on the same internal network on Docker as the dsx_connect_core...
+      DSXCONNECTOR_ASSET: "/app/scan_folder"
+      DSXCONNECTOR_FILTER: ""
+      DSXCONNECTOR_ITEM_ACTION: "nothing"
+      DSXCONNECTOR_ITEM_ACTION_MOVE_DIR: "/app/quarantine" # this directory should have been created in the Dockerfile
+      DSXCONNECTOR_RECURSIVE: true
+
+      # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
+      # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
+      DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
+    networks:
+      dsx-network:
+        aliases:
+          - filesystem-connector  # this is how dsx-connect will communicate with this on the network
+    command:
+      [ "python", "connectors/filesystem/start.py", "--workers", "1" ]
+
+# The following assumes an already created docker network like this:
+# docker network create dsx-connect-network --driver bridge
+networks:
+  dsx-network:
+    external: true
+    name: dsx-connect-network  # change this to an existing docker network

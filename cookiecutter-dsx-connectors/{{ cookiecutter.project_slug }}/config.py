@@ -1,8 +1,9 @@
 from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
 from dsx_connect.models.connector_models import ItemActionEnum
+from connectors.framework.base_config import BaseConnectorConfig
 
-class {{ cookiecutter.__package_config_class_name }}(BaseSettings):
+class {{ cookiecutter.__package_config_class_name }}(BaseConnectorConfig):
     """
     Configuration for connector.  Note that configuration is a pydantic base setting class, so we get the benefits of
     type checking, as well as code completion in an IDE.  pydantic settings also allows for overriding these default

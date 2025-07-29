@@ -3,7 +3,7 @@ from starlette.responses import StreamingResponse
 from connectors.aws_s3.aws_s3_client import AWSS3Client
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.utils import file_ops
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorModel, ConnectorStatusEnum
+from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, ConnectorStatusEnum
 from dsx_connect.utils.async_ops import run_async
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
@@ -13,20 +13,13 @@ from dsx_connect.utils.streaming import stream_blob
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
-connector_id = config.name  # I'm not really sure what I want to use this for yet
-
-# Initialize DSX Connector instance
-connector = DSXConnector(connector_name=config.name,
-                         connector_id=connector_id,
-                         base_connector_url=config.connector_url,
-                         dsx_connect_url=config.dsx_connect_url,
-                         test_mode=config.test_mode)
+connector = DSXConnector(config)
 
 aws_s3_client = AWSS3Client(s3_endpoint_url=config.s3_endpoint_url, s3_endpoint_verify=config.s3_endpoint_verify)
 
 
 @connector.startup
-async def startup_event(base: ConnectorModel) -> ConnectorModel:
+async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     """
     Startup handler for the DSX Connector.
 
@@ -35,13 +28,13 @@ async def startup_event(base: ConnectorModel) -> ConnectorModel:
     starting background tasks, or performing initial configuration checks.
 
     Returns:
-        ConnectorModel: the base dsx-connector will have populated this model, modify as needed and return
+        ConnectorInstanceModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    dsx_logging.info(f"Starting up connector {connector.connector_id}")
+    dsx_logging.info(f"Starting up connector {base.name}")
 
-    dsx_logging.info(f"{connector.connector_id} version: {CONNECTOR_VERSION}.")
-    dsx_logging.info(f"{connector.connector_id} configuration: {config}.")
-    dsx_logging.info(f"{connector.connector_name}:{connector.connector_id} startup completed.")
+    dsx_logging.info(f"{base.name} version: {CONNECTOR_VERSION}.")
+    dsx_logging.info(f"{base.name} configuration: {config}.")
+    dsx_logging.info(f"{base.name} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
     base.meta_info = f"S3 Bucket: {config.asset}, prefix: {config.filter}"

@@ -21,4 +21,4 @@ RUN mkdir -p data && chown appuser:appuser data
 
 USER appuser
 
-# Command is set in docker-compose.yaml
+# Command is set in docker-compose-filesystem

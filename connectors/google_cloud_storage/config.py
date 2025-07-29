@@ -1,8 +1,11 @@
 from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
+
+from connectors.framework.base_config import BaseConnectorConfig
 from dsx_connect.models.connector_models import ItemActionEnum
 
-class GoogleCloudStorageConnectorConfig(BaseSettings):
+
+class GoogleCloudStorageConnectorConfig(BaseConnectorConfig):
     """
     Configuration for connector.  Note that configuration is a pydantic base setting class, so we get the benefits of
     type checking, as well as code completion in an IDE.  pydantic settings also allows for overriding these default
@@ -18,7 +21,8 @@ class GoogleCloudStorageConnectorConfig(BaseSettings):
     You can also read in an optional .env file, which will be ignored is not available
     """
     name: str = 'google-cloud-storage-connector'
-    connector_url: HttpUrl = Field(default="http://0.0.0.0:8595", # dsx-connect is running within dockers, and this connector is being run on the docker's host system
+    connector_url: HttpUrl = Field(default="http://0.0.0.0:8595",
+                                   # dsx-connect is running within dockers, and this connector is being run on the docker's host system
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
     # connector_url: HttpUrl = Field(default="http://host.docker.internal:8595", # dsx-connect is running within dockers, and this connector is being run on the docker's host system
     #                                description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
@@ -42,6 +46,7 @@ class GoogleCloudStorageConnectorConfig(BaseSettings):
         env_file_encoding = "utf-8"
         extra = "forbid"
 
+
 # Singleton with reload capability
 class ConfigManager:
     _config: GoogleCloudStorageConnectorConfig = None
@@ -59,4 +64,3 @@ class ConfigManager:
 
 
 config = ConfigManager.get_config()
-

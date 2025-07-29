@@ -14,7 +14,7 @@ class ScanResultsTinyDB(ScanResultsBaseDB):
         super().__init__(retain)
         self.db_path = db_path
         pathlib.Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = TinyDB(db_path)
+        self.db = TinyDB(db_path, encoding='utf-8')
         self.collection = self.db.table(collection_name)
 
     def __str__(self) -> str:

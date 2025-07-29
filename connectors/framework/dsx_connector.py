@@ -9,37 +9,68 @@ from fastapi.encoders import jsonable_encoder
 from httpx import HTTPStatusError
 from requests.exceptions import RequestException, HTTPError, Timeout, ConnectionError
 
-from fastapi import FastAPI, APIRouter, Request, BackgroundTasks
+from fastapi import FastAPI, APIRouter, Request, BackgroundTasks, Depends, HTTPException, Security
+from fastapi.security.api_key import APIKeyHeader
 from typing import Callable, Awaitable
 
 from starlette.responses import StreamingResponse
 
-from dsx_connect.models.connector_models import ScanRequestModel, ConnectorModel, ConnectorStatusEnum, ItemActionEnum
+from connectors.framework.base_config import BaseConnectorConfig
+from dsx_connect.models.connector_models import ScanRequestModel, ConnectorInstanceModel, ConnectorStatusEnum, ItemActionEnum
 from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.models.connector_api_key import APIKeySettings
 from connectors.framework.connector_id import get_or_create_connector_uuid
+
+
+
+# read API key if available from environment settings (via Pydantic's BaseSettings)
+api_key_setting = APIKeySettings()
+dsx_logging.info(f"Using API key for authorization: {'True' if api_key_setting.api_key else 'False'}")
+
+
+# specify header name for api keys
+API_KEY_NAME = "x-api-key"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+
+async def validate_api_key(api_key: str = Security(api_key_header)):
+    if api_key != api_key_setting.api_key:
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+# <end> API key config and validation
 
 connector_api = None
 
 
 class DSXConnector:
-    def __init__(self, connector_name: str, connector_id: str, base_connector_url: str, dsx_connect_url: str,
-                 test_mode: bool = False):
-        self.test_mode = test_mode
-        self.connector_model = None
-        # populated in the lifespan handler
-        self.connector_name = connector_name
-        self.connector_id = connector_id
+    def __init__(self, connector_config: BaseConnectorConfig) :
 
-        self.uuid = get_or_create_connector_uuid()
-        dsx_logging.debug(f"Logical connector {connector_id} using UUID: {self.uuid}")
-        self.connector_url = f'{str(base_connector_url).rstrip('/')}/{connector_id}'
+        # connector_name: str, base_connector_url: str, dsx_connect_url: str,
+        #          item_action_move_metainfo: str = "", test_mode: bool = False):
+
+        self.test_mode = connector_config.test_mode
+        self.connector_id = connector_config.name # for now, the id is just he name
+        # self.item_action_move_metainfo = item_action_move_metainfo
+
+        uuid = get_or_create_connector_uuid()
+        dsx_logging.debug(f"Logical connector {self.connector_id} using UUID: {uuid}")
         self.scan_request_count = 0
 
-        self.dsx_connect_url = str(dsx_connect_url).rstrip('/')
+        # clean up URL if needed
+        self.dsx_connect_url = str(connector_config.dsx_connect_url).rstrip('/')
 
-        self.startup_handler: Callable[[ConnectorModel], Awaitable[None]] = None
+        self.connector_running_model = ConnectorInstanceModel(
+            name=connector_config.name,
+            uuid = uuid,
+            url=f'{str(connector_config.connector_url).rstrip("/")}/{self.connector_id}',
+            status=ConnectorStatusEnum.STARTING,
+            item_action_move_metainfo = connector_config.item_action_move_metainfo,
+            asset=connector_config.asset,
+            filter=connector_config.filter
+        )
+
+        self.startup_handler: Callable[[ConnectorInstanceModel], Awaitable[None]] = None
         self.shutdown_handler: Callable[[], Awaitable[None]] = None
 
         self.full_scan_handler: Callable[[ScanRequestModel], StatusResponse] = None
@@ -47,28 +78,21 @@ class DSXConnector:
         self.read_file_handler: Callable[[ScanRequestModel], StreamingResponse | StatusResponse] = None
         self.webhook_handler: Callable[[ScanRequestModel], StatusResponse] = None
         self.repo_check_connection_handler: Callable[[], StatusResponse] = None
-        self.config_handler: Callable[[], dict] = None
+        # self.config_handler: Callable[[ConnectorInstanceModel], dict] = None
+        self.config_handler: Callable[[ConnectorInstanceModel], Awaitable[ConnectorInstanceModel]] = None
+
 
         # Startup / shutdown logic using FastAPI's lifecycle mechanism
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             # ============ 1) “startup” logic ============
-            # 1a) build the ConnectorModel with “STARTING” status
-            conn_model = ConnectorModel(
-                name=self.connector_name,
-                url=self.connector_url,
-                status=ConnectorStatusEnum.STARTING,
-                uuid=self.uuid
-            )
 
-            # 1b) call the user’s @connector.startup decorated function, if any:
+            # 1a) call the user’s @connector.startup decorated function, if any:
             if self.startup_handler:
-                conn_model = await self.startup_handler(conn_model)
+                self.connector_running_model = await self.startup_handler(self.connector_running_model)
 
-            self.connector_model = conn_model
-
-            # 1c) register with dsx-connect
-            register_resp = await self.register_connector(conn_model)
+            # 1b) register with dsx-connect
+            register_resp = await self.register_connector(self.connector_running_model)
             if register_resp.status == StatusResponseEnum.SUCCESS:
                 dsx_logging.info(f"Registered connector OK: {register_resp.message}")
             else:
@@ -93,15 +117,15 @@ class DSXConnector:
         # Create the connector FastAPI app and include its router
         global connector_api
         connector_api = FastAPI(
-            title=f"{connector_name} [dsx-connector] - {connector_id}",
-            description=f"API for dsx-connector: {connector_name} (ID: {connector_id})",
+            title=f"{self.connector_running_model.name} [dsx-connector]",
+            description=f"API for dsx-connector: {self.connector_running_model.name} (UUID: {self.connector_running_model.uuid})",
             lifespan=lifespan
         )
         connector_api.include_router(DSXAConnectorRouter(self))
 
 
     # Register handlers for startup and shutdown events
-    def startup(self, func: Callable[[ConnectorModel], Awaitable[ConnectorModel]]):
+    def startup(self, func: Callable[[ConnectorInstanceModel], Awaitable[ConnectorInstanceModel]]):
         self.startup_handler = func
         return func
 
@@ -135,22 +159,26 @@ class DSXConnector:
         return func
 
     # Decorator registration method:
-    def config(self, func: Callable[[], dict]):
+    # def config(self, func: Callable[[], dict]):
+    #     self.config_handler = func
+    #     return func
+
+    def config(self, func: Callable[[ConnectorInstanceModel], Awaitable[ConnectorInstanceModel]]):
         self.config_handler = func
         return func
 
     async def scan_file_request(self, scan_request: ScanRequestModel) -> StatusResponse:
         # Skip if location includes the configured quarantine/metainfo path
-        # if self.config.item_action_move_metainfo in scan_request.location:
-        #     dsx_logging.info(f"Skipping scan for file in quarantine path: {scan_request.location}")
-        #     return StatusResponse(
-        #         status=StatusResponseEnum.NOTHING,
-        #         description="File in quarantine path, skipping scan",
-        #         message=f"Scan skipped for: {scan_request.location}"
-        #     )
+        if self.connector_running_model.item_action_move_metainfo in scan_request.location:
+            dsx_logging.info(f"Skipping scan for file in quarantine path: {scan_request.location}")
+            return StatusResponse(
+                status=StatusResponseEnum.NOTHING,
+                description="File in quarantine path, skipping scan",
+                message=f"Scan skipped for: {scan_request.location}"
+            )
 
-        scan_request.connector = self.connector_model
-        scan_request.connector_url = self.connector_url
+        scan_request.connector = self.connector_running_model
+        scan_request.connector_url = self.connector_running_model.url
         try:
             async with httpx.AsyncClient(verify=False) as client:
                 if not self.test_mode:
@@ -200,7 +228,7 @@ class DSXConnector:
             "scan_requests_since_active_count": self.scan_request_count,
         }
 
-    async def register_connector(self, conn_model: ConnectorModel) -> StatusResponse:
+    async def register_connector(self, conn_model: ConnectorInstanceModel) -> StatusResponse:
         """
         Tell dsx-connect about this connector instance.
         """
@@ -230,7 +258,7 @@ class DSXConnector:
         Tell dsx-connect this connector instance is going away.
         """
         # URL‑encode the connector URL so it fits safely in the path
-        encoded = urllib.parse.quote(str(self.uuid), safe="")
+        encoded = urllib.parse.quote(str(self.connector_running_model.uuid), safe="")
         path = DSXConnectAPIEndpoints.UNREGISTER_CONNECTORS.format(connector_uuid=encoded)
         url = f"{self.dsx_connect_url}{path}"
 
@@ -242,7 +270,7 @@ class DSXConnector:
                     return StatusResponse(
                         status=StatusResponseEnum.SUCCESS,
                         message="Unregistered",
-                        description=f"Connector {self.connector_url} : {self.uuid} removed"
+                        description=f"Connector {self.connector_running_model.url} : {self.connector_running_model.uuid} removed"
                     )
                 # if they happen to return a body, parse it:
                 resp.raise_for_status()
@@ -288,7 +316,7 @@ class DSXConnector:
 
 class DSXAConnectorRouter(APIRouter):
     def __init__(self, connector: DSXConnector):
-        super().__init__()
+        super().__init__(dependencies=[Depends(validate_api_key)])
         self._connector = connector
         # no longer used when we converted to using FastAPI's lifecycle context manager
         # self._startup_done = False
@@ -297,28 +325,29 @@ class DSXAConnectorRouter(APIRouter):
         (self.get('/', description='Connector status and availability',
                   response_model=None)
          (self.home))
-        self.put(f'/{self._connector.connector_id}{ConnectorEndpoints.ITEM_ACTION}',
+        self.put(f'/{self._connector.connector_running_model.name}{ConnectorEndpoints.ITEM_ACTION}',
                  description='Request that the connector perform and action on an item',
                  response_model=ItemActionStatusResponse,
                  response_description='')(self.put_item_action)
-        self.post(f'/{self._connector.connector_id}{ConnectorEndpoints.FULL_SCAN}',
+        self.post(f'/{self._connector.connector_running_model.name}{ConnectorEndpoints.FULL_SCAN}',
                   description='Request that the connector initiate a full scan.',
                   response_model=StatusResponse,
                   response_description='')(self.post_full_scan)
-        self.post(f'/{self._connector.connector_id}{ConnectorEndpoints.READ_FILE}',
+        self.post(f'/{self._connector.connector_running_model.name}{ConnectorEndpoints.READ_FILE}',
                   description='Request a file from the connector',
                   response_description='',
                   response_model=None)(self.post_read_file)
 
-        self.get(f'/{self._connector.connector_id}{ConnectorEndpoints.REPO_CHECK}',
+        self.get(f'/{self._connector.connector_running_model.name}{ConnectorEndpoints.REPO_CHECK}',
                  description='Check connectivity to repository',
                  response_description='',
                  response_model=None)(self.get_repo_check)
 
-        self.post(f'/{self._connector.connector_id}{ConnectorEndpoints.WEBHOOK_EVENT}')(self.post_handle_webhook_event)
+        self.post(f'/{self._connector.connector_running_model.name}{ConnectorEndpoints.WEBHOOK_EVENT}')(self.post_handle_webhook_event)
 
-        self.get(f'/{self._connector.connector_id}/config',
+        self.get(f'/{self._connector.connector_running_model.name}{ConnectorEndpoints.CONFIG}',
                  description='Returns connector configuration')(self.get_config)
+
 
         # Register FastAPI events
         # self.on_event("startup")(self.on_startup_event)
@@ -348,7 +377,7 @@ class DSXAConnectorRouter(APIRouter):
                               description="Add a decorator (ex: @connector.full_scan) to handle full scan requests")
 
     async def post_read_file(self, scan_request_info: ScanRequestModel) -> StreamingResponse | StatusResponse:
-        dsx_logging.info(f'Receive read_file request for {scan_request_info}')
+        dsx_logging.debug(f'Receive read_file request for {scan_request_info}')
         if self._connector.read_file_handler:
             return await self._connector.read_file_handler(scan_request_info)
         return StatusResponse(status=StatusResponseEnum.ERROR,
@@ -377,44 +406,6 @@ class DSXAConnectorRouter(APIRouter):
 
     async def get_config(self):
         if self._connector.config_handler:
-            return await self._connector.config_handler()
-        return {"error": "No config handler defined"}
+            return await self._connector.config_handler(self._connector.connector_running_model)
+        return self._connector.connector_running_model
 
-    # async def on_startup_event(self):
-    #     # if we’ve already been here once, do nothing
-    #     if self._startup_done:
-    #         return
-    #     self._startup_done = True
-    #
-    #     # construct the “base” model
-    #     conn_model = ConnectorModel(
-    #         name=self._connector.connector_name,
-    #         url=self._connector.connector_url,
-    #         status=ConnectorStatusEnum.STARTING,
-    #         uuid=self._connector.uuid
-    #     )
-    #     # fire any user‑provided startup logic
-    #     if self._connector.startup_handler:
-    #         conn_model = await self._connector.startup_handler(conn_model)
-    #
-    #     # tell dsx‑connect about ourselves
-    #     if not self._registered:
-    #         register_resp = await self._connector.register_connector(conn_model)
-    #         if register_resp.status == StatusResponseEnum.SUCCESS:
-    #             dsx_logging.info(f"Registered connector OK: {register_resp.message}")
-    #             self._registered = True
-    #         else:
-    #             dsx_logging.warn(f"Connector registration failed: {register_resp.message}")
-    #
-    # # Shutdown event
-    # async def on_shutdown_event(self):
-    #     # First tell dsx‑connect we’re going offline
-    #     unregister_resp = await self._connector.unregister_connector()
-    #     if unregister_resp.status != StatusResponseEnum.SUCCESS:
-    #         dsx_logging.warn(f"Connector unregistration failed: {unregister_resp.message}")
-    #     else:
-    #         dsx_logging.info(f"Unregistered connector OK: {unregister_resp.message}")
-    #
-    #     # Then run any user‑provided cleanup
-    #     if self._connector.shutdown_handler:
-    #         await self._connector.shutdown_handler()

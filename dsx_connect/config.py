@@ -30,6 +30,7 @@ class DatabaseConfig(BaseSettings):
     scan_stats_db: str = "data/scan-stats.db.json"
 
     class Config:
+        env_prefix = "DSXCONNECT_"
         env_nested_delimiter = "__"
 
 
@@ -38,6 +39,7 @@ class ScannerConfig(BaseSettings):
     scan_binary_url: str = "http://0.0.0.0:8080/scan/binary/v2"
 
     class Config:
+        env_prefix = "DSXCONNECT_"
         env_nested_delimiter = "__"
 
 
@@ -72,7 +74,7 @@ class SecurityConfig(BaseSettings):
 
 
 class DSXConnectConfig(BaseSettings):
-    results_database: DatabaseConfig = DatabaseConfig()
+    database: DatabaseConfig = DatabaseConfig()
     scanner: ScannerConfig = ScannerConfig()
     taskqueue: TaskQueueConfig = TaskQueueConfig()
 

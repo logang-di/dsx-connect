@@ -27,7 +27,7 @@ scan external to the docker environment, and what that maps to within the connec
 
 ##### Port and Volume Maps
 In the case, the volume mapping is from a local directory to /app/scan_folder.  Note that this /app/scan_folder
-should be mirrored in the configuration specified in the next section (DSXCONNECTOR_LOCATION).
+should be mirrored in the configuration specified in the next section (DSXCONNECTOR_ASSET).
 
 ```yaml
       ports:

@@ -70,6 +70,7 @@ def prepare(c):
     c.run(f"cp __init__.py {export_folder}/dsx_connect/")
     c.run(f"cp config.py {export_folder}/dsx_connect/")
     c.run(f"rsync -av --exclude '__pycache__' app/ {export_folder}/dsx_connect/app/")
+    c.run(f"rsync -av --exclude '__pycache__' connector_utils/ {export_folder}/dsx_connect/connector_utils/")
     c.run(f"rsync -av --exclude '__pycache__' taskworkers/ {export_folder}/dsx_connect/taskworkers/")
     c.run(f"rsync -av --exclude '__pycache__' diagrams/ {export_folder}/dsx_connect/diagrams/")
     c.run(f"rsync -av --exclude '__pycache__' database/ {export_folder}/dsx_connect/database/")
@@ -80,18 +81,25 @@ def prepare(c):
     c.run(f"rsync -av --exclude '__pycache__' config.py {export_folder}/dsx_connect/")
 
     # move docker files to topmost directory for building
-    c.run(f"cp deploy/Dockerfile {export_folder}/")
-    c.run(f"cp deploy/docker-compose.yaml {export_folder}/")
-    c.run(f"cp deploy/docker-compose-dsxa.yaml {export_folder}/")
+    c.run(f"cp deploy/docker/Dockerfile {export_folder}/")
+    c.run(f"cp deploy/docker/docker-compose-dsx-connect-all-services.yaml {export_folder}/")
+    c.run(f"cp deploy/docker/docker-compose-dsxa.yaml {export_folder}/")
 
     # change the docker compose image: to reflect the new image tag
-    file_path = pathlib.Path(f"{export_folder}/docker-compose.yaml")
+    file_path = pathlib.Path(f"{export_folder}/docker-compose-dsx-connect-all-services.yaml")
 
     with file_path.open("r") as f:
         content = f.read()
         content = content.replace("__VERSION__", version)
     with file_path.open("w") as f:
         f.write(content)
+
+    # # Define original and new file paths for docker compose file
+    # original_file = pathlib.Path(f"{export_folder}/docker-compose-dsx-connect-all-services-__VERSION__.yaml")
+    # new_file = pathlib.Path(f"{export_folder}/docker-compose-dsx-connect-all-services-{version}.yaml")
+    #
+    # # Rename the file
+    # original_file.rename(new_file)
 
     c.run(f"mkdir {export_folder}/data")
 
@@ -139,7 +147,7 @@ def push(c):
 def run(c):
     """Run the Docker Compose setup."""
     print(f"Running {name}:{version}")
-    c.run("docker-compose -f deploy/docker-compose.yaml up -d")
+    c.run("docker-compose -f deploy/docker-compose-dsx-connect-all-services.yaml up -d")
 
 @task
 def lint(c):

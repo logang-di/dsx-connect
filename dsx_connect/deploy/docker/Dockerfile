@@ -16,4 +16,4 @@ ENV PYTHONPATH=/app
 
 USER dsxconnectuser
 
-# Command is set in docker-compose.yaml
+# Command is set in docker-compose-dsx-connect-all-services.yaml
