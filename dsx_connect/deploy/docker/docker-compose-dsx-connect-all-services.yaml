@@ -21,37 +21,60 @@ services:
       DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
       LOG_LEVEL: debug
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy  # Wait for Redis to be healthy
     networks:
       dsx-network:
         aliases:
-          - dsx-connect-api # this is the name connectors will use to connect to the dsx_connect_core service API on the dsx-connect-network docker network
-    command: uvicorn dsx_connect.app.dsx_connect_api:app --host 0.0.0.0 --port 8586
+          - dsx-connect-api
+    # Updated uvicorn command with SSE-friendly settings
+    command: >
+      uvicorn dsx_connect.app.dsx_connect_api:app 
+      --host 0.0.0.0 
+      --port 8586 
+      --workers 1 
+      --timeout-keep-alive 300 
+      --limit-concurrency 1000 
+      --no-access-log
+    # Health check for the API service
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8586/dsx-connect/test/connection"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Graceful shutdown for SSE connections
+    stop_grace_period: 30s
+    restart: unless-stopped
 
-  dsx_connect_worker_scan:
+  dsx_connect_scan_request_worker:
     image: logangilbert/dsx-connect:__VERSION__
     environment:
       <<: *common-env
       DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
       LOG_LEVEL: debug
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     networks:
       - dsx-network
     command: celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q scan_request_queue --concurrency=2
+    restart: unless-stopped
 
-  dsx_connect_worker_verdict:
+  dsx_connect_verdict_action_worker:
     image: logangilbert/dsx-connect:__VERSION__
     environment:
       <<: *common-env
       LOG_LEVEL: debug
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     networks:
       - dsx-network
     command: celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q verdict_action_queue --concurrency=1
+    restart: unless-stopped
 
-  dsx_connect_worker_results:
+  dsx_connect_results_worker:
     image: logangilbert/dsx-connect:__VERSION__
     environment:
       <<: *common-env
@@ -60,42 +83,186 @@ services:
       DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT: 514
       DSXCONNECT_FRONTEND__URL: "http://dsx-connect-api:8586"
     depends_on:
-      - redis
-      - syslog
+      redis:
+        condition: service_healthy
+      syslog:
+        condition: service_started
     networks:
       - dsx-network
     command: celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q scan_result_queue --concurrency=1
+    restart: unless-stopped
+
+  dsx_connect_notification_worker:
+    image: logangilbert/dsx-connect:__VERSION__
+    environment:
+      <<: *common-env
+      LOG_LEVEL: debug
+    depends_on:
+      redis:
+        condition: service_healthy
+      syslog:
+        condition: service_started
+    networks:
+      - dsx-network
+    command: celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q scan_result_notification_queue --concurrency=1
+    restart: unless-stopped
 
   redis:
-    image: redis:6
-    ## add for persistence
+    image: redis:7-alpine  # Use newer version
+    networks:
+      - dsx-network
+    # Redis configuration optimized for pubsub and SSE
+    command: >
+      redis-server 
+      --notify-keyspace-events Ex 
+      --maxmemory-policy allkeys-lru 
+      --timeout 0 
+      --tcp-keepalive 300
+      --appendonly no
+    # Health check for Redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    ## Uncomment for persistence if needed
     # volumes:
     #  - redis-data:/data
     # command: [ "redis-server", "--appendonly", "yes" ]
-    networks:
-      - dsx-network
 
-  # for testing/demos/POVs, you can send all scan results to syslog, in this configuration to a local syslog on the filesystem
-  # within the syslog container at /var/log/messages (which can be accessed when the container is running via:
-  #   docker exec -it <syslog container name or id>
-  # Syslog messages can also be written to the host device by configuring the volume mapping.  First, create a directory
-  # to map and give it open permissions (again, testing only):
-  #   sudo mkdir -p /var/log/dsx-syslog
-  #   sudo chmod 777 /var/log/dsx-syslog
-  # and then add the mapping:
-  #   volumes:
-  #     - /var/log/dsx-syslog:/var/log
-  #
+#  # Optional: Add nginx reverse proxy for SSE (recommended for production)
+#  nginx:
+#    image: nginx:alpine
+#    ports:
+#      - "80:80"
+#    volumes:
+#      - ./nginx-sse.conf:/etc/nginx/nginx.conf:ro
+#    depends_on:
+#      dsx_connect_api:
+#        condition: service_healthy
+#    networks:
+#      - dsx-network
+#    restart: unless-stopped
+#    # Only include if you create the nginx-sse.conf file
+
   syslog:
     image: balabit/syslog-ng:latest
-#    volumes:
-#      - /var/log:/var/log
     networks:
       - dsx-network
+    restart: unless-stopped
+#    volumes:
+#      - /var/log:/var/log
 
-# The following assumes an already created docker network like this:
-# docker network create dsx-connect-network --driver bridge
 networks:
   dsx-network:
     external: true
-    name: dsx-connect-network  # change this to an existing docker network
+    name: dsx-connect-network
+
+# Uncomment if using Redis persistence
+# volumes:
+#   redis-data:
+
+
+#x-common-env: &common-env
+#  DSXCONNECTOR_API_KEY: api-key-NOT-FOR-PRODUCTION
+#  DSXCONNECT_TASKQUEUE__BROKER: "redis://redis:6379/0"
+#  DSXCONNECT_TASKQUEUE__BACKEND: "redis://redis:6379/0"
+#  DSXCONNECT_DATABASE__TYPE: tinydb
+#  DSXCONNECT_DATABASE__LOC: /app/data/dsx-connect.db.json
+#  DSXCONNECT_DATABASE__RETAIN: 100
+#  DSXCONNECT_DATABASE__SCAN_STATS_DB: /app/data/scan-stats.db.json
+#  PYTHONUNBUFFERED: 1
+#
+#services:
+#  dsx_connect_api:
+#    image: logangilbert/dsx-connect:__VERSION__
+#    #build:
+#    #  context: .
+#    #  dockerfile: Dockerfile
+#    ports:
+#      - "8586:8586"
+#    environment:
+#      <<: *common-env
+#      DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
+#      LOG_LEVEL: debug
+#    depends_on:
+#      - redis
+#    networks:
+#      dsx-network:
+#        aliases:
+#          - dsx-connect-api # this is the name connectors will use to connect to the dsx_connect_core service API on the dsx-connect-network docker network
+#    command: uvicorn dsx_connect.app.dsx_connect_api:app --host 0.0.0.0 --port 8586
+#
+#  dsx_connect_worker_scan:
+#    image: logangilbert/dsx-connect:__VERSION__
+#    environment:
+#      <<: *common-env
+#      DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
+#      LOG_LEVEL: debug
+#    depends_on:
+#      - redis
+#    networks:
+#      - dsx-network
+#    command: celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q scan_request_queue --concurrency=2
+#
+#  dsx_connect_worker_verdict:
+#    image: logangilbert/dsx-connect:__VERSION__
+#    environment:
+#      <<: *common-env
+#      LOG_LEVEL: debug
+#    depends_on:
+#      - redis
+#    networks:
+#      - dsx-network
+#    command: celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q verdict_action_queue --concurrency=1
+#
+#  dsx_connect_worker_results:
+#    image: logangilbert/dsx-connect:__VERSION__
+#    environment:
+#      <<: *common-env
+#      LOG_LEVEL: debug
+#      DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL: syslog
+#      DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT: 514
+#      DSXCONNECT_FRONTEND__URL: "http://dsx-connect-api:8586"
+#    depends_on:
+#      - redis
+#      - syslog
+#    networks:
+#      - dsx-network
+#    command: celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q scan_result_queue --concurrency=1
+#
+#  redis:
+#    image: redis:7-alpine
+#    ## add for persistence
+#    # volumes:
+#    #  - redis-data:/data
+#    # command: [ "redis-server", "--appendonly", "yes" ]
+#    networks:
+#      - dsx-network
+#
+#  # for testing/demos/POVs, you can send all scan results to syslog, in this configuration to a local syslog on the filesystem
+#  # within the syslog container at /var/log/messages (which can be accessed when the container is running via:
+#  #   docker exec -it <syslog container name or id>
+#  # Syslog messages can also be written to the host device by configuring the volume mapping.  First, create a directory
+#  # to map and give it open permissions (again, testing only):
+#  #   sudo mkdir -p /var/log/dsx-syslog
+#  #   sudo chmod 777 /var/log/dsx-syslog
+#  # and then add the mapping:
+#  #   volumes:
+#  #     - /var/log/dsx-syslog:/var/log
+#  #
+#  syslog:
+#    image: balabit/syslog-ng:latest
+##    volumes:
+##      - /var/log:/var/log
+#    networks:
+#      - dsx-network
+#
+## The following assumes an already created docker network like this:
+## docker network create dsx-connect-network --driver bridge
+#networks:
+#  dsx-network:
+#    external: true
+#    name: dsx-connect-network  # change this to an existing docker network

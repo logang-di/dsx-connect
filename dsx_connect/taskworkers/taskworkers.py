@@ -25,24 +25,20 @@ Dependencies:
     - celery: For task queue management.
     - dsx_connect: Internal models, config, and client utilities.
 """
-import asyncio
 import io
 import json
-import threading
 import unicodedata
 from io import BytesIO
 from typing import Dict, Optional
 
 import httpx
 import pyzipper
-import redis
 from celery.signals import worker_process_init
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
 from dsx_connect.database.scan_stats_worker import ScanStatsWorker
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum, DPAVerdictModel2
-from dsx_connect.models import constants
 from dsx_connect.models.constants import ConnectorEndpoints
 from dsx_connect.database.scan_results_base_db import ScanResultsBaseDB
 from dsx_connect.database.scan_stats_base_db import ScanStatsBaseDB
@@ -50,11 +46,12 @@ from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from dsx_connect.models.scan_models import ScanResultModel, ScanResultStatusEnum, ScanStatsModel
-from dsx_connect.connector_utils.connector_client import get_connector_client, get_async_connector_client
+from dsx_connect.connector_utils.connector_client import get_connector_client
 from dsx_connect.taskqueue.celery_app import celery_app
 from dsx_connect.config import DatabaseConfig, ConfigDatabaseType
 from dsx_connect.utils.logging import dsx_logging
 from dsx_connect.config import ConfigManager
+from dsx_connect.utils.redis_manager import redis_manager
 
 # Shared client pools and scan client per worker process
 # _connector_clients: Dict[str, httpx.Client] = {}
@@ -148,14 +145,12 @@ def scan_request_task(scan_request_dict: dict) -> dict:
 
     # 2. Fetch file content from connector
     try:
-        async def _fetch():
-            client = await get_async_connector_client(scan_request.connector_url)
-            response = await client.post(
-                f'{scan_request.connector_url}{ConnectorEndpoints.READ_FILE}',
-                json=jsonable_encoder(scan_request))
-            response.raise_for_status()
-            return response.content
-        bytes_content = BytesIO(asyncio.run(_fetch()))
+        client = get_connector_client(scan_request.connector_url)
+        response = client.post(
+            f'{scan_request.connector_url}{ConnectorEndpoints.READ_FILE}',
+            json=jsonable_encoder(scan_request))
+        response.raise_for_status()
+        bytes_content = BytesIO(response.content)
         bytes_content.seek(0)
         dsx_logging.debug(f"Received {bytes_content.getbuffer().nbytes} bytes")
     except httpx.HTTPError as e:
@@ -183,16 +178,12 @@ def scan_request_task(scan_request_dict: dict) -> dict:
         if task_id:
             metadata_info += f",task-id:{task_id}"
 
-        async def _scan():
-            dpa_verdict = await dsxa_client.scan_binary_async(
-                scan_request=DSXAScanRequest(
-                    binary_data=bytes_content,
-                    metadata_info=metadata_info
-                )
+        dpa_verdict = dsxa_client.scan_binary(
+            scan_request=DSXAScanRequest(
+                binary_data=bytes_content,
+                metadata_info=metadata_info
             )
-            return dpa_verdict
-        dpa_verdict = asyncio.run(_scan())
-
+        )
         dsx_logging.debug(f"Verdict: {dpa_verdict.verdict}")
     except Exception as e:
         dsx_logging.error(f"Scan failed: {e}", exc_info=True)
@@ -443,16 +434,32 @@ def scan_result_task(scan_request_dict: dict, verdict_dict: dict, item_action_di
     )
 
     # 3. Queue scan result to notification queue
+    # RIGHT BEFORE queuing notification task, add this:
+    dsx_logging.info(f"[DEBUG] About to queue notification task")
+    dsx_logging.info(f"[DEBUG] Notification task name: {config.taskqueue.scan_result_notification_task}")
+    dsx_logging.info(f"[DEBUG] Notification queue name: {config.taskqueue.scan_result_notification_queue}")
+
+    # 3. Queue scan result to notification queue
     try:
-        celery_app.send_task(
+        task = celery_app.send_task(
             name=config.taskqueue.scan_result_notification_task,
             queue=config.taskqueue.scan_result_notification_queue,
             args=[scan_result.model_dump()]
         )
         dsx_logging.debug("[SSE Notification] Scan result notification queued successfully.")
     except Exception as e:
-        dsx_logging.error(f"[SSE Notification] Failed to queue scan result: {e}", exc_info=True)
+        dsx_logging.error(f"[DEBUG] Failed to queue scan result notification: {e}", exc_info=True)
 
+    # try:
+    #     celery_app.send_task(
+    #         name=config.taskqueue.scan_result_notification_task,
+    #         queue=config.taskqueue.scan_result_notification_queue,
+    #         args=[scan_result.model_dump()]
+    #     )
+    #     dsx_logging.debug("[SSE Notification] Scan result notification queued successfully.")
+    # except Exception as e:
+    #     dsx_logging.error(f"[SSE Notification] Failed to queue scan result: {e}", exc_info=True)
+    #
     # 4. All done, return success to... somewhere...
     return StatusResponse(
         status=StatusResponseEnum.SUCCESS,
@@ -461,18 +468,28 @@ def scan_result_task(scan_request_dict: dict, verdict_dict: dict, item_action_di
     ).model_dump()
 
 
+# @celery_app.task(name=config.taskqueue.scan_result_notification_task)
+# def scan_result_notify_task(scan_result_dict: dict):
+#     """
+#     Receives scan result dict and forwards it to the FastAPI app via redis pubsub.
+#     """
+#     try:
+#         scan_result = ScanResultModel.model_validate(scan_result_dict)
+#         r = redis.Redis.from_url(config.redis_url)
+#         r.publish("scan_results", json.dumps(jsonable_encoder(scan_result)))
+#         dsx_logging.debug(f"[SSE Notify] Published scan result {scan_result} to Redis channel.")
+#     except Exception as e:
+#         dsx_logging.error(f"[SSE Notify] Failed to publish to Redis: {e}", exc_info=True)
+
+
 @celery_app.task(name=config.taskqueue.scan_result_notification_task)
 def scan_result_notify_task(scan_result_dict: dict):
-    """
-    Receives scan result dict and forwards it to the FastAPI app via redis pubsub.
-    """
     try:
         scan_result = ScanResultModel.model_validate(scan_result_dict)
-        r = redis.Redis.from_url(config.taskqueue.broker)
-        r.publish("scan_results", json.dumps(jsonable_encoder(scan_result)))
-        dsx_logging.debug(f"[SSE Notify] Published scan result {scan_result} to Redis channel.")
+        subscriber_count = redis_manager.publish_scan_result(jsonable_encoder(scan_result))
+        dsx_logging.info(f"Published to scan result {scan_result} to {subscriber_count} subscribers")
     except Exception as e:
-        dsx_logging.error(f"[SSE Notify] Failed to publish to Redis: {e}", exc_info=True)
+        dsx_logging.error(f"Failed to publish: {e}")
 
 
 @celery_app.task(name=config.taskqueue.encrypted_file_task)

@@ -79,7 +79,7 @@ async def register_connector(conn: ConnectorInstanceModel, request: Request):
                               description="")
 
     registry.append(conn)
-    await register_or_refresh_connector_from_redis(conn)
+    register_or_refresh_connector_from_redis(conn)
 
     return StatusResponse(status=StatusResponseEnum.SUCCESS,
                           message="Registration succeeded",
@@ -95,7 +95,7 @@ async def unregister_connector(
 ):
     registry: List[ConnectorInstanceModel] = request.app.state.connectors
     request.app.state.connectors = [c for c in registry if c.uuid != connector_uuid]
-    await unregister_connector_from_redis(connector_uuid)
+    unregister_connector_from_redis(connector_uuid)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

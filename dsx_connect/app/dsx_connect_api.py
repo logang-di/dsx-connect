@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from contextlib import asynccontextmanager
 
 from typing import List
@@ -42,15 +43,45 @@ async def lifespan(app: FastAPI):
     dsx_logging.info("dsx-connect startup completed.")
 
     app.state.connectors: List[ConnectorInstanceModel] = []
-    app.state.heartbeat_task = asyncio.create_task(heartbeat_all_connectors(app))
 
-    # inside an async context (e.g., in lifespan)
-    app.state.redis = Redis.from_url(config.redis_url)
+    # Run heartbeat in a separate thread
+    def run_heartbeat():
+        heartbeat_all_connectors(app)
+
+    heartbeat_thread = threading.Thread(target=run_heartbeat, daemon=True)
+    heartbeat_thread.start()
+    app.state.heartbeat_thread = heartbeat_thread
+
+    # Async Redis for SSE subscriptions
+    app.state.redis = Redis.from_url(
+        config.redis_url,
+        socket_connect_timeout=5,
+        socket_keepalive=True,
+        decode_responses=False
+    )
+
+    try:
+        await app.state.redis.ping()
+        dsx_logging.info("Redis connection established successfully")
+    except Exception as e:
+        dsx_logging.error(f"Failed to connect to Redis: {e}")
+        raise
+
+    # Test Redis connection on startup
+    try:
+        await app.state.redis.ping()
+        dsx_logging.info("Redis connection established successfully")
+    except Exception as e:
+        dsx_logging.error(f"Failed to connect to Redis: {e}")
+        raise
 
     yield
 
-    app.state.heartbeat_task.cancel()
-    await app.state.redis.close()
+    try:
+        await app.state.redis.close()
+        dsx_logging.info("Redis connection closed")
+    except Exception as e:
+        dsx_logging.error(f"Error closing Redis connection: {e}")
 
     dsx_logging.info("dsx-connect shutdown completed.")
 
@@ -103,42 +134,198 @@ async def get_dsxa_test_connection():
     return response
 
 
-async def notification_stream():
-    pubsub = app.state.redis.pubsub()
-    await pubsub.subscribe("scan_results")
-    # This loops to see if messages are ready to notify clients...
-    # if no messages coming in on successive loops, start sleeping a little longer, just
-    # so we aren't looping unnecessarily 10 times a second
-    sleep_duration = 0.1
-    while True:
-        msg = await pubsub.get_message(ignore_subscribe_messages=True)
-        if msg and msg["type"] == "message":
-            event = json.loads(msg["data"])
-            yield f"data: {json.dumps(event)}\n\n"
-            sleep_duration = 0.01  # reset after receiving
-        else:
-            sleep_duration = min(sleep_duration * 2, 1.0)  # back off up to 1s
-        await asyncio.sleep(sleep_duration)
-
 @app.get(DSXConnectAPIEndpoints.NOTIFICATIONS_SCAN_RESULT)
-async def get_notification_scan_result():
-    return StreamingResponse(notification_stream(), media_type="text/event-stream")
+async def get_notification_scan_result(request: Request):
+    async def safe_notification_stream():
+        pubsub = None
+        try:
+            dsx_logging.debug("Starting scan results SSE stream")
+            pubsub = app.state.redis.pubsub()
+            await pubsub.subscribe("scan_results")
+
+            # Send initial connection message
+            yield f"data: {json.dumps({'type': 'connected', 'message': 'SSE stream started'})}\n\n"
+
+            sleep_duration = 0.1
+            heartbeat_counter = 0
+
+            while True:
+                # CRITICAL: Check if client disconnected - prevents chunked encoding errors
+                if await request.is_disconnected():
+                    dsx_logging.debug("Client disconnected from scan results SSE")
+                    break
+
+                try:
+                    msg = await asyncio.wait_for(
+                        pubsub.get_message(ignore_subscribe_messages=True),
+                        timeout=1.0
+                    )
+
+                    if msg and msg["type"] == "message":
+                        dsx_logging.debug(f"Received message from pubsub {msg}")
+                        event = json.loads(msg["data"])
+                        yield f"data: {json.dumps(event)}\n\n"
+                        sleep_duration = 0.01
+                        heartbeat_counter = 0
+                    else:
+                        sleep_duration = min(sleep_duration * 2, 2.0)
+                        heartbeat_counter += 1
+
+                        # Send heartbeat every 30 seconds to keep connection alive
+                        if heartbeat_counter >= 30:
+                            yield f"data: {json.dumps({'type': 'heartbeat', 'timestamp': asyncio.get_event_loop().time()})}\n\n"
+                            heartbeat_counter = 0
+
+                except asyncio.TimeoutError:
+                    # Send periodic heartbeat on timeout
+                    heartbeat_counter += 1
+                    if heartbeat_counter >= 10:  # Every 10 seconds during idle
+                        yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                        heartbeat_counter = 0
+
+                except Exception as e:
+                    dsx_logging.error(f"Error in scan results SSE stream: {e}")
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                    break
+
+                await asyncio.sleep(sleep_duration)
+
+        except Exception as e:
+            dsx_logging.error(f"Fatal error in scan results SSE: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Stream terminated due to error'})}\n\n"
+        finally:
+            # CRITICAL: Proper cleanup prevents 500 errors
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe("scan_results")
+                    await pubsub.close()
+                except Exception as e:
+                    dsx_logging.error(f"Error closing pubsub connection: {e}")
+
+    return StreamingResponse(
+        safe_notification_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Prevents nginx buffering
+        }
+    )
+
+# async def notification_stream():
+#     dsx_logging.debug(f"Starting connector registration pubsub")
+#     pubsub = app.state.redis.pubsub()
+#     await pubsub.subscribe("scan_results")
+#     # This loops to see if messages are ready to notify clients...
+#     # if no messages coming in on successive loops, start sleeping a little longer, just
+#     # so we aren't looping unnecessarily 10 times a second
+#     sleep_duration = 0.1
+#     while True:
+#         msg = await pubsub.get_message(ignore_subscribe_messages=True)
+#         if msg and msg["type"] == "message":
+#             dsx_logging.debug(f"Received message from pubsub {msg}")
+#             event = json.loads(msg["data"])
+#             yield f"data: {json.dumps(event)}\n\n"
+#             sleep_duration = 0.01  # reset after receiving
+#         else:
+#             sleep_duration = min(sleep_duration * 2, 2.0)  # back off up to 2s
+#         await asyncio.sleep(sleep_duration)
+#
+# @app.get(DSXConnectAPIEndpoints.NOTIFICATIONS_SCAN_RESULT)
+# async def get_notification_scan_result():
+#     return StreamingResponse(notification_stream(), media_type="text/event-stream")
 
 
 @app.get(DSXConnectAPIEndpoints.NOTIFICATIONS_CONNECTOR_REGISTERED)
-async def connector_registered_stream():
-    pubsub = app.state.redis.pubsub()
-    await pubsub.subscribe("connector_registered")
+async def connector_registered_stream(request: Request):
+    async def safe_connector_stream():
+        pubsub = None
+        try:
+            dsx_logging.debug("Starting connector registration SSE stream")
+            pubsub = app.state.redis.pubsub()
+            await pubsub.subscribe("connector_registered")
 
-    async def event_generator():
-        while True:
-            msg = await pubsub.get_message(ignore_subscribe_messages=True)
-            if msg and msg["type"] == "message":
-                event = json.loads(msg["data"])
-                yield f"data: {json.dumps(event)}\n\n"
-            await asyncio.sleep(1)
+            # Send initial connection message
+            yield f"data: {json.dumps({'type': 'connected', 'message': 'Connector SSE stream started'})}\n\n"
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+            heartbeat_counter = 0
+
+            while True:
+                # CRITICAL: Check if client disconnected
+                if await request.is_disconnected():
+                    dsx_logging.debug("Client disconnected from connector registration SSE")
+                    break
+
+                try:
+                    msg = await asyncio.wait_for(
+                        pubsub.get_message(ignore_subscribe_messages=True),
+                        timeout=1.0
+                    )
+
+                    if msg and msg["type"] == "message":
+                        dsx_logging.debug(f"Received connector message from pubsub {msg}")
+                        event = json.loads(msg["data"])
+                        yield f"data: {json.dumps(event)}\n\n"
+                        heartbeat_counter = 0
+                    else:
+                        heartbeat_counter += 1
+                        # Send heartbeat every 30 seconds
+                        if heartbeat_counter >= 30:
+                            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                            heartbeat_counter = 0
+
+                except asyncio.TimeoutError:
+                    heartbeat_counter += 1
+                    if heartbeat_counter >= 10:  # Every 10 seconds during idle
+                        yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                        heartbeat_counter = 0
+
+                except Exception as e:
+                    dsx_logging.error(f"Error in connector registration SSE stream: {e}")
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                    break
+
+                await asyncio.sleep(1)
+
+        except Exception as e:
+            dsx_logging.error(f"Fatal error in connector registration SSE: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Stream terminated due to error'})}\n\n"
+        finally:
+            # CRITICAL: Proper cleanup
+            if pubsub:
+                try:
+                    await pubsub.unsubscribe("connector_registered")
+                    await pubsub.close()
+                except Exception as e:
+                    dsx_logging.error(f"Error closing pubsub connection: {e}")
+
+    return StreamingResponse(
+        safe_connector_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+#
+# @app.get(DSXConnectAPIEndpoints.NOTIFICATIONS_CONNECTOR_REGISTERED)
+# async def connector_registered_stream():
+#     dsx_logging.debug(f"Starting connector registration pubsub")
+#     pubsub = app.state.redis.pubsub()
+#     await pubsub.subscribe("connector_registered")
+#
+#     async def event_generator():
+#         while True:
+#             msg = await pubsub.get_message(ignore_subscribe_messages=True)
+#             if msg and msg["type"] == "message":
+#                 dsx_logging.debug(f"Received message from pubsub {msg}")
+#                 event = json.loads(msg["data"])
+#                 yield f"data: {json.dumps(event)}\n\n"
+#             await asyncio.sleep(1)
+#
+#     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 # Main entry point to start the FastAPI app
 if __name__ == "__main__":
