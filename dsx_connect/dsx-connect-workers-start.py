@@ -1,5 +1,5 @@
-from dsx_connect.utils.logging import dsx_logging
-from dsx_connect.taskqueue.celery_app import celery_app
+from dsx_connect.utils.app_logging import dsx_logging
+from dsx_connect.celery_app.celery_app import celery_app
 from dsx_connect.taskworkers.taskworkers import init_worker
 from dsx_connect.config import ConfigManager
 
@@ -22,8 +22,8 @@ if __name__ == "__main__":
     dsx_logging.info("Starting Celery worker for debugging...")
     celery_app.worker_main([
         "worker",
-        "--loglevel=info",
+        "--loglevel=warning",
         "--pool=solo",  # <== allows for running in debugging mode.
-        f"--queues={config.taskqueue.scan_request_queue},{config.taskqueue.verdict_action_queue},{config.taskqueue.scan_result_queue},{config.taskqueue.scan_result_notification_queue}",  #,{config.taskqueue.encrypted_file_queue}
+        f"--queues={config.taskqueue.scan_request_queue},{config.taskqueue.verdict_action_queue},{config.taskqueue.scan_result_queue},{config.taskqueue.scan_result_notification_queue}",  #,{config.celery_app.encrypted_file_queue}
         "--concurrency=1"
     ])

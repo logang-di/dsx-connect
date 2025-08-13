@@ -5,6 +5,8 @@ from pydantic_settings import BaseSettings
 
 from connectors.framework.base_config import BaseConnectorConfig
 from dsx_connect.models.connector_models import ItemActionEnum
+# from dsx_connect.utils.file_ops import _tokenize_filter
+from dsx_connect.utils.app_logging import dsx_logging
 
 
 class FilesystemConnectorConfig(BaseConnectorConfig):
@@ -30,15 +32,29 @@ class FilesystemConnectorConfig(BaseConnectorConfig):
     item_action: ItemActionEnum = ItemActionEnum.NOTHING
     item_action_move_metainfo: str = "dsxconnect-quarantine"
 
-    ## Config settings specific to this Connector
-    asset: str = Field("/Users/logangilbert/Documents/SAMPLES/PDFs",
+    asset: str = Field("/Users/logangilbert/Documents/SAMPLES",
                        description="Directory to scan for files")
-    filter: str = ""
-    recursive: bool = Field(default=True, description="If True, scan subdirectories recursively")
+    filter: str = "test/2025*/*"
+
+    # DEPRECATED
+    recursive: bool = Field(default=True, description="DEPRECATED")
     test_mode: bool = False
 
-    scan_existing: bool = Field(default=False, description="If True, scan existing files in location on startup")
+    ## Config settings specific to this Connector
     monitor: bool = False # if true, Connector will monitor location for new or modified files.
+
+    # @field_validator("filter")
+    # @classmethod
+    # def validate_filter(cls, v: str) -> str:
+    #     # cheap sanity (e.g., no unbalanced quotes, etc.)
+    #     # or even call _tokenize_filter(v) here to ensure it parses
+    #     try:
+    #         _tokenize_filter(v)
+    #         return v
+    #     except Exception as e:
+    #         # log a warning and return empty (scan all)
+    #         dsx_logging.warning(f"Ignoring malformed filter '{v}': {e}")
+    #         return ""
 
     class Config:
         env_prefix = "DSXCONNECTOR_"

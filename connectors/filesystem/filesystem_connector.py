@@ -10,7 +10,7 @@ from dsx_connect.utils import file_ops
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, \
     ConnectorStatusEnum
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from dsx_connect.utils.streaming import stream_blob
 from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback, ScanFolderModel
@@ -80,9 +80,12 @@ async def shutdown_event():
 
 @connector.full_scan
 async def full_scan_handler() -> StatusResponse:
-    dsx_logging.debug(f'Scanning files at: {config.asset}')
-
-    async for file_path in file_ops.get_filepaths_async(pathlib.Path(config.asset), config.recursive):
+    dsx_logging.debug(
+        f"Scanning files at: {config.asset} (recursive={config.recursive}, filter='{config.filter}')"
+    )
+    async for file_path in file_ops.get_filepaths_async(
+            pathlib.Path(config.asset),
+            config.filter):
         status_response = await connector.scan_file_request(
             ScanRequestModel(location=str(file_path), metainfo=file_path.name))
         dsx_logging.debug(f'Sent scan request for {file_path}, result: {status_response}')

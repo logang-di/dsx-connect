@@ -14,7 +14,11 @@ class DSXConnectAPIEndpoints:
     UNREGISTER_CONNECTORS = "/dsx-connect/connectors/unregister/{connector_uuid}"
     INVOKE_FULLSCAN_CONNECTOR = "/dsx-connect/connectors/full_scan/{connector_uuid}"
     INVOKE_CONFIG_CONNECTOR = "/dsx-connect/connectors/config/{connector_uuid}"
-
+    ADMIN_DEAD_LETTER_QUEUE_PREFIX = "/dsx-connect/admin/dead-letter"
+    # ADMIN_DEAD_LETTER_QUEUE_STATS = "/stats"
+    # ADMIN_DEAD_LETTER_QUEUE_REQUEUE = "/requeue"
+    # ADMIN_DEAD_LETTER_QUEUE_CLEANUP = "/cleanup"
+    # ADMIN_DEAD_LETTER_QUEUE_CLEAR = "/clear"
 
 class ConnectorEndpoints:
     READ_FILE = "/read_file"

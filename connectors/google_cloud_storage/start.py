@@ -1,6 +1,6 @@
 import typer
 import uvicorn
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 
 # Ensure connector is registered via decorators
 import connectors.google_cloud_storage.google_cloud_storage_connector  # noqa: F401

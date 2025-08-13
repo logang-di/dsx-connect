@@ -22,18 +22,19 @@ from starlette.responses import FileResponse, StreamingResponse
 from dsx_connect.config import ConfigManager
 from dsx_connect.models.connector_models import ConnectorInstanceModel
 
-from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
+from dsx_connect.common.endpoint_names import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.dsxa_client.dsxa_client import DSXAClient
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 from dsx_connect.models.scan_models import ScanResultModel
-from dsx_connect.taskqueue.celery_app import celery_app
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.celery_app.celery_app import celery_app
+from dsx_connect.utils.app_logging import dsx_logging
 
 from dsx_connect.app.dependencies import static_path
-from dsx_connect.app.routers import scan_request, scan_request_test, scan_results, connectors
+from dsx_connect.app.routers import scan_request, scan_request_test, scan_results, connectors, dead_letter
 from dsx_connect.connector_utils import connector_client
 from dsx_connect.connector_utils.connector_heartbeat import heartbeat_all_connectors
 from dsx_connect import version
+from dsx_connect.utils.redis_manager import RedisChannelNames
 
 
 @asynccontextmanager
@@ -101,6 +102,7 @@ app.include_router(scan_request_test.router, tags=["test"])
 app.include_router(scan_request.router, tags=["scan"])
 app.include_router(scan_results.router, tags=["results"])
 app.include_router(connectors.router, tags=["connectors"])
+app.include_router(dead_letter.router)
 
 
 @app.get("/")
@@ -141,7 +143,7 @@ async def get_notification_scan_result(request: Request):
         try:
             dsx_logging.debug("Starting scan results SSE stream")
             pubsub = app.state.redis.pubsub()
-            await pubsub.subscribe("scan_results")
+            await pubsub.subscribe(RedisChannelNames.SCAN_RESULTS)
 
             # Send initial connection message
             yield f"data: {json.dumps({'type': 'connected', 'message': 'SSE stream started'})}\n\n"
@@ -243,7 +245,7 @@ async def connector_registered_stream(request: Request):
         try:
             dsx_logging.debug("Starting connector registration SSE stream")
             pubsub = app.state.redis.pubsub()
-            await pubsub.subscribe("connector_registered")
+            await pubsub.subscribe(RedisChannelNames.CONNECTOR_REGISTERED)
 
             # Send initial connection message
             yield f"data: {json.dumps({'type': 'connected', 'message': 'Connector SSE stream started'})}\n\n"

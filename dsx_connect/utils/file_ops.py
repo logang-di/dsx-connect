@@ -1,209 +1,565 @@
+from __future__ import annotations
+
 import asyncio
+import fnmatch
 import hashlib
 import io
-import logging
-import pathlib
-import re
-import shutil
 import os
-
-import aiofiles
-from pathlib import Path
-
-
-def calculate_sha256_from_bytes(data):
-    sha256_hash = hashlib.sha256(data.encode('utf-8'))
-    return sha256_hash.hexdigest()
+import shutil
+import shlex
+from pathlib import Path, PurePosixPath
+from typing import AsyncGenerator, Iterable, Iterator, List, Optional, Set, Tuple
 
 
-def calculate_sha256_from_bytesio(file_obj: io.BytesIO, chunk_size=8192):
-    sha256_hash = hashlib.sha256()
-    # Read the file in chunks so it can handle big files as well
-    for byte_block in iter(lambda: file_obj.read(chunk_size), b""):
-        sha256_hash.update(byte_block)
+# =========================
+# Basic file helpers (kept)
+# =========================
 
-    return sha256_hash.hexdigest()
-
-
-def calculate_sha256(filename, chunk_size=8192):
-    sha256_hash = hashlib.sha256()
-    with open(filename, 'rb') as f:
-        for chunk in iter(lambda: f.read(chunk_size), b''):
-            sha256_hash.update(chunk)
-    return sha256_hash.hexdigest()
+def calculate_sha256_from_bytes(data: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(data)
+    return h.hexdigest()
 
 
-def copy_file(source_file, dest_file):
-    source_path = Path(source_file).resolve()
-    destination_path = Path(dest_file).resolve()
-    pathlib.Path(destination_path.parent).mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, dest_file)
+def calculate_sha256_from_bytesio(file_obj: io.BytesIO, chunk_size: int = 8192) -> str:
+    file_obj.seek(0)
+    h = hashlib.sha256()
+    while True:
+        chunk = file_obj.read(chunk_size)
+        if not chunk:
+            break
+        h.update(chunk)
+    file_obj.seek(0)
+    return h.hexdigest()
 
 
-def copy_files_recursively(source_dir, destination_dir, file_exclusions=None, folder_exclusions=None):
+def calculate_sha256(filename: str | os.PathLike, chunk_size: int = 8192) -> str:
+    h = hashlib.sha256()
+    with open(filename, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def copy_file(source_file: str | os.PathLike, dest_file: str | os.PathLike) -> None:
+    dest_dir = os.path.dirname(str(dest_file))
+    if dest_dir:
+        os.makedirs(dest_dir, exist_ok=True)
+    shutil.copy2(source_file, dest_file)
+
+
+def copy_files_recursively(
+        source_dir: str | os.PathLike,
+        destination_dir: str | os.PathLike,
+        file_exclusions: Optional[Iterable[str]] = None,
+) -> None:
     """
-    Args:
-        source_dir (str): The path to the source directory.
-        destination_dir (str): The path to the destination directory.
-        file_exclusions (list, optional): A list of filenames to exclude from copying. Defaults to None.
-        folder_exclusions (list, optional): A list of folder names to exclude from copying. Defaults to None.
-
+    Copy tree from source_dir to destination_dir, skipping files matching any of the
+    fnmatch-style patterns in file_exclusions.
     """
-    source_path = Path(source_dir).resolve()
-    destination_path = Path(destination_dir).resolve()
+    src = Path(source_dir)
+    dst = Path(destination_dir)
+    patterns = tuple(file_exclusions or ())
 
-    for item_path in source_path.rglob('*'):
-        if item_path.is_file():
-            if str(item_path.name) in file_exclusions:
+    for root, subdirs, files in os.walk(src):
+        root_p = Path(root)
+        rel = root_p.relative_to(src)
+        target_root = dst / rel
+
+        for name in files:
+            rel_file_posix = (rel / name).as_posix()
+            if any(fnmatch.fnmatch(rel_file_posix, pat) for pat in patterns):
                 continue
-            relative_path = item_path.relative_to(source_path)
-            if folder_exclusions and str(relative_path.parts[0]) in folder_exclusions:
-                continue
-            destination_file = destination_path / relative_path
-            destination_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item_path, destination_file)
+            target_root.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(root_p / name, target_root / name)
 
-async def read_file_async(filename, chunk_size=-1) -> io.BytesIO:
+
+async def read_file_async(filename: str | os.PathLike, chunk_size: int = -1) -> io.BytesIO:
     """
-    Reads file using aiofiles, if chunk file_sizes specified, will break up reading file into chunks
+    Asynchronously read a file into BytesIO. Uses a thread so the event loop isn't blocked.
     """
-    async with aiofiles.open(filename, mode='rb') as f:
-        byte_io = io.BytesIO()
-        if chunk_size == -1:
-            try:
-                content = await f.read()
-                byte_io.write(content)
-            except UnicodeDecodeError as e:
-                logging.error(f'Could not read file: {filename} Unicode issue {e}')
+    data = await asyncio.to_thread(_read_file_blocking, Path(filename), chunk_size)
+    return data
+
+
+def _read_file_blocking(filepath: Path, chunk_size: int = -1) -> io.BytesIO:
+    b = io.BytesIO()
+    with open(filepath, "rb") as f:
+        if chunk_size and chunk_size > 0:
+            for chunk in iter(lambda: f.read(chunk_size), b""):
+                b.write(chunk)
         else:
-            content = b''
-            while True:
-                chunk = await f.read(chunk_size)
-                if not chunk:
-                    break  # End of file
-                byte_io.write(chunk)
-        byte_io.seek(0)
-        return byte_io
+            b.write(f.read())
+    b.seek(0)
+    return b
 
 
-def read_file(filepath: pathlib.Path, chunk_size=-1) -> io.BytesIO:
-    with filepath.open(mode='rb') as f:
-        byte_io = io.BytesIO()
-        if chunk_size == -1:
-            try:
-                content = f.read()
-                byte_io.write(content)
-            except UnicodeDecodeError as e:
-                logging.error(f'Could not read file: {f} Unicode issue {e}')
+def read_file(filepath: Path, chunk_size: int = -1) -> io.BytesIO:
+    return _read_file_blocking(filepath, chunk_size)
+
+
+def validate_filepath(path: Path) -> bool:
+    """
+    Basic path sanity: exists, readable, not a broken symlink.
+    """
+    try:
+        return path.exists() and os.access(path, os.R_OK)
+    except Exception:
+        return False
+
+
+# =======================================
+# Include/Exclude parsing (rsync/find-ish)
+# =======================================
+
+_GLOB_CHARS = set("*?[]")
+
+def _has_glob(s: str) -> bool:
+    return any(c in s for c in _GLOB_CHARS)
+
+def _split_tokens(filter_str: str) -> List[str]:
+    # Shell-style tokenization: quotes/backslashes preserve spaces.
+    return shlex.split(filter_str or "", posix=True)
+
+
+def _expand_exclude_directive(tokens: List[str]) -> List[str]:
+    out, i = [], 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t in ("--exclude", "--include"):
+            if i + 1 < len(tokens):
+                out.append(("-" if t == "--exclude" else "") + tokens[i+1])
+                i += 2
+            else:
+                i += 1
+        elif t.startswith("--exclude=") or t.startswith("--include="):
+            k, v = t.split("=", 1)
+            out.append(("-" if k == "--exclude" else "") + v)
+            i += 1
         else:
-            content = b''
-            while True:
-                chunk = f.read(chunk_size)
-                if not chunk:
-                    break  # End of file
-                byte_io.write(chunk)
-        byte_io.seek(0)
-    return byte_io
+            out.append(t)
+            i += 1
+    return out
 
-def validate_filepath(path: Path):
+
+def _normalize_include_token(tok: str) -> Tuple[str, ...]:
     """
-    Check for existence of a file path, and if it does not exist, throws a ValueError highlighting which part of the
-    file path fails.
-    Args:
-        path: a file path
-
-    Returns: True if exists, else a ValueError exception
-
+    - "" or "." handled by caller as include-all.
+    - "*" → special: top-level only (handled later).
+    - Bare token like 'PDF' → keep literal; treated as base/'PDF' subtree by _expand_includes.
+    - 'sub1/*' → keep literal (direct children).
+    - Any glob/path (e.g., '**/*.pdf') → keep literal.
+    - Comma list like '*.pdf,*.docx' → split by caller before calling this.
     """
-    if path.exists():
-        return True
-    # something in this path ain't right, let's figure out what...
-    # Loop through each part of the folder name
-    test_path = Path('')
-    for part in path.parts:
-        if part == '~':
-            part = Path.home()
-        parent_path = test_path
-        test_path = test_path / part
-        if not test_path.exists():
-            folders = [str(folder.name) for folder in Path(parent_path).iterdir() if folder.is_dir()]
-            raise ValueError(
-                f'Filepath [{str(test_path)}] fails at [{part}]. The list of possible subdirectories under [{parent_path}] include: {folders}')
+    tok = tok.strip().strip("+")
+    if tok in ("", "."):
+        return ()
+    if tok == "*":
+        return ("*",)
+    return (tok,)
 
-    return True
+def _normalize_exclude_token(tok: str) -> Tuple[str, ...]:
+    tok = tok.strip().lstrip("-")
+    if not tok:
+        return ()
+    if _has_glob(tok) or "/" in tok:
+        return (tok,)
+    # bare name → any subtree named tok
+    return (tok, f"{tok}/**")
+
+def _expand_rsync_dirs(includes: Tuple[str, ...]) -> Tuple[str, ...]:
+    out: list[str] = []
+    for tok in includes:
+        # dir-only (rsync semantics): "foo/" → include all files under it
+        if tok.endswith("/") and not tok.endswith("/**") and not tok.endswith("/**/*"):
+            root = tok[:-1]
+            out.append(root + "/**/*")
+        # "foo/**" (rsync): should include files too → make it files-recursive
+        elif tok.endswith("/**") and not tok.endswith("/**/*"):
+            root = tok[:-3]
+            out.extend([root + "/*", root + "/**/*"])  # immediate + deep files
+        else:
+            out.append(tok)
+    return tuple(out)
 
 
-def get_filepaths(path: Path, recursive=True) -> list[Path]:
+def parse_filter_spec(filter_str: str) -> Tuple[Tuple[str, ...], Tuple[str, ...], bool, bool]:
     """
-    Given a folder/directory path, return all files paths within this folder, e.g.:
-    get_filepaths(Path('c:/users/user/documents'), True)
-    will return full file paths to all files contained in 'c:/users/user/documents' and files in subdirectories
-    Args:
-        path: a folder/directory as a pathlib.Path  if the path is just a file, the file_path for that file will be returned
-        recursive:
+    Parse filter string into (includes, excludes, include_all, top_level_only)
 
-    Returns: a list of pathlib.Path
-
+    Semantics:
+      ""                → include_all=True (scan everything recursively)
+      "*"               → top-level files only (no recursion)
+      "sub1"            → recurse under base/'sub1'
+      "sub1/*"          → direct children of base/'sub1' only
+      "*.pdf,*.docx"    → file types anywhere (union)
+      "-tmp --exclude cache" → exclude subtrees 'tmp', 'cache' while including everything else
+      "reports exports -tmp" → only under 'reports' or 'exports', minus 'tmp'
     """
-    if str(path).startswith('~'):
-        path = path.expanduser()
+    raw_tokens = _split_tokens(filter_str)
+    tokens = _expand_exclude_directive(raw_tokens)
 
-    if not path.exists():
-        return None
+    includes_acc: List[str] = []
+    excludes_acc: List[str] = []
 
-    files = []
-    if path.is_file():  # the file_path specified is just a file, so just add it to the list of scanned items
-        files.append(path)
-        return files
+    for raw in tokens:
+        if raw.startswith("-"):
+            excludes_acc.extend(_normalize_exclude_token(raw))
+        else:
+            includes_acc.extend(_normalize_include_token(raw))
 
-    if recursive:
-        files_and_folders = path.rglob("*")
-    else:
-        files_and_folders = path.glob("*")
+    includes = tuple(includes_acc)
+    excludes = tuple(excludes_acc)
+    includes = _expand_rsync_dirs(includes)
+    include_all = (len(includes) == 0)
+    top_level_only = (not include_all) and (set(includes) == {"*"})
 
-    for full_name in files_and_folders:
-        if not full_name.is_file():
+    return includes, excludes, include_all, top_level_only
+
+
+# ===================================================
+# Traversal-first expansion using Path.glob / rglob
+# ===================================================
+
+def _split_excludes(excludes: Tuple[str, ...]) -> tuple[set[str], Tuple[str, ...]]:
+    bare_dirs: set[str] = set()
+    glob_paths: list[str] = []
+    for ex in excludes:
+        pat = ex.lstrip("-")
+        if not pat:
             continue
-        files.append(Path.absolute(full_name))
+        if ("/" not in pat) and not any(c in pat for c in "*?[]"):
+            bare_dirs.add(pat)
+        else:
+            glob_paths.append(pat)
+    return bare_dirs, tuple(glob_paths)
 
-    return files
+
+def _is_excluded_rel(rel_posix: str, glob_paths: Tuple[str, ...]) -> bool:
+    p = PurePosixPath(rel_posix)           # enforces path-aware globbing
+    return any(p.match(pat) for pat in glob_paths)  # '?' won't match '/'
 
 
-async def get_filepaths_async(path: Path, recursive=True):
+def _should_descend(dir_abs: Path, base: Path,
+                    include_all: bool,
+                    include_prefixes: Tuple[str, ...],
+                    bare_ex_dirs: set[str],
+                    glob_ex_paths: Tuple[str, ...]) -> bool:
+    # prune by bare dir name first
+    if dir_abs.name in bare_ex_dirs:
+        return False
+    rel = dir_abs.relative_to(base).as_posix() if dir_abs != base else "."
+    # prune by glob/path excludes
+    if _is_excluded_rel(rel, glob_ex_paths):
+        return False
+    if include_all:
+        return True
+    # descend if this dir is on the path to any include (prefix match)
+    prefix = rel.rstrip("/") + "/"
+    return any(p.startswith(prefix) or p == rel for p in include_prefixes)
+
+
+def _expand_includes(base: Path, token: str) -> Iterator[Path]:
     """
-    Asynchronously iterate over file paths within the specified directory and yield each file path in turn.
-
-    Args:
-        path: a folder/directory as a pathlib.Path. If the path is just a file, the file_path for that file will be returned.
-        recursive: if True, recurse into subdirectories.
-
-    Yields:
-        pathlib.Path: Each file path found in the directory.
+    Yield files for a single include token using traversal-first logic.
     """
-    # Expand user (~) if needed
-    if str(path).startswith('~'):
-        path = path.expanduser()
-
-    # Return None if the path doesn't exist
-    if not path.exists():
+    if token == "":
+        # full recursive
+        yield from (p for p in base.rglob("*") if p.is_file())
         return
 
-    # If it's a file, yield the file path directly
-    if path.is_file():
-        yield path
+    if token == "*":
+        # top-level only
+        yield from (p for p in base.glob("*") if p.is_file())
         return
 
-    # If recursive, use rglob; otherwise, use glob
-    if recursive:
-        files_and_folders = path.rglob("*")
-    else:
-        files_and_folders = path.glob("*")
+    # direct-children shorthand: 'sub1/*' with no extra glob chars in 'sub1'
+    if token.endswith("/*") and not _has_glob(token[:-2]):
+        sub = base / token[:-2]
+        if sub.is_dir():
+            yield from (p for p in sub.glob("*") if p.is_file())
+        elif sub.is_file():
+            # odd case 'file/*'
+            pass
+        return
 
-    # Iterate over files asynchronously
-    for full_name in files_and_folders:
-        # Only yield file paths (skip directories)
-        if full_name.is_file():
-            yield full_name.absolute()
-        # Simulate async processing
-        await asyncio.sleep(0)  # Yield control back to the event loop
+    # BARE path (no glob chars): treat as subtree RELATIVE to base
+    if not _has_glob(token):
+        sub = base / token
+        if sub.is_dir():
+            yield from (p for p in sub.rglob("*") if p.is_file())
+        elif sub.is_file():
+            yield sub
+        return
 
+    # Glob/path pattern (supports '**')
+    for p in base.rglob(token):
+        if p.is_file():
+            yield p
+
+
+def iter_files(base_dir: str | os.PathLike, filter_str: str) -> Iterator[Path]:
+    base = Path(base_dir)
+    includes, excludes, include_all, top_level_only = parse_filter_spec(filter_str)
+
+    # If only excludes were given → start from whole tree
+    include_tokens: List[str] = list(includes) if not include_all else [""]
+
+    bare_ex_dirs, glob_ex_paths = _split_excludes(excludes)
+
+    # Precompute include prefixes for pruning (dirs only)
+    include_prefixes: Tuple[str, ...] = tuple(
+        tok.rstrip("/") for tok in include_tokens if tok not in ("", "*")
+    )
+
+    seen: set[Path] = set()
+
+    for inc in include_tokens:
+        # 1) Empty token → whole tree, with pruning
+        if inc == "":
+            if top_level_only:
+                for p in (q for q in base.glob("*") if q.is_file()):
+                    if p not in seen:
+                        seen.add(p)
+                        yield p
+                continue
+
+            for cur, subdirs, files in os.walk(base):
+                cur_path = Path(cur)
+                # prune subdirs in-place
+                keep = []
+                for d in subdirs:
+                    child = cur_path / d
+                    if _should_descend(child, base, True, (), bare_ex_dirs, glob_ex_paths):
+                        keep.append(d)
+                subdirs[:] = keep
+
+                rel_dir = "." if cur_path == base else cur_path.relative_to(base).as_posix()
+                for fname in files:
+                    f = cur_path / fname
+                    rel = fname if rel_dir == "." else f"{rel_dir}/{fname}"
+                    if _is_excluded_rel(rel, glob_ex_paths) or f.parent.name in bare_ex_dirs:
+                        continue
+                    if f not in seen:
+                        seen.add(f)
+                        yield f
+            continue
+
+        # 2) Top-level only
+        if inc == "*":
+            for p in (q for q in base.glob("*") if q.is_file()):
+                if p not in seen:
+                    seen.add(p)
+                    yield p
+            continue
+
+        # 3) Bare subtree (no glob chars) → walk that subtree
+        if not _has_glob(inc) and not inc.endswith("/*"):
+            sub = base / inc
+            if sub.is_file():
+                rel = sub.relative_to(base).as_posix()
+                if not _is_excluded_rel(rel, glob_ex_paths) and sub.parent.name not in bare_ex_dirs:
+                    if sub not in seen:
+                        seen.add(sub); yield sub
+                continue
+            if not sub.is_dir():
+                continue
+
+            for cur, subdirs, files in os.walk(sub):
+                cur_path = Path(cur)
+                # prune ONLY by excludes (since we're already scoped to the include subtree)
+                pruned = []
+                for d in subdirs:
+                    child = cur_path / d
+                    # dir-name exclude
+                    if d in bare_ex_dirs:
+                        continue
+                    # glob/path exclude on the child dir's rel path
+                    child_rel = child.relative_to(base).as_posix()
+                    if _is_excluded_rel(child_rel, glob_ex_paths):
+                        continue
+                    pruned.append(d)
+                subdirs[:] = pruned
+
+                rel_dir = cur_path.relative_to(base).as_posix()
+                for fname in files:
+                    f = cur_path / fname
+                    rel = f"{rel_dir}/{fname}"
+                    if _is_excluded_rel(rel, glob_ex_paths) or f.parent.name in bare_ex_dirs:
+                        continue
+                    if f not in seen:
+                        seen.add(f); yield f
+            continue
+
+        # 4) Direct-children form 'sub1/*'
+        if inc.endswith("/*") and not _has_glob(inc[:-2]):
+            sub = base / inc[:-2]
+            if sub.is_dir():
+                for f in (q for q in sub.glob("*") if q.is_file()):
+                    rel = f.relative_to(base).as_posix()
+                    if _is_excluded_rel(rel, glob_ex_paths) or f.parent.name in bare_ex_dirs:
+                        continue
+                    if f not in seen:
+                        seen.add(f); yield f
+            continue
+
+        # 5) Glob/path form (supports **)
+        for f in base.rglob(inc):
+            if not f.is_file():
+                continue
+            if top_level_only and f.parent != base:
+                continue
+            rel = f.relative_to(base).as_posix()
+            if _is_excluded_rel(rel, glob_ex_paths) or f.parent.name in bare_ex_dirs:
+                continue
+            if f not in seen:
+                seen.add(f); yield f
+
+# ======================
+# Sync path enumeration
+# ======================
+
+def get_filepaths(path: str | Path, filter_str: str = "") -> List[Path]:
+    """
+    Return all file paths under 'path' using rsync/find-like include/exclude rules.
+
+    Examples:
+      ""                        → everything recursively
+      "*"                       → top-level files only
+      "PDF"                     → only 'PDF' subtree (recursive, base-relative)
+      "sub1/*"                  → direct children of sub1 only
+      "**/*.pdf"                → all PDFs anywhere
+      "PDF -PDF/**/TMP/**"      → PDF subtree but excluding any TMP under it
+      "ELFSAMPLES/** -ELFSAMPLES/**/quarantine/**"
+    """
+    root = Path(path).expanduser()
+    if not root.exists():
+        return []
+
+    if root.is_file():
+        # Evaluate includes/excludes against a single file
+        includes, excludes, include_all, _ = parse_filter_spec(filter_str)
+
+        # Treat the file name as the relative path (we don't have a base tree here)
+        rel_name = root.name
+        rel_full = root.as_posix()  # fallback for patterns containing '/'
+
+        # Excludes: use the new predicate helpers (no _expand_excludes)
+        bare_ex_dirs, glob_ex_paths = _split_excludes(excludes)
+
+        # glob/path excludes (e.g., "**/*.bak")
+        if _is_excluded_rel(rel_name, glob_ex_paths) or _is_excluded_rel(rel_full, glob_ex_paths):
+            return []
+
+        # bare dir excludes aren't really applicable to a single file relative to itself,
+        # but if someone passed a deeper file path, also check its parent names:
+        try:
+            # Walk ancestors and see if any ancestor dir name is bare-excluded
+            p = root if root.is_absolute() else root.resolve()
+            for ancestor in p.parents:
+                if ancestor.name in bare_ex_dirs:
+                    return []
+        except Exception:
+            pass
+
+        # Includes:
+        if include_all:
+            return [root]
+
+        # A pattern matches if:
+        # - "*" (top-level only) → include the file
+        # - bare filename equals rel_name
+        # - glob without "/" matches rel_name
+        # - pattern with "/" matches the full path string
+        name_pp = PurePosixPath(rel_name)
+        full_pp = PurePosixPath(rel_full)
+        for inc in includes:
+            if inc in ("", "*"):
+                return [root]
+            if "/" in inc:
+                if full_pp.match(inc):
+                    return [root]
+                continue
+            if not _has_glob(inc):
+                if inc == rel_name:
+                    return [root]
+            else:
+                if name_pp.match(inc):
+                    return [root]
+        return []
+
+    return list(iter_files(root, filter_str))
+
+
+# =======================
+# Async path enumeration
+# =======================
+
+async def get_filepaths_async(path: str | Path, filter_str: str = "") -> AsyncGenerator[Path, None]:
+    """
+    Async generator yielding file paths with the same semantics as get_filepaths().
+    """
+    root = Path(path).expanduser()
+    if not root.exists():
+        return
+
+    if root.is_file():
+        for p in get_filepaths(root, filter_str):
+            yield p
+        return
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[Optional[Path]] = asyncio.Queue(maxsize=256)
+
+    def _producer():
+        try:
+            for p in iter_files(root, filter_str):
+                asyncio.run_coroutine_threadsafe(queue.put(p), loop).result()
+        finally:
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+
+    await asyncio.to_thread(_producer)
+
+    while True:
+        item = await queue.get()
+        if item is None:
+            break
+        yield item
+        await asyncio.sleep(0)
+
+
+# ============================
+# Minimal inline sanity checks
+# ============================
+
+if __name__ == "__main__":
+    # Adjust base for your machine before running directly
+    base = Path.home() / "Documents" / "SAMPLES"
+
+    print("=== QUICK SANITY ===")
+    tests = [
+        # ("", "No filter → everything recursively"),
+        ("*", "list top-level files only"),
+        ("*.zip", "list all zip files anywhere"),
+        ("PDF", "list files in PDF subtree and recurse into subtrees"),
+        ("PDF/*", "list files in PDF subtree only"),
+        ("PDF/sub1", "list files in PDF/sub1 subtree and recurse"),
+        ("PDF -tmp", "'PDF' subtree and down, exclude tmp directories at any level"),
+        ("PDF -tmp --exclude sub2", "'PDF' subtree and down, exclude tmp and sub2 subtrees at any level"),
+        ("test/2025*/*", "list all files only at subtrees matching 'test/2025*/*' (ex: test/2025-01-15, test/2025-07-30, test/2025-08-12)"),
+        ("test/2025*/** -sub2", "list all files within subtrees and down matching 'test/2025*/*' (ex: test/2025-01-15, test/2025-07-30, test/2025-07-30/sub1, test/2025-08-12)"),
+        ("'test/scan here' -'not here' --exclude 'not here either'", "Quoted tokens (spaces in dir names)"),
+
+        # ("**/*.pdf", "All PDFs anywhere"),
+        # ("PDF -PDF/**/TMP/**", "PDF subtree but excluding any TMP under it"),
+        # ("ELFSAMPLES/** -ELFSAMPLES/**/quarantine/**", "ELFSAMPLES minus quarantine"),
+        # ("*.pdf,*.docx", "Only certain file types anywhere (comma list)"),
+        # ("reports exports -tmp --exclude cache", "Combine includes and excludes"),
+    ]
+    for filt, desc in tests:
+        files = get_filepaths(base, filt)
+        print(f"\nFilter: {filt!r}  ({desc})  -> {len(files)} files")
+        for p in files[:10]:
+            print("  .", p.relative_to(base))
+        if len(files) > 5:
+            print("  ...")

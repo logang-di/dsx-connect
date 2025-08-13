@@ -6,14 +6,14 @@ import requests
 from fastapi import APIRouter, BackgroundTasks
 
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum
-from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
+from dsx_connect.common.endpoint_names import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest
 from dsx_connect.models.connector_models import ScanRequestModel
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 
 from dsx_connect.config import ConfigManager
 
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 
 router = APIRouter()
 
@@ -61,7 +61,7 @@ async def process_scan_request(scan_request_info: ScanRequestModel) -> StatusRes
 
 @router.post(DSXConnectAPIEndpoints.SCAN_REQUEST_TEST,
              description="Used for testing scan request workflow without the need for "
-                         "queues, and taskqueue processors.  Cycles through "
+                         "queues, and celery_app processors.  Cycles through "
                          "the entire workflow "
                          "scan_request --> connector.read_file --> connector.item_action",
              )

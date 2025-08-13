@@ -3,7 +3,7 @@ import threading
 
 import httpx
 from typing import Dict
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.models.connector_api_key import APIKeySettings
 
 api_key_settings = APIKeySettings()

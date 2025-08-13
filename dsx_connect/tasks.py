@@ -22,7 +22,7 @@ name = "dsx-connect"
 version = DSX_CONNECT_VERSION.strip()
 build_dir = "dist"
 export_folder = os.path.join(build_dir, f"{name}-{version}")
-repo_uname = "logangilbert"
+repo_uname = "dsxconnect"
 
 @task
 def bump(c):
@@ -70,20 +70,23 @@ def prepare(c):
     c.run(f"cp __init__.py {export_folder}/dsx_connect/")
     c.run(f"cp config.py {export_folder}/dsx_connect/")
     c.run(f"rsync -av --exclude '__pycache__' app/ {export_folder}/dsx_connect/app/")
+    c.run(f"rsync -av --exclude '__pycache__' celery_app/ {export_folder}/dsx_connect/celery_app/")
+    c.run(f"rsync -av --exclude '__pycache__' common/ {export_folder}/dsx_connect/common/")
     c.run(f"rsync -av --exclude '__pycache__' connector_utils/ {export_folder}/dsx_connect/connector_utils/")
-    c.run(f"rsync -av --exclude '__pycache__' taskworkers/ {export_folder}/dsx_connect/taskworkers/")
     c.run(f"rsync -av --exclude '__pycache__' diagrams/ {export_folder}/dsx_connect/diagrams/")
     c.run(f"rsync -av --exclude '__pycache__' database/ {export_folder}/dsx_connect/database/")
-    c.run(f"rsync -av --exclude '__pycache__' models/ {export_folder}/dsx_connect/models/")
-    c.run(f"rsync -av --exclude '__pycache__' taskqueue/ {export_folder}/dsx_connect/taskqueue/")
-    c.run(f"rsync -av --exclude '__pycache__' utils/ {export_folder}/dsx_connect/utils/")
     c.run(f"rsync -av --exclude '__pycache__' dsxa_client/ {export_folder}/dsx_connect/dsxa_client/")
+    c.run(f"rsync -av --exclude '__pycache__' models/ {export_folder}/dsx_connect/models/")
+    c.run(f"rsync -av --exclude '__pycache__' superlog/ {export_folder}/dsx_connect/superlog/")
+    c.run(f"rsync -av --exclude '__pycache__' taskworkers/ {export_folder}/dsx_connect/taskworkers/")
+    c.run(f"rsync -av --exclude '__pycache__' utils/ {export_folder}/dsx_connect/utils/")
     c.run(f"rsync -av --exclude '__pycache__' config.py {export_folder}/dsx_connect/")
 
     # move docker files to topmost directory for building
     c.run(f"cp deploy/docker/Dockerfile {export_folder}/")
     c.run(f"cp deploy/docker/docker-compose-dsx-connect-all-services.yaml {export_folder}/")
     c.run(f"cp deploy/docker/docker-compose-dsxa.yaml {export_folder}/")
+    c.run(f"cp deploy/docker/README.md {export_folder}/")
 
     # change the docker compose image: to reflect the new image tag
     file_path = pathlib.Path(f"{export_folder}/docker-compose-dsx-connect-all-services.yaml")
@@ -107,7 +110,6 @@ def prepare(c):
     c.run(f"cp dsx-connect-api-start.py {export_folder}/")
     c.run(f"cp dsx-connect-workers-start.py {export_folder}/")
     c.run(f"cp requirements.txt {export_folder}/")
-    c.run(f"cp README.md {export_folder}/")
 
 @task(pre=[prepare])
 def zip(c):
@@ -152,13 +154,13 @@ def run(c):
 @task
 def lint(c):
     """Run linters on the codebase."""
-    c.run("flake8 app taskworkers database taskqueue utils dsxa_client config.py constants.py")
-    c.run("pylint app taskworkers database taskqueue utils dsxa_client config.py constants.py")
+    c.run("flake8 app taskworkers database celery_app utils dsxa_client config.py endpoint_names.py")
+    c.run("pylint app taskworkers database celery_app utils dsxa_client config.py endpoint_names.py")
 
 @task
 def test(c):
     """Run tests."""
-    c.run("pytest tests app/tests taskworkers/tests database/tests taskqueue/tests utils/tests dsxa_client/tests")
+    c.run("pytest tests app/tests taskworkers/tests database/tests celery_app/tests utils/tests dsxa_client/tests")
 
 @task(pre=[bump, clean, prepare, zip, build, push])
 def release(c):

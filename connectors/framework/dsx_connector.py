@@ -17,9 +17,9 @@ from starlette.responses import StreamingResponse
 
 from connectors.framework.base_config import BaseConnectorConfig
 from dsx_connect.models.connector_models import ScanRequestModel, ConnectorInstanceModel, ConnectorStatusEnum, ItemActionEnum
-from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
+from dsx_connect.common.endpoint_names import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.models.connector_api_key import APIKeySettings
 from connectors.framework.connector_id import get_or_create_connector_uuid
 
@@ -44,7 +44,7 @@ connector_api = None
 
 
 class DSXConnector:
-    def __init__(self, connector_config: BaseConnectorConfig) :
+    def __init__(self, connector_config: BaseConnectorConfig):
 
         # connector_name: str, base_connector_url: str, dsx_connect_url: str,
         #          item_action_move_metainfo: str = "", test_mode: bool = False):
@@ -96,7 +96,7 @@ class DSXConnector:
             if register_resp.status == StatusResponseEnum.SUCCESS:
                 dsx_logging.info(f"Registered connector OK: {register_resp.message}")
             else:
-                dsx_logging.warn(f"Connector registration failed: {register_resp.message}")
+                dsx_logging.warning(f"Connector registration failed: {register_resp.message}")
 
             # Now yield control back to FastAPI so it can start serving requests:
             yield
@@ -108,7 +108,7 @@ class DSXConnector:
             if unregister_resp.status == StatusResponseEnum.SUCCESS:
                 dsx_logging.info(f"Unregistered connector OK: {unregister_resp.message}")
             else:
-                dsx_logging.warn(f"Connector unregistration failed: {unregister_resp.message}")
+                dsx_logging.warning(f"Connector unregistration failed: {unregister_resp.message}")
 
             # 2b) call the user’s @connector.shutdown decorated function, if any:
             if self.shutdown_handler:

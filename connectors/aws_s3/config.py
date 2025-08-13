@@ -28,12 +28,12 @@ class AWSS3ConnectorConfig(BaseConnectorConfig):
     item_action: ItemActionEnum = ItemActionEnum.MOVE
     item_action_move_metainfo: str = "dsxconnect-quarantine"
 
-    test_mode: bool = False
+    test_mode: bool = False # deprecated
 
     # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
     asset: str = "lg-test-02"
     filter: str = ""
-    recursive: bool = True
+    recursive: bool = True # deprecated
 
     ### Connector specific configuration
     s3_endpoint_url: str | None = None

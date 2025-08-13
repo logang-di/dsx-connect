@@ -1,6 +1,6 @@
 import typer
 import uvicorn
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 
 # Ensure connector is registered via decorators
 import connectors.{{ cookiecutter.project_slug }}.{{ cookiecutter.project_slug }}_connector  # noqa: F401

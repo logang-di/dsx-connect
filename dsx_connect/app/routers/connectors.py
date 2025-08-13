@@ -5,10 +5,10 @@ import httpx
 from fastapi import APIRouter, Request, Path, HTTPException
 from starlette import status
 from starlette.responses import FileResponse, Response
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.models.connector_models import ScanRequestModel, ConnectorInstanceModel
 
-from dsx_connect.models.constants import DSXConnectAPIEndpoints, ConnectorEndpoints
+from dsx_connect.common.endpoint_names import DSXConnectAPIEndpoints, ConnectorEndpoints
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 from dsx_connect.connector_utils.connector_registration import register_or_refresh_connector_from_redis, unregister_connector_from_redis
 from dsx_connect.connector_utils.connector_client import get_connector_client, get_async_connector_client

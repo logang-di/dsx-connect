@@ -1,9 +1,9 @@
 import time
 import httpx
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.connector_utils.connector_registration import register_or_refresh_connector_from_redis, unregister_connector_from_redis
 from dsx_connect.connector_utils.connector_client import get_connector_client  # Use sync client
-from dsx_connect.models.constants import ConnectorEndpoints
+from dsx_connect.common.endpoint_names import ConnectorEndpoints
 
 
 def heartbeat_all_connectors(app, interval=30):
@@ -40,7 +40,7 @@ def heartbeat_all_connectors(app, interval=30):
                         connectors_to_remove.append(conn)
 
             except Exception as e:
-                dsx_logging.warn(f"Heartbeat failed for {conn.name} ({conn.uuid}): {e}")
+                dsx_logging.warning(f"Heartbeat failed for {conn.name} ({conn.uuid}): {e}")
                 connectors_to_remove.append(conn)
 
         # Remove failed connectors and send unregister events

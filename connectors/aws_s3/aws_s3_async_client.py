@@ -13,7 +13,7 @@ from botocore.exceptions import ClientError, NoCredentialsError, EndpointConnect
 import os
 
 from dsx_connect.utils import file_ops
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 import asyncio
 
 # Initialize the S3 client outside the handler to reuse it across invocations

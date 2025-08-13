@@ -68,6 +68,27 @@ class TaskQueueConfig(BaseSettings):
     encrypted_file_task: str = "dsx_connect.taskworkers.taskworkers.encrypted_file_task"
     scan_result_notification_task: str = "dsx_connect.taskworkers.taskworkers.scan_result_notification_task"
 
+    # scan request retry and dlq config
+    scan_request_max_retries: int = 2
+    dlq_expire_after_days: int = 7
+
+    # read file and dsxa scan retry configurations
+    connector_retry_backoff_base: int = 60  # seconds
+    dsxa_retry_backoff_base: int = 2       # seconds
+    server_error_retry_backoff_base: int = 30  # seconds for 5xx errors
+
+    # Which errors to retry vs immediate DLQ
+    retry_connector_connection_errors: bool = True
+    retry_connector_server_errors: bool = True
+    retry_connector_client_errors: bool = False  # 4xx errors
+
+    retry_dsxa_connection_errors: bool = True
+    retry_dsxa_timeout_errors: bool = True
+    retry_dsxa_server_errors: bool = True      # 5xx and 429
+    retry_dsxa_client_errors: bool = False     # 4xx and JSON parsing
+
+    retry_queue_dispatch_errors: bool = False
+
 
 class SecurityConfig(BaseSettings):
     item_action_severity_threshold: DPASeverityEnum = DPASeverityEnum.MEDIUM  # Default threshold

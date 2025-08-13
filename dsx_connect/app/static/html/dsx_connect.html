@@ -138,7 +138,7 @@
     <!-- Right side: Link and gear -->
     <div style="position: relative; display: flex; align-items: center; gap: 1rem; margin-left: auto;">
         <a href="/docs" target="_blank" style="color: white; text-decoration: underline; font-size: 0.95rem;">
-            API Documentation <i class="fas fa-up-right-from-square" style="font-size: 0.75rem; margin-left: 4px;"></i>
+            API <i class="fas fa-up-right-from-square" style="font-size: 0.75rem; margin-left: 4px;"></i>
         </a>
         <i class="fas fa-cog gear-icon" id="gearIcon" style="position: relative; font-size: 1.5rem; cursor: pointer; z-index: 2000;"></i>
     </div>
@@ -321,9 +321,31 @@
                 const arrow2 = document.getElementById('arrow2');
                 const isConnected = data.status?.toLowerCase() === 'success';
 
-                el.innerHTML = isConnected
-                    ? '<span class="status-ok">● Connected: DSX for Applications (DSX/A) Scanner</span>'
-                    : '<span class="status-fail">● Not Connected: ' + data.message + '</span>';
+                let message;
+                if (isConnected) {
+                    message = '<span class="status-ok">● Connected: DSX for Applications (DSX/A) Scanner</span>';
+                } else {
+                    // Truncate long error messages - just show the essential part
+                    let errorMsg = data.message || 'Connection failed';
+
+                    // Clean up common verbose error patterns
+                    if (errorMsg.includes('DSXA connection test failed')) {
+                        errorMsg = 'DSXA connection test failed';
+                    } else if (errorMsg.includes('Unable to connect to DSXA scanner')) {
+                        errorMsg = 'Unable to connect to DSXA scanner';
+                    } else if (errorMsg.includes('Failed to connect to DSXA scanner')) {
+                        errorMsg = 'Failed to connect to DSXA scanner';
+                    }
+
+                    // Generic fallback for other long messages
+                    if (errorMsg.length > 50) {
+                        errorMsg = errorMsg.substring(0, 47) + '...';
+                    }
+
+                    message = `<span class="status-fail">● Not Connected: ${errorMsg}</span>`;
+                }
+
+                el.innerHTML = message;
 
                 const color = isConnected ? '#deff5b' : '#777';
                 arrow1.setAttribute('fill', color);

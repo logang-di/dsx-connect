@@ -368,3 +368,131 @@ Docker build issues:Ensure Dockerfile and requirements.txt are in the distributi
 
 Development
 For the full monorepo, see the source repository. The monorepo uses dsx_connect/deploy/ for Dockerfile and docker-compose.yaml, but the distribution places them at the root for simplicity.
+
+```mermaid
+graph TB
+    %% External Services
+    subgraph "External Services"
+        GCS[Google Cloud Storage]
+        ABS[Azure Blob Storage]
+        S3[AWS S3]
+        FS[File System]
+        OTHER[Other Storage...]
+    end
+
+    %% Connectors Layer
+    subgraph "Connectors Layer"
+        direction TB
+        CONN1[GCS Connector]
+        CONN2[Azure Connector] 
+        CONN3[AWS Connector]
+        CONN4[FileSystem Connector]
+        CONN5[Custom Connectors...]
+        
+        CONN1 -.->|reads files| GCS
+        CONN2 -.->|reads files| ABS
+        CONN3 -.->|reads files| S3
+        CONN4 -.->|reads files| FS
+        CONN5 -.->|reads files| OTHER
+    end
+
+    %% DSX-Connect Core
+    subgraph "DSX-Connect Core"
+        direction TB
+        
+        subgraph "API Layer"
+            FASTAPI[FastAPI Server<br/>Web UI & REST API]
+            SSE[Server-Sent Events<br/>Real-time Updates]
+        end
+        
+        subgraph "Task Queue System"
+            REDIS[Redis<br/>Queue & Cache]
+            CELERY[Celery Workers<br/>Distributed Processing]
+        end
+        
+        subgraph "Queue Types"
+            SRQ[Scan Request Queue]
+            VAQ[Verdict Action Queue] 
+            SResultQ[Scan Result Queue]
+            DLQ[Dead Letter Queues<br/>Fault Tolerance]
+        end
+        
+        subgraph "Database Layer"
+            SCANDB[(Scan Results DB<br/>SQLite/PostgreSQL)]
+            STATSDB[(Statistics DB<br/>TinyDB)]
+        end
+        
+        subgraph "Fault Tolerance"
+            RETRY[Retry Logic<br/>Exponential Backoff]
+            DLQ_MGR[DLQ Management<br/>Recovery & Requeue]
+            MONITOR[Health Monitoring<br/>Queue Stats]
+        end
+    end
+
+    %% DSXA Scanner
+    subgraph "DSX Applications (DSXA)"
+        DSXA[DSXA Scanner Service<br/>Malware Analysis Engine]
+    end
+
+    %% Admin/User Interface
+    subgraph "Administration"
+        WEBUI[Web Dashboard<br/>Monitoring & Control]
+        API[REST API<br/>Programmatic Access]
+        CLI[CLI Tools<br/>Admin Operations]
+    end
+
+    %% Data Flow Connections
+    CONN1 -->|scan requests| FASTAPI
+    CONN2 -->|scan requests| FASTAPI
+    CONN3 -->|scan requests| FASTAPI
+    CONN4 -->|scan requests| FASTAPI
+    CONN5 -->|scan requests| FASTAPI
+    
+    FASTAPI -->|enqueue| SRQ
+    SRQ -->|process| CELERY
+    
+    CELERY -->|fetch file| CONN1
+    CELERY -->|fetch file| CONN2
+    CELERY -->|fetch file| CONN3
+    CELERY -->|fetch file| CONN4
+    CELERY -->|scan binary| DSXA
+    
+    CELERY -->|verdict| VAQ
+    VAQ -->|action decision| CELERY
+    CELERY -->|results| SResultQ
+    SResultQ -->|store| SCANDB
+    SResultQ -->|stats| STATSDB
+    
+    %% Fault Tolerance Flows
+    CELERY -.->|on failure| RETRY
+    RETRY -.->|max retries<br/>exceeded| DLQ
+    DLQ -.->|requeue| SRQ
+    
+    MONITOR -.->|health checks| CELERY
+    MONITOR -.->|queue stats| REDIS
+    
+    %% Admin Interfaces
+    WEBUI -.->|monitor| FASTAPI
+    API -.->|control| FASTAPI
+    CLI -.->|admin ops| DLQ_MGR
+    
+    REDIS -->|pub/sub| SSE
+    SSE -->|real-time| WEBUI
+    
+    %% Styling
+    classDef connector fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef core fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef scanner fill:#fff3e0,stroke:#e65100,stroke-width:3px
+    classDef storage fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
+    classDef queue fill:#fff8e1,stroke:#f57f17,stroke-width:2px
+    classDef fault fill:#ffebee,stroke:#c62828,stroke-width:2px
+    classDef admin fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+    
+    class CONN1,CONN2,CONN3,CONN4,CONN5 connector
+    class FASTAPI,CELERY,REDIS,SCANDB,STATSDB,SSE core
+    class DSXA scanner
+    class GCS,ABS,S3,FS,OTHER storage
+    class SRQ,VAQ,SResultQ queue
+    class DLQ,RETRY,DLQ_MGR,MONITOR fault
+    class WEBUI,API,CLI admin
+```

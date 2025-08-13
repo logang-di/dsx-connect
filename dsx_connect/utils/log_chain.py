@@ -47,7 +47,7 @@ def init_syslog_handler(syslog_host: str = "localhost", syslog_port: int = 514):
         syslog_logger.addHandler(_syslog_handler)
 
         # Emit the initial “workers initialized” message to remote syslog
-        syslog_logger.info("dsx-connect-workers1 initialized to use syslog")
+        syslog_logger.info("dsx-connect-workers initialized to use syslog")
 
         dsx_logging.info(f"Initialized syslog handler for {syslog_host}:{syslog_port}")
     except Exception as e:

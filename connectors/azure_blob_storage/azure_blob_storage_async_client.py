@@ -14,7 +14,7 @@ from azure.core.exceptions import ResourceNotFoundError
 from typing import AsyncIterator
 
 from dsx_connect.utils import file_ops
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 import tenacity
 
 CHUNK_SIZE = int(os.getenv('CHUNK_SIZE', 1024 * 1024))

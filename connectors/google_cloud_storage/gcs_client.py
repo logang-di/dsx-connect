@@ -2,7 +2,7 @@ from google.cloud import storage
 from google.api_core.exceptions import NotFound, GoogleAPIError
 import io, hashlib, pathlib, os
 from dsx_connect.utils import file_ops
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 
 CHUNK_SIZE = int(os.getenv('CHUNK_SIZE', 1024 * 1024))
 

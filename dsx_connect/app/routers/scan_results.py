@@ -1,11 +1,11 @@
 from fastapi import APIRouter
 
 from dsx_connect.models.scan_models import ScanResultModel, ScanStatsModel
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.models.connector_models import ScanRequestModel
 from dsx_connect.config import ConfigManager
-from dsx_connect.models.constants import DSXConnectAPIEndpoints
-from dsx_connect.taskqueue.celery_app import celery_app
+from dsx_connect.common.endpoint_names import DSXConnectAPIEndpoints
+from dsx_connect.celery_app.celery_app import celery_app
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
 from dsx_connect.database.database_factory import database_scan_stats_factory, database_scan_results_factory
 

@@ -5,7 +5,8 @@ import time
 from dsx_connect.config import config
 from dsx_connect.models.connector_models import ConnectorInstanceModel
 from fastapi.encoders import jsonable_encoder
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
+from dsx_connect.utils.redis_manager import RedisChannelNames
 
 REDIS_KEY_PREFIX = "dsx:connector"
 
@@ -22,11 +23,11 @@ def register_or_refresh_connector_from_redis(connector_instance: ConnectorInstan
             dsx_logging.info(f"Registering NEW connector: {connector_instance.name} ({connector_instance.uuid})")
             client.set(key, json.dumps(jsonable_encoder(connector_instance)), ex=ttl)
 
-            subscriber_count = client.publish("connector_registered", json.dumps(jsonable_encoder(connector_instance)))
+            subscriber_count = client.publish(RedisChannelNames.CONNECTOR_REGISTERED, json.dumps(jsonable_encoder(connector_instance)))
             dsx_logging.info(f"Published connector registration to {subscriber_count} subscribers")
 
             if subscriber_count == 0:
-                dsx_logging.warning("No subscribers found for 'connector_registered' channel!")
+                dsx_logging.warning(f"No subscribers found for '{RedisChannelNames.CONNECTOR_REGISTERED}' channel!")
 
             return "registered"
         else:
@@ -72,7 +73,7 @@ def unregister_connector_from_redis(uuid: str):
                 "name": connector_name,
                 "timestamp": time.time()
             }
-            subscriber_count = client.publish("connector_registered", json.dumps(unregister_event))
+            subscriber_count = client.publish(RedisChannelNames.CONNECTOR_REGISTERED, json.dumps(unregister_event))
             dsx_logging.info(f"Published connector unregistration to {subscriber_count} subscribers")
 
         else:

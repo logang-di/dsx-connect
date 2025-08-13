@@ -3,7 +3,7 @@ from starlette.responses import StreamingResponse
 
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.{{ cookiecutter.project_slug }}.config import ConfigManager
 from connectors.{{ cookiecutter.project_slug }}.version import CONNECTOR_VERSION

@@ -5,7 +5,7 @@ from dsx_connect.database.scan_results_collection import ScanResultsCollection
 from dsx_connect.database.scan_results_mongodb import ScanResultsMongoDB
 from dsx_connect.database.scan_results_sqlite import ScanResultsSQLiteDB
 from dsx_connect.database.scan_results_tinydb import ScanResultsTinyDB
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 
 
 def database_scan_results_factory(database_type: str = 'tinydb',

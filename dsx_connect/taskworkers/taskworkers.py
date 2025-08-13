@@ -13,7 +13,7 @@ stores scan results in a database.
 Usage:
     Run as a Celery worker from the dsx-connect root directory:
     ```bash
-    celery -A dsx_connect.taskqueue.celery_app worker --loglevel=info -Q scan_request_queue,verdict_action_queue,scan_result_queue
+    celery_app -A dsx_connect.celery_app.celery_app worker --loglevel=info -Q scan_request_queue,verdict_action_queue,scan_result_queue
     ```
     Or run standalone for debugging:
     ```bash
@@ -22,36 +22,40 @@ Usage:
 
 Dependencies:
     - httpx: For synchronous HTTP requests.
-    - celery: For task queue management.
+    - celery_app: For task queue management.
     - dsx_connect: Internal models, config, and client utilities.
 """
 import io
 import json
+import time
 import unicodedata
 from io import BytesIO
 from typing import Dict, Optional
 
 import httpx
 import pyzipper
+import redis
 from celery.signals import worker_process_init
 from fastapi.encoders import jsonable_encoder
 from pydantic import ValidationError
 
 from dsx_connect.database.scan_stats_worker import ScanStatsWorker
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum, DPAVerdictModel2
-from dsx_connect.models.constants import ConnectorEndpoints
+from dsx_connect.common.endpoint_names import ConnectorEndpoints
 from dsx_connect.database.scan_results_base_db import ScanResultsBaseDB
 from dsx_connect.database.scan_stats_base_db import ScanStatsBaseDB
-from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest
+from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest, DSXAConnectionError, DSXATimeoutError, \
+    DSXAServiceError, DSXAClientError
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
 from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from dsx_connect.models.scan_models import ScanResultModel, ScanResultStatusEnum, ScanStatsModel
 from dsx_connect.connector_utils.connector_client import get_connector_client
-from dsx_connect.taskqueue.celery_app import celery_app
+from dsx_connect.models.dead_letter import DeadLetterItem
+from dsx_connect.celery_app.celery_app import celery_app
 from dsx_connect.config import DatabaseConfig, ConfigDatabaseType
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.config import ConfigManager
-from dsx_connect.utils.redis_manager import redis_manager
+from dsx_connect.utils.redis_manager import redis_manager, RedisQueueNames
 
 # Shared client pools and scan client per worker process
 # _connector_clients: Dict[str, httpx.Client] = {}
@@ -107,28 +111,70 @@ def init_worker(**kwargs):
                         syslog_port=config.scan_result_task_worker.syslog_server_port)
 
 
-@celery_app.task(name=config.taskqueue.scan_request_task)
-def scan_request_task(scan_request_dict: dict) -> dict:
+# HELPER FUNCTIONS - Define these OUTSIDE the task function
+def _handle_retryable_error(task_instance, scan_request, error, task_id, retry_count, max_retries, failure_reason,
+                            backoff_base=60):
+    """Handle errors that should be retried with configurable backoff, then sent to DLQ"""
+    if retry_count < max_retries:
+        # Use configurable backoff_base instead of hardcoded values
+        retry_delay = backoff_base * (3 ** retry_count)  # exponential backoff with configurable base
+
+        next_retry = retry_count + 1
+        total_retries = max_retries
+
+        dsx_logging.info(f"Scheduling retry due to '{failure_reason}' for {scan_request.location} in {retry_delay}s "
+                         f"(retry {next_retry}/{total_retries})")
+
+        # Raise retry to let Celery handle it - use the task_instance
+        raise task_instance.retry(countdown=retry_delay, exc=error)
+    else:
+        # Max retries exceeded - send to DLQ
+        return _send_to_dlq_final_error(scan_request, error, task_id, retry_count, failure_reason)
+
+
+def _send_to_dlq_final_error(scan_request, error, task_id, retry_count, failure_reason):
+    """Send item to dead letter queue for final errors or after max retries"""
+    dsx_logging.error(f"Max retries exceeded for '{failure_reason}' attempting to scan: {scan_request.location} after {retry_count + 1} attempts. "
+                      f"Moving to dead letter queue.")
+
+    dead_letter_item = DeadLetterItem(
+        scan_request=scan_request,
+        failure_reason=failure_reason,
+        error_details=str(error),
+        failed_at=time.time(),
+        original_task_id=task_id,
+        retry_count=retry_count + 1
+    )
+
+    try:
+        success = redis_manager.add_to_dead_letter_queue(
+            queue_name=RedisQueueNames.DLQ_SCAN_FILE,
+            item_data=dead_letter_item.model_dump_json(),
+            ttl_days=config.taskqueue.dlq_expire_after_days
+        )
+        dsx_logging.info(f"Added {scan_request.location} to dead letter queue: {failure_reason}")
+    except Exception as redis_err:
+        dsx_logging.error(f"Failed to add to dead letter queue: {redis_err}")
+
+    return StatusResponseEnum.ERROR
+
+
+@celery_app.task(name=config.taskqueue.scan_request_task, bind=True,
+                 max_retries=config.taskqueue.scan_request_max_retries)
+def scan_request_task(self, scan_request_dict: dict) -> str:
     """
     Process a scan request by fetching file content and scanning it for malware.
-
-    This task retrieves file content from a connector URL, scans it using the DSXAClient,
-    and sends the verdict (DPAVerdict2) to the verdict queue. It uses a single httpx.Client
-    instance for all HTTP requests within the task to optimize connection reuse.
-
-    Args:
-        scan_request_dict: A dictionary containing scan request details, conforming to
-            ScanRequestModel (e.g., {"location": "file.txt", "metainfo": "test",
-            "connector_url": "http://example.com"}).
-
-    Returns:
-        dict: A StatusResponse dictionary indicating success or failure.
-
-    Raises:
-        None: All exceptions are caught and converted to error responses.
+    Implements configurable retry/DLQ strategy for both connector and DSXA errors.
     """
-    task_id = scan_request_task.request.id if hasattr(scan_request_task, 'request') else None
-    dsx_logging.debug(f"Process task id: {task_id}")
+    task_id = self.request.id if hasattr(self, 'request') else None
+    retry_count = self.request.retries if hasattr(self, 'request') else 0
+    max_retries = config.taskqueue.scan_request_max_retries
+
+    if retry_count == 0:
+        dsx_logging.warning(f"scan_request_task {task_id}: Initial attempt (max retries: {max_retries})")
+    else:
+        dsx_logging.warning(f"scan_request_task {task_id}: Retry {retry_count}/{max_retries}")
+
 
     # 1. Validate and parse scan request
     try:
@@ -136,14 +182,9 @@ def scan_request_task(scan_request_dict: dict) -> dict:
         dsx_logging.debug(f"Processing scan request for {scan_request.location} with {scan_request.connector_url}")
     except ValidationError as e:
         dsx_logging.error(f"Failed to validate scan request: {e}", exc_info=True)
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message="Invalid scan request data",
-            description=f"Failed celery task id in id field.  {str(e)}",
-            id=task_id
-        ).model_dump()
+        return StatusResponseEnum.ERROR
 
-    # 2. Fetch file content from connector
+    # 2. Read file content from connector
     try:
         client = get_connector_client(scan_request.connector_url)
         response = client.post(
@@ -153,22 +194,70 @@ def scan_request_task(scan_request_dict: dict) -> dict:
         bytes_content = BytesIO(response.content)
         bytes_content.seek(0)
         dsx_logging.debug(f"Received {bytes_content.getbuffer().nbytes} bytes")
-    except httpx.HTTPError as e:
-        dsx_logging.error(f"Failed to fetch file from connector: {e}", exc_info=True)
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message="Failed to fetch file from connector",
-            description=f"HTTP error: {str(e)}",
-            id=task_id
-        ).model_dump()
+    except httpx.ConnectError as e:
+        # Handle connector connection errors
+        if "Name does not resolve" in str(e) or "Connection refused" in str(e):
+            dsx_logging.warning(f"Connector {scan_request.connector_url} unavailable: {e}")
+
+            # Check config setting - use getattr with default for backwards compatibility
+            if getattr(config.taskqueue, 'retry_connector_connection_errors', True):
+                backoff_base = getattr(config.taskqueue, 'connector_retry_backoff_base', 60)
+                return _handle_retryable_error(
+                    self, scan_request, e, task_id, retry_count, max_retries,
+                    failure_reason="connector unavailable",
+                    backoff_base=backoff_base
+                )
+            else:
+                return _send_to_dlq_final_error(
+                    scan_request, e, task_id, retry_count,
+                    failure_reason="connector unavailable (no retry configured)"
+                )
+        else:
+            dsx_logging.error(f"Non-retryable connector error: {e}")
+            return _send_to_dlq_final_error(
+                scan_request, e, task_id, retry_count,
+                failure_reason="connector error"
+            )
+    except httpx.HTTPStatusError as e:
+        # Handle HTTP status errors
+        if e.response.status_code in [502, 503, 504]:
+            # Check config setting for server errors
+            if getattr(config.taskqueue, 'retry_connector_server_errors', True) and retry_count < max_retries:
+                backoff_base = getattr(config.taskqueue, 'server_error_retry_backoff_base', 30)
+                retry_delay = backoff_base * (2 ** retry_count)
+                dsx_logging.warning(f"Server error {e.response.status_code}, retrying in {retry_delay}s")
+                raise self.retry(countdown=retry_delay, exc=e)
+            else:
+                return _send_to_dlq_final_error(
+                    scan_request, e, task_id, retry_count,
+                    failure_reason=f"connector HTTP {e.response.status_code} error"
+                )
+        elif 400 <= e.response.status_code < 500:
+            # Client errors
+            if getattr(config.taskqueue, 'retry_connector_client_errors', False):
+                backoff_base = getattr(config.taskqueue, 'connector_retry_backoff_base', 60)
+                return _handle_retryable_error(
+                    self, scan_request, e, task_id, retry_count, max_retries,
+                    failure_reason=f"connector HTTP {e.response.status_code} error",
+                    backoff_base=backoff_base
+                )
+            else:
+                return _send_to_dlq_final_error(
+                    scan_request, e, task_id, retry_count,
+                    failure_reason=f"connector HTTP {e.response.status_code} error (client error - no retry)"
+                )
+
+        dsx_logging.error(f"HTTP {e.response.status_code} error from connector: {e}")
+        return _send_to_dlq_final_error(
+            scan_request, e, task_id, retry_count,
+            failure_reason=f"connector HTTP {e.response.status_code} error"
+        )
     except Exception as e:
         dsx_logging.error(f"Unexpected error while fetching file: {e}", exc_info=True)
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message="Unexpected error while fetching file",
-            description=str(e),
-            id=task_id
-        ).model_dump()
+        return _send_to_dlq_final_error(
+            scan_request, e, task_id, retry_count,
+            failure_reason="unexpected connector error"
+        )
 
     # 3. Scan the file with DSXAClient
     dsxa_client = DSXAClient(scan_binary_url=config.scanner.scan_binary_url)
@@ -184,19 +273,117 @@ def scan_request_task(scan_request_dict: dict) -> dict:
                 metadata_info=metadata_info
             )
         )
-        dsx_logging.debug(f"Verdict: {dpa_verdict.verdict}")
-    except Exception as e:
-        dsx_logging.error(f"Scan failed: {e}", exc_info=True)
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message=f"Failed to scan file {scan_request.location}",
-            description=str(e),
-            id=task_id
-        ).model_dump()
+        dsx_logging.debug(f"Verdict: {dpa_verdict}")
+        reason = getattr(dpa_verdict.verdict_details, "reason", "") or ""
 
-    # 4. Send verdict to verdict queue with original task_id
+        if dpa_verdict.verdict == DPAVerdictEnum.NOT_SCANNED and "initializing" in reason:
+            dsx_logging.warning(f"DSXA scanner initializing — will retry for {scan_request.location}")
+            return _handle_retryable_error(
+                self, scan_request,
+                Exception("DSXA initializing"),  # or a custom exception
+                task_id, retry_count, max_retries,
+                failure_reason="dsxa initializing",
+                backoff_base=getattr(config.taskqueue, "dsxa_retry_backoff_base", 60),
+            )
+
+    except DSXAConnectionError as e:
+        # DSXA connection issues
+        dsx_logging.warning(f"DSXA scanner unavailable for {scan_request.location}: {e}")
+
+        if getattr(config.taskqueue, 'retry_dsxa_connection_errors', True):
+            backoff_base = getattr(config.taskqueue, 'dsxa_retry_backoff_base', 60)
+            return _handle_retryable_error(
+                self, scan_request, e, task_id, retry_count, max_retries,
+                failure_reason="dsxa scanner unavailable",
+                backoff_base=backoff_base
+            )
+        else:
+            return _send_to_dlq_final_error(
+                scan_request, e, task_id, retry_count,
+                failure_reason="dsxa scanner unavailable (no retry configured)"
+            )
+
+    except DSXATimeoutError as e:
+        # Timeout errors
+        dsx_logging.warning(f"DSXA timeout for {scan_request.location}: {e}")
+
+        if getattr(config.taskqueue, 'retry_dsxa_timeout_errors', True):
+            backoff_base = getattr(config.taskqueue, 'dsxa_retry_backoff_base', 60)
+            return _handle_retryable_error(
+                self, scan_request, e, task_id, retry_count, max_retries,
+                failure_reason="dsxa scanner timeout",
+                backoff_base=backoff_base
+            )
+        else:
+            return _send_to_dlq_final_error(
+                scan_request, e, task_id, retry_count,
+                failure_reason="dsxa scanner timeout (no retry configured)"
+            )
+
+    except DSXAServiceError as e:
+        # Service errors - classify and handle based on config
+        error_str = str(e)
+
+        # Server errors and rate limiting
+        if any(code in error_str for code in ["HTTP 429", "HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504"]):
+            if getattr(config.taskqueue, 'retry_dsxa_server_errors', True):
+                dsx_logging.warning(f"Retryable DSXA service error for {scan_request.location}: {e}")
+                backoff_base = getattr(config.taskqueue, 'dsxa_retry_backoff_base', 60)
+                return _handle_retryable_error(
+                    self, scan_request, e, task_id, retry_count, max_retries,
+                    failure_reason="dsxa service error (retryable)",
+                    backoff_base=backoff_base
+                )
+            else:
+                return _send_to_dlq_final_error(
+                    scan_request, e, task_id, retry_count,
+                    failure_reason="dsxa service error (retryable - no retry configured)"
+                )
+
+        # Client errors (4xx)
+        else:
+            if getattr(config.taskqueue, 'retry_dsxa_client_errors', False):
+                dsx_logging.warning(f"DSXA client error (configured to retry) for {scan_request.location}: {e}")
+                backoff_base = getattr(config.taskqueue, 'dsxa_retry_backoff_base', 60)
+                return _handle_retryable_error(
+                    self, scan_request, e, task_id, retry_count, max_retries,
+                    failure_reason="dsxa service error (client)",
+                    backoff_base=backoff_base
+                )
+            else:
+                dsx_logging.error(f"Non-retryable DSXA service error for {scan_request.location}: {e}")
+                return _send_to_dlq_final_error(
+                    scan_request, e, task_id, retry_count,
+                    failure_reason="dsxa service error (permanent)"
+                )
+
+    except DSXAClientError as e:
+        # Client-side errors
+        if getattr(config.taskqueue, 'retry_dsxa_client_errors', False):
+            dsx_logging.warning(f"DSXA client error (configured to retry) for {scan_request.location}: {e}")
+            backoff_base = getattr(config.taskqueue, 'dsxa_retry_backoff_base', 60)
+            return _handle_retryable_error(
+                self, scan_request, e, task_id, retry_count, max_retries,
+                failure_reason="dsxa client error",
+                backoff_base=backoff_base
+            )
+        else:
+            dsx_logging.error(f"DSXA client error for {scan_request.location}: {e}")
+            return _send_to_dlq_final_error(
+                scan_request, e, task_id, retry_count,
+                failure_reason="dsxa client error"
+            )
+
+    except Exception as e:
+        # Fallback for any other unexpected DSXA errors
+        dsx_logging.error(f"Unexpected DSXA scan error for {scan_request.location}: {e}", exc_info=True)
+        return _send_to_dlq_final_error(
+            scan_request, e, task_id, retry_count,
+            failure_reason="unexpected dsxa error"
+        )
+
+    # 4. Send verdict to verdict queue
     try:
-        # Send to verdict_action_queue for action-taking
         task1 = celery_app.send_task(
             config.taskqueue.verdict_action_task,
             queue=config.taskqueue.verdict_action_queue,
@@ -206,45 +393,35 @@ def scan_request_task(scan_request_dict: dict) -> dict:
             f"Sent verdict for {scan_request.location} to {config.taskqueue.verdict_action_queue} with task_id {task1.id}")
 
     except Exception as e:
-        dsx_logging.error(f"Scan or queue dispatch failed: {e}", exc_info=True)
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message=f"Failed to send scan result to queue {config.taskqueue.verdict_action_queue}",
-            description=str(e),
-            id=task_id
-        ).model_dump()
+        dsx_logging.error(f"Queue dispatch failed: {e}", exc_info=True)
 
-    # 4a. Send scan_request to data_classification tasks for certain file types
-    # TODO - I really only want to do this if data classification is enabled... otherwise it's just sending a task into the queue that never gets handled
-    # try:
-    #     task3 = celery_app.send_task(
-    #         config.taskqueue.data_classification_task,
-    #         queue=config.taskqueue.scan_result_queue,
-    #         args=[scan_request_dict, dpa_verdict.file_info.file_type, task_id]
-    #     )
-    #     dsx_logging.debug(
-    #         f"Sent scan request for {scan_request.location} to {config.taskqueue.data_classification_queue} with task_id {task3.id}")
-    # except Exception as e:
-    #     dsx_logging.error(f"Scan or queue dispatch failed: {e}", exc_info=True)
-    #     return StatusResponse(
-    #         status=StatusResponseEnum.ERROR,
-    #         message=f"Failed to send scan result to queue {config.taskqueue.data_classification_queue}",
-    #         description=str(e),
-    #         id=task_id
-    #     ).model_dump()
+        # Check config setting for queue dispatch errors
+        if getattr(config.taskqueue, 'retry_queue_dispatch_errors', False):
+            backoff_base = getattr(config.taskqueue, 'dsxa_retry_backoff_base', 60)
+            return _handle_retryable_error(
+                self, scan_request, e, task_id, retry_count, max_retries,
+                failure_reason="queue dispatch error",
+                backoff_base=backoff_base
+            )
+        else:
+            return _send_to_dlq_final_error(
+                scan_request, e, task_id, retry_count,
+                failure_reason="queue dispatch error"
+            )
 
-    # 5. Return success response
-    dsx_logging.info(f"Scan completed for {scan_request.location}")
-    return StatusResponse(
+    # Success response
+    dsx_logging.info(f"Successful scan_request_task {
+    StatusResponse(
         status=StatusResponseEnum.SUCCESS,
-        message=f"Scan completed for {scan_request.location}",
-        description=f"Complete scan information: {scan_request}; sent verdict to verdict queue with task_id: {task1.id}; verdict {dpa_verdict}",
+        message=f"Scan request task completed",
+        description=f"{scan_request}",
         id=task_id
-    ).model_dump()
+    ).model_dump()}")
+    return StatusResponseEnum.SUCCESS
 
 
 @celery_app.task(name=config.taskqueue.verdict_action_task)
-def verdict_action_task(scan_request_dict: dict, verdict_dict: dict, original_task_id: str = None) -> dict:
+def verdict_action_task(scan_request_dict: dict, verdict_dict: dict, original_task_id: str = None) -> str:
     """
     Process a scan verdict and perform actions if the verdict is MALICIOUS with sufficient severity.
 
@@ -270,12 +447,7 @@ def verdict_action_task(scan_request_dict: dict, verdict_dict: dict, original_ta
         dsx_logging.debug(f"Processing {scan_request} for scan verdict: {verdict}")
     except ValidationError as e:
         dsx_logging.error(f"Failed to validate scan request or verdict: {e}", exc_info=True)
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message="Invalid scan request or verdict data",
-            description=str(e),
-            id=verdict_task_id
-        ).model_dump()
+        return StatusResponseEnum.ERROR
 
     # 2. Determine what to do based on the verdict
     # Prepare a default “no‐action” response in case neither MALICIOUS nor Encrypted matches:
@@ -326,12 +498,12 @@ def verdict_action_task(scan_request_dict: dict, verdict_dict: dict, original_ta
     # elif "Encrypted" in verdict.verdict_details.reason:
     #     # 2b. Send a scan request to the
     #     task2b = celery_app.send_task(
-    #         config.taskqueue.encrypted_file_task,
-    #         queue=config.taskqueue.encrypted_file_queue,
+    #         config.celery_app.encrypted_file_task,
+    #         queue=config.celery_app.encrypted_file_queue,
     #         args=[scan_request_dict, original_task_id]
     #     )
     #     dsx_logging.debug(
-    #         f"Sent scan request {scan_request.metainfo} to {config.taskqueue.encrypted_file_queue} with task_id {task2b.id}")
+    #         f"Sent scan request {scan_request.metainfo} to {config.celery_app.encrypted_file_queue} with task_id {task2b.id}")
 
     # 3. Send to scan_result_queue for post scan result processing
     task2 = celery_app.send_task(
@@ -343,18 +515,18 @@ def verdict_action_task(scan_request_dict: dict, verdict_dict: dict, original_ta
         f"Sent scan result for {scan_request.location} to {config.taskqueue.scan_result_queue} with task_id {task2.id}")
 
     # 3. Return success response
-    dsx_logging.info(f"Verdict processed for {scan_request.location}")
-    return StatusResponse(
+    dsx_logging.info(f"Successful {config.taskqueue.verdict_action_task} processed for {StatusResponse(
         status=StatusResponseEnum.SUCCESS,
         message=f"Verdict processed for {scan_request.location}",
         description=f"{scan_request}; verdict {verdict}",
         id=verdict_task_id
-    ).model_dump()
+    ).model_dump()}")
+    return StatusResponseEnum.SUCCESS
 
 
 @celery_app.task(name=config.taskqueue.scan_result_task)
 def scan_result_task(scan_request_dict: dict, verdict_dict: dict, item_action_dict: dict,
-                     original_task_id: str = None) -> dict:
+                     original_task_id: str = None) -> str:
     """
     Processes scan results for persistence, statistics, reporting and logging.
 
@@ -399,13 +571,7 @@ def scan_result_task(scan_request_dict: dict, verdict_dict: dict, item_action_di
         dsx_logging.debug(
             f"Processing scan result for {scan_request.location} (task_id: {task_id}) (original task id: {original_task_id} ")
     except ValidationError as e:
-        dsx_logging.error(f"Failed to validate scan result: {e}", exc_info=True)
-        return StatusResponse(
-            status=StatusResponseEnum.ERROR,
-            message="Invalid scan result data",
-            description=str(e),
-            id=task_id
-        ).model_dump()
+        dsx_logging.error(f"Failed to validate scan result in scan result task: {e}", exc_info=True)
 
     # 1a. Store scan result in database
     try:
@@ -434,12 +600,6 @@ def scan_result_task(scan_request_dict: dict, verdict_dict: dict, item_action_di
     )
 
     # 3. Queue scan result to notification queue
-    # RIGHT BEFORE queuing notification task, add this:
-    dsx_logging.info(f"[DEBUG] About to queue notification task")
-    dsx_logging.info(f"[DEBUG] Notification task name: {config.taskqueue.scan_result_notification_task}")
-    dsx_logging.info(f"[DEBUG] Notification queue name: {config.taskqueue.scan_result_notification_queue}")
-
-    # 3. Queue scan result to notification queue
     try:
         task = celery_app.send_task(
             name=config.taskqueue.scan_result_notification_task,
@@ -448,12 +608,12 @@ def scan_result_task(scan_request_dict: dict, verdict_dict: dict, item_action_di
         )
         dsx_logging.debug("[SSE Notification] Scan result notification queued successfully.")
     except Exception as e:
-        dsx_logging.error(f"[DEBUG] Failed to queue scan result notification: {e}", exc_info=True)
+        dsx_logging.error(f"Failed to queue scan result notification: {e}", exc_info=True)
 
     # try:
     #     celery_app.send_task(
-    #         name=config.taskqueue.scan_result_notification_task,
-    #         queue=config.taskqueue.scan_result_notification_queue,
+    #         name=config.celery_app.scan_result_notification_task,
+    #         queue=config.celery_app.scan_result_notification_queue,
     #         args=[scan_result.model_dump()]
     #     )
     #     dsx_logging.debug("[SSE Notification] Scan result notification queued successfully.")
@@ -461,14 +621,15 @@ def scan_result_task(scan_request_dict: dict, verdict_dict: dict, item_action_di
     #     dsx_logging.error(f"[SSE Notification] Failed to queue scan result: {e}", exc_info=True)
     #
     # 4. All done, return success to... somewhere...
-    return StatusResponse(
+    dsx_logging.info(f"Successful {config.taskqueue.scan_result_task} processed for {StatusResponse(
         status=StatusResponseEnum.SUCCESS,
         message=f"Scan result stored for {scan_request.location}",
         description=f"Scan result: {scan_result} for task_id= {task_id}"
-    ).model_dump()
+    ).model_dump()}")
+    return StatusResponseEnum.SUCCESS
 
 
-# @celery_app.task(name=config.taskqueue.scan_result_notification_task)
+# @celery_app.task(name=config.celery_app.scan_result_notification_task)
 # def scan_result_notify_task(scan_result_dict: dict):
 #     """
 #     Receives scan result dict and forwards it to the FastAPI app via redis pubsub.
@@ -585,7 +746,7 @@ def encrypted_file_task(scan_request_dict: dict, original_task_id: str = None) -
             id=task_id
         ).model_dump()
 
-# @celery_app.task(name=config.taskqueue.data_classification_task)
+# @celery_app.task(name=config.celery_app.data_classification_task)
 # def data_classification_task(scan_request_dict: dict, file_type: str, original_task_id: str = None) -> dict:
 #     scan_request = ScanRequestModel.model_validate(scan_request_dict)
 #     task_id = data_classification_task.request.id if hasattr(data_classification_task, 'request') else original_task_id

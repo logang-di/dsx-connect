@@ -5,7 +5,7 @@ from tinydb import TinyDB, Query
 import json
 
 from dsx_connect.database.scan_results_base_db import ScanResultsBaseDB
-from dsx_connect.utils.logging import dsx_logging
+from dsx_connect.utils.app_logging import dsx_logging
 from dsx_connect.models.scan_models import ScanResultModel, ScanResultStatusEnum
 
 

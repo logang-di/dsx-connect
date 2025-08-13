@@ -9,132 +9,60 @@ import pathlib
 import re
 import os
 import shutil
+import sys
+
 from invoke import task, run
 from version import CONNECTOR_VERSION
 
+project_slug = 'filesystem'
 name = 'filesystem-connector'
-version = CONNECTOR_VERSION.strip()
+repo_uname = "dsxconnect"
+
 build_dir = "dist"
-export_folder = os.path.join(build_dir, f"{name}-{version}")
 project_root_dir = str(pathlib.Path(__file__).resolve().parent.parent.parent)
-repo_uname = "logangilbert"
 
-@task
-def bump(c):
-    """Increment the build (patch) version in version.py."""
-    filename = "version.py"
-    with open(filename, "r") as f:
-        content = f.read()
+# total hack, but necessary to import common task helpers
+sys.path.insert(0, project_root_dir)
+from connectors.framework.tasks.common import build_image, push_image, prepare_dsx_connect_files, prepare_common_files, bump_patch_version, clean_export, zip_export
 
-    pattern = r'(VERSION\s*=\s*["\'])(\d+)\.(\d+)\.(\d+)(["\'])'
-    match = re.search(pattern, content)
-    if not match:
-        print("Version string not found in version.py")
-        return
+version = bump_patch_version("version.py")
+export_folder = os.path.join(build_dir, f"{name}-{version}")
 
-    major, minor, patch = int(match.group(2)), int(match.group(3)), int(match.group(4))
-    new_patch = patch + 1
-    new_version = f"{major}.{minor}.{new_patch}"
-    new_line = f'{match.group(1)}{new_version}{match.group(5)}'
-    new_content = re.sub(pattern, new_line, content)
-
-    with open(filename, "w") as f:
-        f.write(new_content)
-
-    global version, export_folder
-    version = new_version
-    export_folder = os.path.join(build_dir, f"{name}-{version}")
-    print(f"Bumped version to {new_version}")
-    print(f"Export folder changed to {export_folder}")
 
 @task
 def clean(c):
-    """Remove existing distribution folder and zip."""
-    zip_file = f"{export_folder}.zip"
-    print(f"Cleaning release folder: {export_folder} and {zip_file}...")
-    if os.path.exists(export_folder):
-        shutil.rmtree(export_folder)
-    if os.path.exists(zip_file):
-        os.remove(zip_file)
+    print(f"Clean {export_folder}...")
+    clean_export(export_folder)
+
 
 @task(pre=[clean])
 def prepare(c):
     """Prepare distribution folder with necessary files."""
     print(f"Preparing release files for version {version}...")
-    c.run(f"mkdir -p {export_folder}/connectors/filesystem")
-    c.run(f"mkdir -p {export_folder}/dsx_connect/models")
-    c.run(f"mkdir -p {export_folder}/dsx_connect/utils")
+    prepare_dsx_connect_files(c, project_root=project_root_dir, export_folder=export_folder)
+    prepare_common_files(c, project_slug, name, version, project_root_dir, export_folder)
 
-    # Copy connectors
-    c.run(f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/filesystem/ {export_folder}/connectors/filesystem/ --exclude 'deploy' --exclude 'dist' --exclude 'tasks.py'")
-    c.run(f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/framework/ {export_folder}/connectors/framework/")
-
-    # Copy dsx_connect/models
-    c.run(f"rsync -av --exclude '__pycache__' {project_root_dir}/dsx_connect/models/ {export_folder}/dsx_connect/models/")
-
-    # Copy dsx_connect/utils
-    c.run(f"rsync -av --exclude '__pycache__' {project_root_dir}/dsx_connect/utils/ {export_folder}/dsx_connect/utils/")
-
-    # Copy top-level __init__.py
-    # c.run(f"touch {export_folder}/__init__.py")
-    c.run(f"touch {export_folder}/connectors/__init__.py")
-    c.run(f"touch {export_folder}/dsx_connect/__init__.py")
-
-    # Copy start.py to root folder
-    c.run(f"cp {project_root_dir}/connectors/filesystem/start.py {export_folder}")
-
-    #
-    # c.run(f"mv {project_root_dir}/connectors/filesystem/README.md {export_folder}/README.md")
-
-    # Generate requirements.txt
-    # c.run(f"pipreqs {export_folder} --force --savepath {export_folder}/requirements.txt")
-
-    # move Dockerfile, docker-compose and requirements.txt to topmost directory
-    c.run(f"rsync -av {project_root_dir}/connectors/filesystem/deploy/ {export_folder}")
-
-    # change the docker compose image: to reflect the new image tag
-    file_path = pathlib.Path(f"{export_folder}/docker-compose-filesystem-connector.yaml")
-
-    with file_path.open("r") as f:
-        content = f.read()
-        content = content.replace("__VERSION__", version)
-    with file_path.open("w") as f:
-        f.write(content)
 
 @task(pre=[prepare])
+def zip(c):
+    zip_export(c, export_folder, build_dir)
+
+
+@task(pre=[zip])
 def build(c):
-    """Build Docker image from distribution."""
-    image_tag = f"{name}:{version}"
-    result = c.run(f"docker images -q {image_tag}", hide=True)
-    if result.stdout.strip():
-        print(f"Image {image_tag} already exists. Skipping build.")
-    else:
-        print(f"Building docker image {image_tag}...")
-        c.run(f"docker build -t {image_tag} {export_folder}")
+    build_image(c=c, name=name, version=version, export_folder=export_folder)
+
 
 @task(pre=[build])
 def push(c):
-    """Push Docker image to Docker Hub."""
-    print("Pushing image to Docker Hub...")
-    c.run(f"docker tag {name}:{version} {repo_uname}/{name}:{version}")
-    c.run(f"docker push {repo_uname}/{name}:{version}")
+    push_image(c, repo=repo_uname, name=name, version=version)
 
-@task
-def run(c):
-    """Run Docker image locally."""
-    print(f"Running image {name}:{version}")
-    c.run(f"docker run -p 0:0 {name}:{version}")
-
-@task(pre=[prepare])
-def generate_requirements(c):
-    """Generate requirements.txt using pipreqs."""
-    c.run(f"pipreqs {export_folder} --force --savepath {export_folder}/requirements.txt")
 
 @task
 def release(c):
     """Perform full release cycle."""
-    bump(c)
     clean(c)
     prepare(c)
+    zip(c)
     build(c)
     push(c)
