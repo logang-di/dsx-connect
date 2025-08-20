@@ -1,6 +1,6 @@
 import typer
 import uvicorn
-from dsx_connect.utils.app_logging import dsx_logging
+from shared.dsx_logging import dsx_logging
 
 # Ensure connector is registered via decorators
 import connectors.azure_blob_storage.azure_blob_storage_connector  # noqa: F401

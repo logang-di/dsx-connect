@@ -340,7 +340,13 @@ To deploy DSX-Connect using Docker Compose:
    cd dsx-connect-<version>
    ```
 
-3. **Start the Services:**
+3. **Start DSXA scanner(optional):**
+   You can use the following docker compose file to start the DSXA scanner.  The benefit of using this 
+   deployment
+       ```bash
+       docker-compose -f docker-compose-dsxa.yaml up -d
+       ```
+4. **Start DSX-Connect Services:**
    ```bash
    docker-compose -f docker-compose-<filename>.yaml up -d
    ```

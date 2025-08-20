@@ -5,10 +5,14 @@ import fnmatch
 import hashlib
 import io
 import os
+import pathlib
 import shutil
 import shlex
+import time
 from pathlib import Path, PurePosixPath
 from typing import AsyncGenerator, Iterable, Iterator, List, Optional, Set, Tuple
+
+from shared.dsx_logging import dsx_logging
 
 
 # =========================
@@ -421,7 +425,7 @@ def iter_files(base_dir: str | os.PathLike, filter_str: str) -> Iterator[Path]:
 
 def get_filepaths(path: str | Path, filter_str: str = "") -> List[Path]:
     """
-    Return all file paths under 'path' using rsync/find-like include/exclude rules.
+    Return all file paths under 'path' using rsync include/exclude rules.
 
     Examples:
       ""                        → everything recursively
@@ -495,41 +499,255 @@ def get_filepaths(path: str | Path, filter_str: str = "") -> List[Path]:
 # Async path enumeration
 # =======================
 
+async def _estimate_file_count(base_dir: pathlib.Path, sample_limit: int = 500) -> int:
+    """
+    Quick estimate of file count to decide between sync vs async approach.
+    Uses a sampling strategy to avoid traversing the entire tree.
+    """
+    try:
+        count = 0
+        dirs_checked = 0
+        max_dirs_to_check = 10
+
+        for root, dirs, files in os.walk(base_dir):
+            count += len(files)
+            dirs_checked += 1
+
+            # Early exit if we find many files quickly
+            if count > sample_limit:
+                # Extrapolate based on directory depth and breadth
+                depth_factor = max(1, dirs_checked)
+                breadth_factor = max(1, len(dirs))
+                return min(count * depth_factor * breadth_factor, 1_000_000)  # Cap estimation
+
+            # Limit sampling to avoid long estimation times
+            if dirs_checked >= max_dirs_to_check:
+                break
+
+        return count
+    except Exception:
+        return sample_limit + 1  # Default to async if estimation fails
+
+
 async def get_filepaths_async(path: str | Path, filter_str: str = "") -> AsyncGenerator[Path, None]:
     """
-    Async generator yielding file paths with the same semantics as get_filepaths().
+    Optimized async generator yielding file paths with the same semantics as get_filepaths().
+    Automatically chooses between sync and async approaches based on estimated dataset size.
     """
     root = Path(path).expanduser()
     if not root.exists():
         return
 
     if root.is_file():
+        # For single files, just use sync approach
         for p in get_filepaths(root, filter_str):
             yield p
         return
 
-    loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[Optional[Path]] = asyncio.Queue(maxsize=256)
+    # Use the optimized rsync async version
+    async for p in get_filepaths_rsync_async(root, filter_str):
+        yield p
 
-    def _producer():
-        try:
-            for p in iter_files(root, filter_str):
-                asyncio.run_coroutine_threadsafe(queue.put(p), loop).result()
-        finally:
-            asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
 
-    await asyncio.to_thread(_producer)
+async def get_filepaths_rsync_async(
+        base_dir: pathlib.Path,
+        filter_str: str = "",
+        batch_size: int = 200,
+        small_dataset_threshold: int = 1000
+) -> AsyncGenerator[pathlib.Path, None]:
+    """
+    Highly optimized async version of the full rsync-like file filtering.
+    Uses hybrid sync/async approach and pathlib optimizations for best performance.
+    """
+    # Use the existing sophisticated filter parsing
+    includes, excludes, include_all, top_level_only = parse_filter_spec(filter_str)
 
-    while True:
-        item = await queue.get()
-        if item is None:
-            break
-        yield item
-        await asyncio.sleep(0)
+    dsx_logging.info(f"Parsed filter - includes: {includes}, excludes: {excludes}, include_all: {include_all}, top_level_only: {top_level_only}")
+
+    # For small datasets, use sync version to avoid async overhead
+    estimated_count = await _estimate_file_count(base_dir, small_dataset_threshold // 2)
+    if estimated_count < small_dataset_threshold:
+        # Use sync version for small datasets - it's faster
+        for file_path in iter_files(base_dir, filter_str):
+            yield file_path
+        return
+
+    # Convert to the internal format expected by the filtering functions
+    include_tokens = list(includes) if not include_all else [""]
+    bare_ex_dirs, glob_ex_paths = _split_excludes(excludes)
+
+    # Track seen files to avoid duplicates
+    seen = set()
+    yielded_count = 0
+
+    for inc in include_tokens:
+        async for file_path in _process_include_token_async_optimized(
+                inc, base_dir, top_level_only, bare_ex_dirs, glob_ex_paths, batch_size
+        ):
+            if file_path not in seen:
+                seen.add(file_path)
+                yield file_path
+                yielded_count += 1
+
+                # Yield control less frequently for better performance
+                if yielded_count % batch_size == 0:
+                    await asyncio.sleep(0.001)  # Shorter sleep
+
+
+async def _process_include_token_async_optimized(
+        inc: str,
+        base: pathlib.Path,
+        top_level_only: bool,
+        bare_ex_dirs: tuple,
+        glob_ex_paths: tuple,
+        batch_size: int
+) -> AsyncGenerator[pathlib.Path, None]:
+    """
+    Highly optimized async processing that maximizes pathlib usage and minimizes blocking.
+    """
+
+    # 1) Empty token → whole tree
+    if inc == "":
+        if top_level_only:
+            for p in base.glob("*"):
+                if p.is_file():
+                    yield p
+            return
+
+        # For full tree, use optimized approach based on excludes
+        if not glob_ex_paths and not bare_ex_dirs:
+            # No excludes - use simple rglob (fastest path)
+            count = 0
+            for p in base.rglob("*"):
+                if p.is_file():
+                    yield p
+                    count += 1
+                    if count % batch_size == 0:
+                        await asyncio.sleep(0.001)
+            return
+
+        # With excludes, use rglob but filter
+        count = 0
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+
+            # Quick bare directory check
+            if bare_ex_dirs and p.parent.name in bare_ex_dirs:
+                continue
+
+            # Glob path check (more expensive)
+            if glob_ex_paths:
+                rel = p.relative_to(base).as_posix()
+                if _is_excluded_rel(rel, glob_ex_paths):
+                    continue
+
+            yield p
+            count += 1
+            if count % batch_size == 0:
+                await asyncio.sleep(0.001)
+        return
+
+    # 2) Top-level only
+    if inc == "*":
+        for p in base.glob("*"):
+            if p.is_file():
+                yield p
+        return
+
+    # 3) Bare subtree - use pathlib when possible
+    if not _has_glob(inc) and not inc.endswith("/*"):
+        sub = base / inc
+
+        if sub.is_file():
+            # Quick exclude check for single file
+            if bare_ex_dirs and sub.parent.name in bare_ex_dirs:
+                return
+            if glob_ex_paths:
+                rel = sub.relative_to(base).as_posix()
+                if _is_excluded_rel(rel, glob_ex_paths):
+                    return
+            yield sub
+            return
+
+        if not sub.is_dir():
+            return
+
+        # For subtree, optimize based on exclude patterns
+        count = 0
+        if not glob_ex_paths and not bare_ex_dirs:
+            # No excludes - use simple rglob (fastest)
+            for f in sub.rglob("*"):
+                if f.is_file():
+                    yield f
+                    count += 1
+                    if count % batch_size == 0:
+                        await asyncio.sleep(0.001)
+        else:
+            # With excludes
+            for f in sub.rglob("*"):
+                if not f.is_file():
+                    continue
+
+                # Quick bare directory check
+                if bare_ex_dirs and f.parent.name in bare_ex_dirs:
+                    continue
+
+                # Glob path check
+                if glob_ex_paths:
+                    rel = f.relative_to(base).as_posix()
+                    if _is_excluded_rel(rel, glob_ex_paths):
+                        continue
+
+                yield f
+                count += 1
+                if count % batch_size == 0:
+                    await asyncio.sleep(0.001)
+        return
+
+    # 4) Direct-children form 'sub1/*'
+    if inc.endswith("/*") and not _has_glob(inc[:-2]):
+        sub = base / inc[:-2]
+        if sub.is_dir():
+            for f in sub.glob("*"):
+                if not f.is_file():
+                    continue
+
+                # Quick exclude checks
+                if bare_ex_dirs and f.parent.name in bare_ex_dirs:
+                    continue
+                if glob_ex_paths:
+                    rel = f.relative_to(base).as_posix()
+                    if _is_excluded_rel(rel, glob_ex_paths):
+                        continue
+
+                yield f
+        return
+
+    # 5) Glob/path form - use rglob with optimizations
+    count = 0
+    for f in base.rglob(inc):
+        if not f.is_file():
+            continue
+        if top_level_only and f.parent != base:
+            continue
+
+        # Quick exclude checks
+        if bare_ex_dirs and f.parent.name in bare_ex_dirs:
+            continue
+        if glob_ex_paths:
+            rel = f.relative_to(base).as_posix()
+            if _is_excluded_rel(rel, glob_ex_paths):
+                continue
+
+        yield f
+        count += 1
+        if count % batch_size == 0:
+            await asyncio.sleep(0.001)
 
 
 # ============================
-# Minimal inline sanity checks
+# Test and benchmark utilities
 # ============================
 
 if __name__ == "__main__":
@@ -549,13 +767,9 @@ if __name__ == "__main__":
         ("test/2025*/*", "list all files only at subtrees matching 'test/2025*/*' (ex: test/2025-01-15, test/2025-07-30, test/2025-08-12)"),
         ("test/2025*/** -sub2", "list all files within subtrees and down matching 'test/2025*/*' (ex: test/2025-01-15, test/2025-07-30, test/2025-07-30/sub1, test/2025-08-12)"),
         ("'test/scan here' -'not here' --exclude 'not here either'", "Quoted tokens (spaces in dir names)"),
-
-        # ("**/*.pdf", "All PDFs anywhere"),
-        # ("PDF -PDF/**/TMP/**", "PDF subtree but excluding any TMP under it"),
-        # ("ELFSAMPLES/** -ELFSAMPLES/**/quarantine/**", "ELFSAMPLES minus quarantine"),
-        # ("*.pdf,*.docx", "Only certain file types anywhere (comma list)"),
-        # ("reports exports -tmp --exclude cache", "Combine includes and excludes"),
     ]
+
+    print("\n=== SYNC TEST ===")
     for filt, desc in tests:
         files = get_filepaths(base, filt)
         print(f"\nFilter: {filt!r}  ({desc})  -> {len(files)} files")
@@ -563,3 +777,78 @@ if __name__ == "__main__":
             print("  .", p.relative_to(base))
         if len(files) > 5:
             print("  ...")
+
+    print("\n=== ASYNC TEST ===")
+
+    async def collect_async_files(async_generator, max_files: int = None) -> List[Path]:
+        """Helper to collect files from async generator for testing"""
+        files = []
+        count = 0
+        async for file_path in async_generator:
+            files.append(file_path)
+            count += 1
+            if max_files and count >= max_files:
+                break
+        return files
+
+    async def run_async_tests():
+        for filt, desc in tests:
+            async_generator = get_filepaths_rsync_async(base, filt, batch_size=100)
+            files = await collect_async_files(async_generator, max_files=1000)  # Limit for testing
+
+            print(f"\nFilter: {filt!r}  ({desc})  -> {len(files)} files")
+            for p in files[:10]:
+                print("  .", p.relative_to(base))
+            if len(files) > 5:
+                print("  ...")
+
+    asyncio.run(run_async_tests())
+
+    print("\n=== PERFORMANCE COMPARISON ===")
+
+    async def compare_performance():
+        comparison_filters = [
+            ("*", "top-level only"),
+            ("PDF", "PDF subtree"),
+            ("*.zip", "all zip files"),
+            ("0LOTS", "9662 files"),
+            ("0LOTS1M", "1M"),
+            ("..", "ALL"),
+        ]
+
+        for filt, desc in comparison_filters:
+            print(f"\nComparing filter: {filt!r} ({desc})")
+
+            # Test sync version
+            try:
+                start_time = time.time()
+                sync_files = get_filepaths(base, filt)
+                sync_time = time.time() - start_time
+                print(f"  Sync:  {len(sync_files)} files in {sync_time:.3f}s")
+            except Exception as e:
+                print(f"  Sync:  ERROR - {e}")
+                sync_files = []
+
+            # Test async version
+            try:
+                start_time = time.time()
+                async_gen = get_filepaths_rsync_async(base, filt, batch_size=200)
+                async_files = await collect_async_files(async_gen)
+                async_time = time.time() - start_time
+                print(f"  Async: {len(async_files)} files in {async_time:.3f}s")
+
+                # Compare results
+                if len(sync_files) == len(async_files):
+                    print(f"  ✅ Same number of files found")
+                    if async_time < sync_time * 1.2:  # Allow 20% overhead for async
+                        print(f"  🚀 Async performance: {sync_time/async_time:.1f}x (good)")
+                    else:
+                        print(f"  ⚠️  Async slower: {async_time/sync_time:.1f}x")
+                else:
+                    print(f"  ⚠️  Different counts: sync={len(sync_files)}, async={len(async_files)}")
+
+            except Exception as e:
+                print(f"  Async: ERROR - {e}")
+
+    # Run performance comparison
+    asyncio.run(compare_performance())

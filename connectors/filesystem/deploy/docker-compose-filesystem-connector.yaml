@@ -1,3 +1,7 @@
+x-common-paths: &common-paths
+  SCAN_FOLDER_PATH: &scan-folder "/path/to/local/folder"
+  QUARANTINE_FOLDER_PATH: &quarantine-folder "/path/to/local/folder/dsxconnect-quarantine"
+
 services:
   filesystem_connector:
     image: dsxconnect/filesystem-connector:__VERSION__
@@ -8,8 +12,12 @@ services:
     ports:
       - "8590:8590"
     volumes:
-      - "/path/to/local/folder:/app/scan_folder"  # <host directory>:<docker container directory> - modify the <host directory> to the directory to be scanned and monitored
-      - "/path/to/local/folder/dsxconnect-quarantine:/app/quarantine"  # <quarantine directory>:<docker container directory> - modify the <quarantine directory> to the location files will be moved to
+      - type: bind
+        source: *scan-folder # modify to the directory to be scanned and monitored
+        target: /app/scan_folder
+      - type: bind
+        source: *quarantine-folder # modify to the directory where files will be moved
+        target: /app/quarantine
     environment:
       PYTHONUNBUFFERED: 1
       LOG_LEVEL: debug
@@ -20,11 +28,12 @@ services:
       DSXCONNECTOR_ITEM_ACTION: "nothing" # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)
       DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "/app/quarantine" # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
         # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector. this directory should have been created in the Dockerfile
-      DSXCONNECTOR_RECURSIVE: true
+      DSXCONNECTOR_SCAN_BY_PATH: "False"
 
+      DSXCONNECTOR_ASSET_DISPLAY_NAME: *scan-folder
       # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
       # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
-      DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
+      DSXCONNECT_BOOTSTRAP_API_KEY: "api-key-NOT-FOR-PRODUCTION"
     networks:
       dsx-network:
         aliases:

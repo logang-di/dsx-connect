@@ -44,10 +44,17 @@ def clean_export(export_folder: str):
     if os.path.exists(zip_file):
         os.remove(zip_file)
 
+
+def prepare_shared_files(c: Context, project_root: str, export_folder: str):
+    base = Path(export_folder) / "shared"
+    c.run(f"rsync -av --exclude='__pycache__' {project_root} {base}/")
+    (base / "__init__.py").touch()
+
+
 def prepare_dsx_connect_files(c: Context, project_root: str, export_folder: str):
     base = Path(export_folder) / "dsx_connect"
     base.mkdir(parents=True, exist_ok=True)  # <-- build the parent tree
-    for sub in ("models", "utils", "common", "superlog"):
+    for sub in ("models", "utils"):
         src = f"{project_root}/dsx_connect/{sub}/"
         dst = base / sub
         c.run(f"rsync -av --exclude='__pycache__' {src} {dst}/")
@@ -56,7 +63,7 @@ def prepare_dsx_connect_files(c: Context, project_root: str, export_folder: str)
 
 def prepare_common_files(c: Context, project_slug: str, connector_name: str, version: str, project_root_dir: str,
                          export_folder: str):
-    c.run(f"mkdir -p {export_folder}/connectors/azure_blob_storage")
+    #c.run(f"mkdir -p {export_folder}/connectors/azure_blob_storage")
     c.run(
         f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/{project_slug}/ {export_folder}/connectors/{project_slug}/ --exclude 'deploy' --exclude 'dist' --exclude 'tasks.py'")
     c.run(

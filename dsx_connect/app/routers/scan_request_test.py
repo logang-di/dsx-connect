@@ -6,14 +6,14 @@ import requests
 from fastapi import APIRouter, BackgroundTasks
 
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum
-from dsx_connect.common.endpoint_names import DSXConnectAPIEndpoints, ConnectorEndpoints
+from shared.routes import DSXConnectAPI, ConnectorAPI
 from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest
 from dsx_connect.models.connector_models import ScanRequestModel
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum
+from shared.status_responses import StatusResponse, StatusResponseEnum
 
-from dsx_connect.config import ConfigManager
+from dsx_connect.config import get_config
 
-from dsx_connect.utils.app_logging import dsx_logging
+from shared.dsx_logging import dsx_logging
 
 router = APIRouter()
 
@@ -26,7 +26,7 @@ async def process_scan_request(scan_request_info: ScanRequestModel) -> StatusRes
     # TODO there needs to be a better way to define what the API call should be, but for now this works
     async with httpx.AsyncClient(verify=False) as client:
         response = await client.post(
-            f'{scan_request_info.connector_url}{ConnectorEndpoints.READ_FILE}',
+            f'{scan_request_info.connector_url}{ConnectorAPI.READ_FILE}',
             json=scan_request_info.dict()
         )
 
@@ -42,7 +42,7 @@ async def process_scan_request(scan_request_info: ScanRequestModel) -> StatusRes
                               description=f'Status code returned: {response.status_code}')
 
     # scan the file
-    dsxa_client = DSXAClient(scan_binary_url=ConfigManager.get_config().scanner.scan_binary_url)
+    dsxa_client = DSXAClient(scan_binary_url=get_config().scanner.scan_binary_url)
     dpa_verdict = await dsxa_client.scan_binary_async(scan_request=
                                                       DSXAScanRequest(binary_data=bytes_content,
                                                                       metadata_info=f"file-tag:{scan_request_info.metainfo}"))
@@ -59,7 +59,7 @@ async def process_scan_request(scan_request_info: ScanRequestModel) -> StatusRes
                           message=f'Scan_task_test processes for: {scan_request_info}')
 
 
-@router.post(DSXConnectAPIEndpoints.SCAN_REQUEST_TEST,
+@router.post("blah",
              description="Used for testing scan request workflow without the need for "
                          "queues, and celery_app processors.  Cycles through "
                          "the entire workflow "

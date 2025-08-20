@@ -1,54 +1,177 @@
+# dsx_connect/app/routers/dead_letter.py
+from __future__ import annotations
+
 import json
 import time
-import asyncio
-from typing import Optional, List, Dict, Any
+from enum import Enum
+from typing import Optional, Any, Dict, List
 
-import redis
-from fastapi import APIRouter, Query, Request, HTTPException, Body
-from pydantic import BaseModel, Field
-from starlette.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
+from pydantic import BaseModel
+from redis.asyncio import Redis
 
-from dsx_connect.config import ConfigManager
-from dsx_connect.common.endpoint_names import DSXConnectAPIEndpoints
-from dsx_connect.models.dead_letter import DeadLetterItem
-from dsx_connect.celery_app.celery_app import celery_app
-from dsx_connect.utils.app_logging import dsx_logging
-from dsx_connect.utils.redis_manager import redis_manager, RedisQueueNames
+from shared.dsx_logging import dsx_logging
+from shared.routes import (
+    API_PREFIX_V1,
+    DSXConnectAPI,
+    DeadLetterPath,
+    route_name,
+    Action,
+    route_path,
+)
+from dsx_connect.messaging.topics import Topics, NS
+from dsx_connect.taskworkers.names import Tasks
+from dsx_connect.taskworkers.celery_app import celery_app
 
-# Get config instance
-config = ConfigManager.get_config()
 
-router = APIRouter(prefix=DSXConnectAPIEndpoints.ADMIN_DEAD_LETTER_QUEUE_PREFIX, tags=["admin"])
+# ------------------------------------------------------------------------------
+# Router
+# ------------------------------------------------------------------------------
+router = APIRouter(
+    prefix=route_path(API_PREFIX_V1, DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX),
+    tags=["dead-letter"],
+)
 
+# ------------------------------------------------------------------------------
+# Types & helpers
+# ------------------------------------------------------------------------------
+class DeadLetterType(str, Enum):
+    scan_request = "scan_request"
+    verdict_action = "verdict_action"
 
-# ===== PYDANTIC MODELS =====
+# New, unified DLQ list namespace: "{NS}:dlq:<type>"
+_DLQ_LIST_BASE = f"{NS}:dlq"
 
+def dlq_key(q: DeadLetterType) -> str:
+    return f"{_DLQ_LIST_BASE}:{q.value}"
+
+def default_task_for(q: DeadLetterType) -> str:
+    return {
+        DeadLetterType.scan_request: Tasks.REQUEST,
+        DeadLetterType.verdict_action: Tasks.VERDICT,
+    }[q]
+
+def _need_redis(request: Request) -> Redis:
+    r: Optional[Redis] = getattr(request.app.state, "redis", None)
+    if r is None:
+        raise HTTPException(status_code=503, detail="redis_unavailable")
+    return r
+
+def _json_loads_safe(s: str | bytes) -> dict[str, Any]:
+    try:
+        if isinstance(s, (bytes, bytearray)):
+            s = s.decode("utf-8", errors="replace")
+        return json.loads(s)
+    except Exception:
+        return {"raw": s}
+
+async def _queue_stats(r: Redis, key: str) -> Dict[str, Any]:
+    try:
+        exists = bool(await r.exists(key))
+        length = int(await r.llen(key)) if exists else 0
+        ttl = await r.ttl(key) if exists else -2  # -2 no key, -1 no expiry
+        return {
+            "queue_name": key,
+            "exists": exists,
+            "length": length,
+            "ttl_seconds": int(ttl if ttl is not None else -1),
+        }
+    except Exception as e:
+        return {"error": str(e), "queue_name": key}
+
+async def _queue_items(r: Redis, key: str, start: int, end: int) -> Dict[str, Any]:
+    """LRANGE slice (inclusive end)."""
+    try:
+        total = int(await r.llen(key))
+        raw_items = await r.lrange(key, start, end)
+        items = [_json_loads_safe(x) for x in raw_items]
+        return {
+            "queue_name": key,
+            "total_length": total,
+            "returned_count": len(items),
+            "start_index": start,
+            "end_index": end,
+            "items": items,
+        }
+    except Exception as e:
+        return {"error": str(e), "queue_name": key}
+
+async def _notify_dlq(r: Redis, event: dict) -> None:
+    try:
+        await r.publish(Topics.NOTIFY_DLQ, json.dumps(event, separators=(",", ":")))
+    except Exception as e:
+        dsx_logging.warning(f"DLQ notify failed: {e}")
+
+async def _requeue_from_dead_letter(
+        r: Redis, queue_name: str, max_items: Optional[int], celery_task_name: str
+) -> Dict[str, Any]:
+    """
+    Pop up to max_items from the DLQ (left/oldest) and re-submit to Celery.
+    On Celery send failure, the item is pushed back (right side).
+    """
+    requeued = 0
+    failed = 0
+
+    try:
+        to_process = int(await r.llen(queue_name))
+        if to_process == 0:
+            return {"queue_name": queue_name, "requeued_count": 0, "remaining_count": 0, "failed_count": 0}
+
+        limit = to_process if max_items is None else min(to_process, int(max_items))
+
+        for _ in range(limit):
+            payload = await r.lpop(queue_name)
+            if payload is None:
+                break
+            data = _json_loads_safe(payload)
+            try:
+                celery_app.send_task(celery_task_name, args=[data])
+                requeued += 1
+            except Exception as e:
+                failed += 1
+                try:
+                    await r.rpush(queue_name, payload)
+                except Exception:
+                    dsx_logging.error(f"Failed to restore DLQ item after Celery error: {e}")
+
+        remaining = int(await r.llen(queue_name))
+        return {
+            "queue_name": queue_name,
+            "requeued_count": requeued,
+            "remaining_count": remaining,
+            "failed_count": failed,
+        }
+
+    except Exception as e:
+        return {"error": str(e), "queue_name": queue_name}
+
+async def _clear_dead_letter_queue(r: Redis, key: str) -> Dict[str, Any]:
+    try:
+        # delete returns number of keys removed (0 or 1 here)
+        removed = int(await r.delete(key))
+        # We also return how many list items were removed by capturing length first if you want;
+        # for now, mirror old behavior.
+        return {"queue_name": key, "cleared_count": removed}
+    except Exception as e:
+        return {"error": str(e), "queue_name": key}
+
+# ------------------------------------------------------------------------------
+# Response models
+# ------------------------------------------------------------------------------
 class QueueStatsResponse(BaseModel):
-    """Response model for queue statistics"""
     queue_name: str
     queue_type: str
     length: int
     ttl_seconds: int
     exists: bool
-    sample_items: Optional[List[Dict[str, Any]]] = None
-
+    sample_items: Optional[list[dict[str, Any]]] = None
 
 class DeadLetterSummaryResponse(BaseModel):
-    """Response model for dead letter queue summary"""
     total_items: int
     active_queues: int
-    queues: Dict[str, QueueStatsResponse]
-
-
-class RequeueRequest(BaseModel):
-    """Request model for requeuing dead letter items"""
-    queue_name: RedisQueueNames = Field(description="Dead letter queue to operate on")
-    max_items: Optional[int] = Field(default=100, ge=1, le=1000, description="Maximum items to process")
-    target_task: Optional[str] = Field(None, description="Celery task name to send items to")
-
+    queues: dict[str, QueueStatsResponse]
 
 class RequeueResponse(BaseModel):
-    """Response model for requeue operations"""
     success: bool
     queue_type: str
     queue_name: str
@@ -56,25 +179,20 @@ class RequeueResponse(BaseModel):
     remaining_count: int
     failed_count: Optional[int] = 0
 
-
 class ClearQueueResponse(BaseModel):
-    """Response model for clear queue operations"""
     success: bool
     queue_type: str
     queue_name: str
     cleared_count: int
 
-
 class DeadLetterItemsResponse(BaseModel):
-    """Response model for getting dead letter items"""
     queue_type: str
     queue_name: str
     total_length: int
     returned_count: int
     start_index: int
     end_index: int
-    items: List[Dict[str, Any]]
-
+    items: list[dict[str, Any]]
 
 class RequeueAllDetail(BaseModel):
     queue_type: str
@@ -82,314 +200,261 @@ class RequeueAllDetail(BaseModel):
     requeued_count: int
     remaining_count: int
 
-
 class RequeueAllResponse(BaseModel):
     success: bool
-    results: List[RequeueAllDetail]
+    results: list[RequeueAllDetail]
 
-
-# ===== API ENDPOINTS =====
-
-@router.get("/stats", response_model=DeadLetterSummaryResponse)
-async def get_dead_letter_stats():
-    """Get comprehensive stats for all dead letter queues"""
+# ------------------------------------------------------------------------------
+# Endpoints
+# ------------------------------------------------------------------------------
+@router.get(
+    route_path(DeadLetterPath.STATS),
+    name=route_name(DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX, DeadLetterPath.STATS, Action.STATS),
+    response_model=DeadLetterSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_dead_letter_stats(request: Request):
+    r = _need_redis(request)
     try:
-        # Get stats for all queues
-        all_stats = redis_manager.get_all_dead_letter_stats()
+        detailed: Dict[str, QueueStatsResponse] = {}
+        total = 0
+        active = 0
 
-        # Get detailed items from each queue
-        detailed_stats = {}
-        total_items = 0
-
-        for queue_type, stats in all_stats.items():
+        for qtype in DeadLetterType:
+            key = dlq_key(qtype)
+            stats = await _queue_stats(r, key)
             if "error" in stats:
-                # Handle error case
-                detailed_stats[queue_type] = QueueStatsResponse(
-                    queue_name=f"error_{queue_type}",
-                    queue_type=queue_type,
-                    length=0,
-                    ttl_seconds=-1,
-                    exists=False
+                dsx_logging.error(f"Stats error for {qtype.value}: {stats['error']}")
+                detailed[qtype.value] = QueueStatsResponse(
+                    queue_name=key, queue_type=qtype.value, length=0, ttl_seconds=-1, exists=False
                 )
                 continue
 
-            queue_stats = QueueStatsResponse(**stats)
-
-            if stats.get("length", 0) > 0:
-                # Get sample items for analysis
-                try:
-                    queue_enum = RedisQueueNames[queue_type]
-                    items_data = redis_manager.get_dead_letter_items(queue_enum, 0, 5)
-                    queue_stats.sample_items = items_data.get("items", [])
-                except (KeyError, Exception) as e:
-                    dsx_logging.warning(f"Could not get sample items for {queue_type}: {e}")
-                    queue_stats.sample_items = []
-
-                total_items += stats.get("length", 0)
-
-            detailed_stats[queue_type] = queue_stats
-
-        return DeadLetterSummaryResponse(
-            total_items=total_items,
-            active_queues=len([q for q in all_stats.values() if q.get("length", 0) > 0]),
-            queues=detailed_stats
-        )
-
-    except Exception as e:
-        dsx_logging.error(f"Failed to get dead letter stats: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get dead letter stats: {str(e)}")
-
-
-@router.get("/stats/{queue_type}", response_model=QueueStatsResponse)
-async def get_queue_specific_stats(queue_type: str):
-    """Get detailed stats for a specific queue type"""
-    try:
-        # Validate and convert to enum
-        try:
-            queue_enum = RedisQueueNames[queue_type.upper()]
-        except KeyError:
-            valid_types = [q.name for q in RedisQueueNames]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid queue type: {queue_type}. Valid types: {valid_types}"
+            length = int(stats.get("length", 0))
+            resp = QueueStatsResponse(
+                queue_name=key,
+                queue_type=qtype.value,
+                length=length,
+                ttl_seconds=int(stats.get("ttl_seconds", -1)),
+                exists=bool(stats.get("exists", True)),
             )
 
-        stats = redis_manager.get_dead_letter_queue_stats(queue_enum)
+            if length > 0:
+                try:
+                    sample = await _queue_items(r, key, 0, 5)
+                    resp.sample_items = sample.get("items", [])
+                except Exception as e:
+                    dsx_logging.warning(f"Sample items failed for {qtype.value}: {e}")
+                    resp.sample_items = []
+                active += 1
+                total += length
 
+            detailed[qtype.value] = resp
+
+        return DeadLetterSummaryResponse(total_items=total, active_queues=active, queues=detailed)
+    except Exception as e:
+        dsx_logging.error(f"Failed to get dead letter stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get dead letter stats: {e}")
+
+@router.get(
+    route_path(DeadLetterPath.STATS_ONE),
+    name=route_name(DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX, DeadLetterPath.STATS_ONE, Action.GET),
+    response_model=QueueStatsResponse,
+)
+async def get_queue_specific_stats(request: Request, queue_type: DeadLetterType = Path(...)):
+    r = _need_redis(request)
+    try:
+        key = dlq_key(queue_type)
+        stats = await _queue_stats(r, key)
         if "error" in stats:
             raise HTTPException(status_code=500, detail=stats["error"])
 
-        response = QueueStatsResponse(**stats)
-
-        if stats.get("length", 0) > 0:
-            # Get more detailed items for this specific queue
-            items_data = redis_manager.get_dead_letter_items(queue_enum, 0, 20)
-            response.sample_items = items_data.get("items", [])
-
-        return response
-
+        length = int(stats.get("length", 0))
+        resp = QueueStatsResponse(
+            queue_name=key,
+            queue_type=queue_type.value,
+            length=length,
+            ttl_seconds=int(stats.get("ttl_seconds", -1)),
+            exists=bool(stats.get("exists", True)),
+        )
+        if length > 0:
+            sample = await _queue_items(r, key, 0, 20)
+            resp.sample_items = sample.get("items", [])
+        return resp
     except HTTPException:
         raise
     except Exception as e:
-        dsx_logging.error(f"Failed to get stats for {queue_type}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+        dsx_logging.error(f"Failed to get stats for {queue_type.value}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {e}")
 
-
-@router.get("/items/{queue_type}", response_model=DeadLetterItemsResponse)
+@router.get(
+    route_path(DeadLetterPath.ITEMS),
+    name=route_name(DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX, DeadLetterPath.ITEMS, Action.LIST),
+    response_model=DeadLetterItemsResponse,
+)
 async def get_dead_letter_items(
-        queue_type: str,
-        start: int = Query(0, ge=0, description="Start index"),
-        end: int = Query(10, ge=0, le=100, description="End index")
+        request: Request,
+        queue_type: DeadLetterType = Path(...),
+        start: int = Query(0, ge=0),
+        end: int = Query(10, ge=0, le=100),
 ):
-    """Get items from dead letter queue for inspection"""
+    r = _need_redis(request)
     try:
-        # Validate and convert to enum
-        try:
-            queue_enum = RedisQueueNames[queue_type.upper()]
-        except KeyError:
-            valid_types = [q.name for q in RedisQueueNames]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid queue type: {queue_type}. Valid types: {valid_types}"
-            )
-
         if end < start:
             raise HTTPException(status_code=400, detail="End index must be >= start index")
-
-        items_data = redis_manager.get_dead_letter_items(queue_enum, start, end)
-
-        if "error" in items_data:
-            raise HTTPException(status_code=500, detail=items_data["error"])
-
-        return DeadLetterItemsResponse(**items_data)
-
+        key = dlq_key(queue_type)
+        data = await _queue_items(r, key, start, end)
+        if "error" in data:
+            raise HTTPException(status_code=500, detail=data["error"])
+        return DeadLetterItemsResponse(
+            queue_type=queue_type.value,
+            queue_name=data.get("queue_name", key),
+            total_length=int(data.get("total_length", 0)),
+            returned_count=int(data.get("returned_count", 0)),
+            start_index=int(data.get("start_index", start)),
+            end_index=int(data.get("end_index", end)),
+            items=data.get("items", []),
+        )
     except HTTPException:
         raise
     except Exception as e:
-        dsx_logging.error(f"Failed to get items from {queue_type}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get items: {str(e)}")
+        dsx_logging.error(f"Failed to get items from {queue_type.value}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get items: {e}")
 
-
-@router.post("/requeue", response_model=RequeueAllResponse)
-async def requeue_all_dead_letters():
-    """
-    Requeue all items from every dead-letter queue into their respective tasks.
-    """
-    # map each DLQ enum to the task name it should trigger
-    task_mapping = {
-        RedisQueueNames.DLQ_SCAN_FILE: config.taskqueue.scan_request_task,
-        RedisQueueNames.DLQ_VERDICT_ACTION: config.taskqueue.verdict_action_task,
-    }
-
-    overall_success = True
+@router.post(
+    route_path(DeadLetterPath.REQUEUE),
+    name=route_name(DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX, DeadLetterPath.REQUEUE, Action.REQUEUE),
+    response_model=RequeueAllResponse,
+)
+async def requeue_all_dead_letters(request: Request):
+    r = _need_redis(request)
+    ok = True
     results: List[RequeueAllDetail] = []
-
-    for queue_enum, celery_task in task_mapping.items():
+    for qtype in DeadLetterType:
+        key = dlq_key(qtype)
+        celery_task = str(default_task_for(qtype))
         try:
-            result = redis_manager.requeue_from_dead_letter(
-                queue_name = queue_enum,
-                max_items = None,
-                celery_task_name = celery_task,
-            )
-            if "error" in result:
-                overall_success = False
-                dsx_logging.error(f"Error requeueing {queue_enum.name}: {result['error']}")
-                # report zero requeues on error
-                results.append(RequeueAllDetail(
-                    queue_type=result.get("queue_type", queue_enum.name),
-                    queue_name=result.get("queue_name", queue_enum.name),
-                    requeued_count=0,
-                    remaining_count=result.get("remaining_count", 0),
-                ))
+            res = await _requeue_from_dead_letter(r, queue_name=key, max_items=None, celery_task_name=celery_task)
+            if "error" in res:
+                ok = False
+                dsx_logging.error(f"Error requeueing {qtype.value}: {res['error']}")
+                results.append(RequeueAllDetail(queue_type=qtype.value, queue_name=key, requeued_count=0, remaining_count=res.get("remaining_count", 0)))  # noqa: E501
             else:
-                results.append(RequeueAllDetail(
-                    queue_type=result["queue_type"],
-                    queue_name=result["queue_name"],
-                    requeued_count=result["requeued_count"],
-                    remaining_count=result["remaining_count"],
-                ))
+                results.append(RequeueAllDetail(queue_type=qtype.value, queue_name=key, requeued_count=int(res.get("requeued_count", 0)), remaining_count=int(res.get("remaining_count", 0))))  # noqa: E501
+                await _notify_dlq(r, {"type": "requeue", "queue_type": qtype.value, "queue_name": key, "timestamp": time.time()})  # noqa: E501
         except Exception as e:
-            overall_success = False
-            dsx_logging.error(f"Exception requeueing {queue_enum.name}: {e}", exc_info=True)
-            results.append(RequeueAllDetail(
-                queue_type=queue_enum.name,
-                queue_name=queue_enum.name,
-                requeued_count=0,
-                remaining_count=0,
-            ))
+            ok = False
+            dsx_logging.error(f"Exception requeueing {qtype.value}: {e}", exc_info=True)
+            results.append(RequeueAllDetail(queue_type=qtype.value, queue_name=key, requeued_count=0, remaining_count=0))
+    return RequeueAllResponse(success=ok, results=results)
 
-    return RequeueAllResponse(success=overall_success, results=results)
-
-
-@router.post("/requeue/{queue_type}", response_model=RequeueResponse)
+@router.post(
+    route_path(DeadLetterPath.REQUEUE_ONE),
+    name=route_name(DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX, DeadLetterPath.REQUEUE_ONE, Action.REQUEUE),
+    response_model=RequeueResponse,
+)
 async def requeue_specific_queue(
-        queue_type: str,
-        max_items: int = Query(100, ge=1, le=1000, description="Maximum items to requeue"),
-        target_task: Optional[str] = Query(None, description="Celery task name to send items to")
+        request: Request,
+        queue_type: DeadLetterType = Path(...),
+        max_items: int = Query(100, ge=1, le=1000),
+        target_task: Optional[str] = Query(None),
 ):
-    """Requeue items from a specific dead letter queue (alternative endpoint)"""
+    r = _need_redis(request)
     try:
-        # Validate and convert to enum
-        try:
-            queue_enum = RedisQueueNames[queue_type.upper()]
-        except KeyError:
-            valid_types = [q.name for q in RedisQueueNames]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid queue type: {queue_type}. Valid types: {valid_types}"
-            )
-
-        request = RequeueRequest(
-            queue_name=queue_enum,
-            max_items=max_items,
-            target_task=target_task
+        key = dlq_key(queue_type)
+        celery_task = target_task or str(default_task_for(queue_type))
+        res = await _requeue_from_dead_letter(r, queue_name=key, max_items=max_items, celery_task_name=celery_task)
+        if "error" in res:
+            raise HTTPException(status_code=500, detail=res["error"])
+        await _notify_dlq(
+            r,
+            {"type": "requeue", "queue_type": queue_type.value, "queue_name": key, "requeued_count": int(res.get("requeued_count", 0)), "timestamp": time.time()},  # noqa: E501
         )
-
-        return await requeue_dead_letters(request)
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        dsx_logging.error(f"Failed to requeue {queue_type}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to requeue: {str(e)}")
-
-
-@router.delete("/clear/{queue_type}", response_model=ClearQueueResponse)
-async def clear_specific_queue(queue_type: str):
-    """Clear all items from a specific dead letter queue"""
-    try:
-        # Validate and convert to enum
-        try:
-            queue_enum = RedisQueueNames[queue_type.upper()]
-        except KeyError:
-            valid_types = [q.name for q in RedisQueueNames]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid queue type: {queue_type}. Valid types: {valid_types}"
-            )
-
-        result = redis_manager.clear_dead_letter_queue(queue_enum)
-
-        if "error" in result:
-            raise HTTPException(status_code=500, detail=result["error"])
-
-        return ClearQueueResponse(
+        return RequeueResponse(
             success=True,
-            queue_type=result["queue_type"],
-            queue_name=result["queue_name"],
-            cleared_count=result["cleared_count"]
+            queue_type=queue_type.value,
+            queue_name=key,
+            requeued_count=int(res.get("requeued_count", 0)),
+            remaining_count=int(res.get("remaining_count", 0)),
+            failed_count=int(res.get("failed_count", 0)),
         )
-
     except HTTPException:
         raise
     except Exception as e:
-        dsx_logging.error(f"Failed to clear {queue_type}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to clear queue: {str(e)}")
+        dsx_logging.error(f"Failed to requeue {queue_type.value}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to requeue: {e}")
 
-
-@router.delete("/clear", response_model=List[ClearQueueResponse])
-async def clear_all_dead_letter_queues():
-    """Clear all dead letter queues (use with extreme caution!)"""
+@router.delete(
+    route_path(DeadLetterPath.CLEAR_ONE),
+    name=route_name(DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX, DeadLetterPath.CLEAR_ONE, Action.CLEAR),
+    response_model=ClearQueueResponse,
+)
+async def clear_specific_queue(request: Request, queue_type: DeadLetterType = Path(...)):
+    r = _need_redis(request)
     try:
-        results = []
+        key = dlq_key(queue_type)
+        res = await _clear_dead_letter_queue(r, key)
+        if "error" in res:
+            raise HTTPException(status_code=500, detail=res["error"])
+        await _notify_dlq(r, {"type": "clear", "queue_type": queue_type.value, "queue_name": key, "timestamp": time.time()})  # noqa: E501
+        return ClearQueueResponse(success=True, queue_type=queue_type.value, queue_name=key, cleared_count=int(res.get("cleared_count", 0)))  # noqa: E501
+    except HTTPException:
+        raise
+    except Exception as e:
+        dsx_logging.error(f"Failed to clear {queue_type.value}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear queue: {e}")
 
-        for queue_enum in RedisQueueNames:
+@router.delete(
+    route_path(DeadLetterPath.CLEAR),
+    name=route_name(DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX, DeadLetterPath.CLEAR, Action.CLEAR),
+    response_model=list[ClearQueueResponse],
+)
+async def clear_all_dead_letter_queues(request: Request):
+    r = _need_redis(request)
+    try:
+        out: list[ClearQueueResponse] = []
+        for qtype in DeadLetterType:
+            key = dlq_key(qtype)
             try:
-                result = redis_manager.clear_dead_letter_queue(queue_enum)
-
-                if "error" in result:
-                    dsx_logging.error(f"Failed to clear {queue_enum.name}: {result['error']}")
+                res = await _clear_dead_letter_queue(r, key)
+                if "error" in res:
+                    dsx_logging.error(f"Failed to clear {qtype.value}: {res['error']}")
                     continue
-
-                results.append(ClearQueueResponse(
-                    success=True,
-                    queue_type=result["queue_type"],
-                    queue_name=result["queue_name"],
-                    cleared_count=result["cleared_count"]
-                ))
+                out.append(ClearQueueResponse(success=True, queue_type=qtype.value, queue_name=key, cleared_count=int(res.get("cleared_count", 0))))  # noqa: E501
+                await _notify_dlq(r, {"type": "clear", "queue_type": qtype.value, "queue_name": key, "timestamp": time.time()})  # noqa: E501
             except Exception as e:
-                dsx_logging.error(f"Failed to clear {queue_enum.name}: {e}")
+                dsx_logging.error(f"Failed to clear {qtype.value}: {e}")
                 continue
-
-        if not results:
+        if not out:
             raise HTTPException(status_code=500, detail="Failed to clear any queues")
-
-        dsx_logging.warning(f"Cleared all dead letter queues: {[r.queue_type for r in results]}")
-        return results
-
+        dsx_logging.warning(f"Cleared all dead letter queues: {[r.queue_type for r in out]}")
+        return out
     except HTTPException:
         raise
     except Exception as e:
         dsx_logging.error(f"Failed to clear all dead letter queues: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to clear queues: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to clear queues: {e}")
 
-
-# ===== HEALTH CHECK =====
-
-@router.get("/health")
-async def dead_letter_health_check():
-    """Health check for dead letter queue system"""
+@router.get(
+    route_path(DeadLetterPath.HEALTH),
+    name=route_name(DSXConnectAPI.ADMIN_DEAD_LETTER_QUEUE_PREFIX, DeadLetterPath.HEALTH, Action.HEALTH),
+    status_code=status.HTTP_200_OK,
+)
+async def dead_letter_health_check(request: Request):
+    r = _need_redis(request)
     try:
-        # Test Redis connection
-        client = redis_manager.get_client()
-        client.ping()
-        client.close()
-
-        # Get basic stats
-        stats = redis_manager.get_all_dead_letter_stats()
-        total_items = sum(s.get("length", 0) for s in stats.values() if "error" not in s)
-
+        await r.ping()
+        total = 0
+        for qtype in DeadLetterType:
+            stats = await _queue_stats(r, dlq_key(qtype))
+            if "error" not in stats:
+                total += int(stats.get("length", 0))
         return {
             "status": "healthy",
             "redis_connected": True,
-            "total_dead_letter_items": total_items,
-            "available_queues": list(RedisQueueNames.__members__.keys())
+            "total_dead_letter_items": total,
+            "available_queues": [q.value for q in DeadLetterType],
         }
-
     except Exception as e:
         dsx_logging.error(f"Dead letter health check failed: {e}")
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "redis_connected": False
-        }
+        return {"status": "unhealthy", "error": str(e), "redis_connected": False}

@@ -298,20 +298,6 @@ async def webhook_handler(event: dict):
         )
 
 
-@connector.config
-async def config_handler():
-    # override this with any specific configuration details you want to add
-    return {
-        "connector_name": connector.connector_name,
-        "connector_id": connector.connector_id,
-        "uuid": connector.uuid,
-        "dsx_connect_url": connector.dsx_connect_url,
-        "asset": config.asset,
-        "filter": config.filter,
-        "version": CONNECTOR_VERSION
-    }
-
-
 if __name__ == "__main__":
     import uvicorn
 

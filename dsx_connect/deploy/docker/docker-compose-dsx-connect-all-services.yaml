@@ -1,12 +1,14 @@
 x-common-env: &common-env
+  DSXCONNECT_APP_ENV: dev
   DSXCONNECTOR_API_KEY: api-key-NOT-FOR-PRODUCTION
   DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
-  DSXCONNECT_TASKQUEUE__BROKER: "redis://redis:6379/0"
-  DSXCONNECT_TASKQUEUE__BACKEND: "redis://redis:6379/0"
+  DSXCONNECT_WORKERS__BROKER: "redis://redis:6379/5"
+  DSXCONNECT_WORKERS__BACKEND: "redis://redis:6379/6"
+  DSXCONNECT_REDIS_URL: "redis://redis:6379/3"
   DSXCONNECT_DATABASE__TYPE: sqlite3
-  DSXCONNECT_DATABASE__LOC: /app/data/dsx-connect.db.sql
+  DSXCONNECT_DATABASE__LOC: "/app/data/dsx-connect.db.sql"
   DSXCONNECT_DATABASE__RETAIN: 100
-  DSXCONNECT_DATABASE__SCAN_STATS_DB: /app/data/scan-stats.db.json
+  DSXCONNECT_DATABASE__SCAN_STATS_DB: "/app/data/scan-stats.db.json"
   PYTHONUNBUFFERED: 1
 
 services:
@@ -61,8 +63,9 @@ services:
         condition: service_healthy
     networks:
       - dsx-network
-    command: celery -A dsx_connect.celery_app.celery_app worker --loglevel=warning -Q scan_request_queue --concurrency=2
+    command: celery -A dsx_connect.taskworkers.celery_app.celery worker --loglevel=warning -Q ${DSXCONNECT_APP_ENV}.dsx_connect.scans.request --autoscale=2,2 # max, min
     restart: unless-stopped
+
 
   dsx_connect_verdict_action_worker:
     image: dsxconnect/dsx-connect:__VERSION__
@@ -74,7 +77,7 @@ services:
         condition: service_healthy
     networks:
       - dsx-network
-    command: celery -A dsx_connect.celery_app.celery_app worker --loglevel=warning -Q verdict_action_queue --concurrency=1
+    command: celery -A dsx_connect.taskworkers.celery_app.celery worker --loglevel=warning -Q ${DSXCONNECT_APP_ENV}.dsx_connect.scans.verdict --concurrency=1
     restart: unless-stopped
 
   dsx_connect_results_worker:
@@ -92,7 +95,7 @@ services:
         condition: service_started
     networks:
       - dsx-network
-    command: celery -A dsx_connect.celery_app.celery_app worker --loglevel=warning -Q scan_result_queue --concurrency=1
+    command: celery -A dsx_connect.taskworkers.celery_app.celery worker --loglevel=warning -Q ${DSXCONNECT_APP_ENV}.dsx_connect.scans.result --concurrency=1
     restart: unless-stopped
 
   dsx_connect_notification_worker:
@@ -107,7 +110,7 @@ services:
         condition: service_started
     networks:
       - dsx-network
-    command: celery -A dsx_connect.celery_app.celery_app worker --loglevel=warning -Q scan_result_notification_queue --concurrency=1
+    command: celery -A dsx_connect.taskworkers.celery_app.celery worker --loglevel=warning -Q ${DSXCONNECT_APP_ENV}.dsx_connect.scans.notification --concurrency=1
     restart: unless-stopped
 
   redis:

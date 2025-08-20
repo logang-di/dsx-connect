@@ -10,21 +10,71 @@ from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from azure.core.exceptions import ResourceNotFoundError
 
 from dsx_connect.utils import file_ops, async_ops
-from dsx_connect.utils.app_logging import dsx_logging
+from shared.dsx_logging import dsx_logging
 import tenacity
+import os, base64, binascii
+from azure.storage.blob import BlobServiceClient
+from azure.core.credentials import AzureNamedKeyCredential
 
 CHUNK_SIZE = int(os.getenv('CHUNK_SIZE', 1024 * 1024))
+
+
+
+
+def _clean(s: str) -> str:
+    # Undo common IDE artifacts
+    return s.strip().strip('"').strip("'").replace("\\;", ";")
+
+def _maybe_b64_decode(s: str) -> str:
+    try:
+        raw = base64.b64decode(s, validate=True).decode("utf-8")
+        # sanity check that it looks like a connection string
+        if "AccountName=" in raw and ";" in raw:
+            return raw
+    except (binascii.Error, UnicodeDecodeError):
+        pass
+    return s
+
+def load_blob_service_client() -> BlobServiceClient:
+    # 1) plain env
+    conn = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
+    if conn:
+        try:
+            return BlobServiceClient.from_connection_string(_clean(conn))
+        except Exception:
+            pass  # fall through to b64/file/pair
+
+    # 2) base64 env (preferred key name)
+    decoded = _maybe_b64_decode(conn)
+    if conn:
+        try:
+            return BlobServiceClient.from_connection_string(_clean(decoded))
+        except Exception:
+            pass
+
+    # 3) name/key pair (no semicolons at all)
+    name = os.getenv("AZURE_STORAGE_ACCOUNT_NAME")
+    key  = os.getenv("AZURE_STORAGE_ACCOUNT_KEY")
+    if name and key:
+        cred = AzureNamedKeyCredential(name, key)
+        return BlobServiceClient(account_url=f"https://{name}.blob.core.windows.net", credential=cred)
+
+
+    raise RuntimeError("No Azure Storage credentials found")
+
 
 
 class AzureBlobClient:
     def __init__(self, connection_string: str = None):
         self._chunk_size = CHUNK_SIZE
-        if not connection_string:
-            connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
-        if not connection_string:
-            dsx_logging.error("AzureBlobClient must be initialized with an AZURE_STORAGE_CONNECTION_STRING")
-            raise ValueError("Missing Azure Storage connection string.")
-        self.service_client = BlobServiceClient.from_connection_string(connection_string)
+        # if not connection_string:
+        #     connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
+        # if not connection_string:
+        #     dsx_logging.error("AzureBlobClient must be initialized with an AZURE_STORAGE_CONNECTION_STRING")
+        #     raise ValueError("Missing Azure Storage connection string.")
+
+        self.service_client = load_blob_service_client()
+        # self.service_client = BlobServiceClient.from_connection_string(connection_string)
         dsx_logging.info("Initialized AzureBlobClient with given connection string")
 
     def containers(self) -> list:

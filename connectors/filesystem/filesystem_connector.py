@@ -6,12 +6,12 @@ import os
 
 from starlette.responses import StreamingResponse
 
-from dsx_connect.utils import file_ops
+from shared.file_ops import get_filepaths_rsync_async, get_filepaths_async
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, \
     ConnectorStatusEnum
-from dsx_connect.utils.app_logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
+from shared.dsx_logging import dsx_logging
+from shared.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from dsx_connect.utils.streaming import stream_blob
 from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback, ScanFolderModel
 from dsx_connect.utils.async_ops import run_async
@@ -83,7 +83,7 @@ async def full_scan_handler() -> StatusResponse:
     dsx_logging.debug(
         f"Scanning files at: {config.asset} (recursive={config.recursive}, filter='{config.filter}')"
     )
-    async for file_path in file_ops.get_filepaths_async(
+    async for file_path in get_filepaths_async(
             pathlib.Path(config.asset),
             config.filter):
         status_response = await connector.scan_file_request(
@@ -184,19 +184,14 @@ async def repo_check_handler() -> StatusResponse:
             message=f"Repo check failed for {config.asset}",
             description="")
 
-#
+
 # @connector.config
-# async def config_handler():
-#     # connector_running_config: ConnectorInstanceModel):
+# async def config_handler(connector_running_config: ConnectorInstanceModel):
 #     # override the connector_running_config with any specific configuration details you want to add
-#     return {
-#         "connector_name": connector.connector_running_model.name,
-#         "uuid": connector.connector_running_model.uuid,
-#         "dsx_connect_url": connector.connector_running_model.url,
-#         "asset": config.asset,
-#         "filter": config.filter,
-#         "version": CONNECTOR_VERSION
-#     }
+#     if config.asset_display_name:
+#         dsx_logging.info(f"Setting asset to asset display name {config.asset_display_name}")
+#         connector_running_config.asset = config.asset_display_name
+#     return connector_running_config
 
 
 # Main entry point to start the FastAPI app

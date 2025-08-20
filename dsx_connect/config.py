@@ -1,129 +1,124 @@
+# dsx_connect/config.py
 from enum import Enum
+from typing import Final
 
-from pydantic import HttpUrl, Field
-from pydantic_settings import BaseSettings
+from pydantic import AnyUrl
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from dsx_connect.dsxa_client.verdict_models import DPASeverityEnum
+
+class AppEnv(str, Enum):
+    dev = "dev"
+    stg = "stg"
+    prod = "prod"
+
+
+class AuthConfig(BaseSettings):
+
+    enrollment_token: str = "dev-enroll"
+
+    jwt_secret: str = "dev-change-me"
+    jwt_audience: str = "dsx-connect"
+    jwt_issuer: str = "dsx-connect"
+    jwt_ttl: int = 900  # 15m
+
+    hmac_max_skew: int = 60
+
+    class Config:
+        env_prefix = "DSXCONNECT_AUTH__"
+        case_sensitive = False
 
 
 class ConfigDatabaseType(str, Enum):
-    MEMORY_COLLECTION: str = 'memory'
-    TINYDB: str = 'tinydb'
-    SQLITE3: str = 'sqlite3'
-    MONGODB: str = 'mongodb'
+    MEMORY_COLLECTION = "memory"
+    TINYDB = "tinydb"
+    SQLITE3 = "sqlite3"
+    MONGODB = "mongodb"
 
 
 class DatabaseConfig(BaseSettings):
-    """
-    Configuration settings for the database.
-
-    Attributes:
-        type (str): The type of database to use. Options include 'memory', 'tinydb', 'sqlite3', and 'mongodb'.
-        loc (str): The file location of the database (used for all database types except 'memory').
-        retain (int): Database retention setting. Set to -1 to retain forever, 0 to retain nothing,
-        or a positive integer N to retain N records.
-    """
+    model_config = SettingsConfigDict(env_nested_delimiter="__")
     type: str = ConfigDatabaseType.SQLITE3
-    loc: str = "data/dsx-connect.db"
+    loc: str = "data/dsx-connect.db.sql"
     retain: int = 1000
-
     scan_stats_db: str = "data/scan-stats.db.json"
-
-    class Config:
-        env_prefix = "DSXCONNECT_"
-        env_nested_delimiter = "__"
 
 
 class ScannerConfig(BaseSettings):
-    # scan_binary_url: str = "http://a668960fee4324868b4154722ad9a909-856481437.us-east-1.elb.amazonaws.com/scan/binary/v2"
+    model_config = SettingsConfigDict(env_nested_delimiter="__")
     scan_binary_url: str = "http://0.0.0.0:8080/scan/binary/v2"
 
-    class Config:
-        env_prefix = "DSXCONNECT_"
-        env_nested_delimiter = "__"
 
-
-class ScanResultTaskWorkerConfig(BaseSettings):
+class SyslogConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_nested_delimiter="__")
     syslog_server_url: str = "127.0.0.1"
     syslog_server_port: int = 514
 
 
-class TaskQueueConfig(BaseSettings):
-    production_mode: bool = False
-    name: str = 'dsx-connect:tasks'
-    broker: str = 'redis://localhost:6379/0'
-    backend: str = 'redis://localhost:6379/0'
-
-    # Task and queue names
-    scan_request_queue: str = "scan_request_queue"
-    verdict_action_queue: str = "verdict_action_queue"
-    scan_result_queue: str = "scan_result_queue"
-    data_classification_queue: str = "data_classification_queue"
-    encrypted_file_queue: str = "encrypted_file_queue"
-    scan_result_notification_queue: str = "scan_result_notification_queue"
-    scan_request_task: str = "dsx_connect.taskworkers.taskworkers.scan_request_task"
-    verdict_action_task: str = "dsx_connect.taskworkers.taskworkers.verdict_action_task"
-    scan_result_task: str = "dsx_connect.taskworkers.taskworkers.scan_result_task"
-    data_classification_task: str = "dsx_connect.taskworkers.taskworkers.data_classification_task"
-    encrypted_file_task: str = "dsx_connect.taskworkers.taskworkers.encrypted_file_task"
-    scan_result_notification_task: str = "dsx_connect.taskworkers.taskworkers.scan_result_notification_task"
-
-    # scan request retry and dlq config
+class CeleryTaskConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_nested_delimiter="__")
+    broker: AnyUrl = "redis://localhost:6379/5"
+    backend: AnyUrl = "redis://localhost:6379/6"
     scan_request_max_retries: int = 2
     dlq_expire_after_days: int = 7
-
-    # read file and dsxa scan retry configurations
-    connector_retry_backoff_base: int = 60  # seconds
-    dsxa_retry_backoff_base: int = 2       # seconds
-    server_error_retry_backoff_base: int = 30  # seconds for 5xx errors
-
-    # Which errors to retry vs immediate DLQ
+    connector_retry_backoff_base: int = 60
+    dsxa_retry_backoff_base: int = 2
+    server_error_retry_backoff_base: int = 30
     retry_connector_connection_errors: bool = True
     retry_connector_server_errors: bool = True
-    retry_connector_client_errors: bool = False  # 4xx errors
-
+    retry_connector_client_errors: bool = False
     retry_dsxa_connection_errors: bool = True
     retry_dsxa_timeout_errors: bool = True
-    retry_dsxa_server_errors: bool = True      # 5xx and 429
-    retry_dsxa_client_errors: bool = False     # 4xx and JSON parsing
-
+    retry_dsxa_server_errors: bool = True
+    retry_dsxa_client_errors: bool = False
     retry_queue_dispatch_errors: bool = False
 
 
-class SecurityConfig(BaseSettings):
-    item_action_severity_threshold: DPASeverityEnum = DPASeverityEnum.MEDIUM  # Default threshold
+# class SecurityConfig(BaseSettings):
+#     model_config = SettingsConfigDict(env_nested_delimiter="__")
+#     item_action_severity_threshold: DPASeverityEnum = DPASeverityEnum.MEDIUM
 
 
 class DSXConnectConfig(BaseSettings):
+
+    app_env: AppEnv = AppEnv.dev
+
     database: DatabaseConfig = DatabaseConfig()
     scanner: ScannerConfig = ScannerConfig()
-    taskqueue: TaskQueueConfig = TaskQueueConfig()
+    workers: CeleryTaskConfig = CeleryTaskConfig()
 
-    scan_result_task_worker: ScanResultTaskWorkerConfig = ScanResultTaskWorkerConfig()
+    # App datastore / pubsub (not Celery)
+    redis_url: AnyUrl = "redis://localhost:6379/3"
+    syslog: SyslogConfig = SyslogConfig()
 
-    @property
-    def redis_url(self) -> str:
-        return self.taskqueue.broker  # Or define a separate redis_url if broker/backend differ
-
-    class Config:
-        env_nested_delimiter = "__"
-        env_prefix = "DSXCONNECT_"
-
-
-# Singleton with reload capability
-class ConfigManager:
-    _config: DSXConnectConfig = None
-
-    @classmethod
-    def get_config(cls) -> DSXConnectConfig:
-        if cls._config is None:
-            cls._config = DSXConnectConfig()
-        return cls._config
-
-    @classmethod
-    def reload_config(cls) -> DSXConnectConfig:
-        cls._config = DSXConnectConfig()
-        return cls._config
+    # Top-level settings config: env prefix + nested delimiter
+    model_config = SettingsConfigDict(
+        env_prefix="DSXCONNECT_",
+        env_nested_delimiter="__",
+    )
 
 
-config = ConfigManager.get_config()
+# Singleton accessor
+from functools import lru_cache
+
+
+@lru_cache
+def get_config() -> DSXConnectConfig:
+    return DSXConnectConfig()
+
+@lru_cache
+def get_auth_config() -> AuthConfig:
+    return AuthConfig()
+
+def reload_config() -> DSXConnectConfig:
+    get_config.cache_clear()
+    return get_config()
+
+
+def app_env() -> str:
+    # resolves to "dev" | "stg" | "prod"
+    return get_config().app_env.value
+
+
+# helper to grab the runtime environment
+APP_ENV: Final = app_env()
+

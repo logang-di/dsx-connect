@@ -7,12 +7,8 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi.encoders import jsonable_encoder
+from dsx_connect.models.scan_models import ScanResultModel
 
-from dsx_connect.config import SecurityConfig
-from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum
-from dsx_connect.models.responses import ItemActionStatusResponse
-from dsx_connect.models.scan_models import DPAVerdictModel2, ScanResultModel
-from dsx_connect.models.connector_models import ScanRequestModel
 
 # -------------------------------------------------------------------
 # 1) APPLICATION LOGGER (console, file, etc.)

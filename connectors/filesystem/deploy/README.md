@@ -32,18 +32,23 @@ For most testing and proof-of-concept deployments, you only need to modify one s
 - Docker network `dsx-connect-network` must exist (created during DSX-Connect deployment)
 
 **Minimal Configuration:**
-1. **Edit the scan directory** in the volumes section:
-   ```yaml
-   volumes:
-     - /path/to/your/scan/directory:/app/scan_folder  # Change /path/to/your... to your host directory to scan
-   ```
+1. **Edit the scan folder** in the volumes section:
+  
+    Change the source: to a folder on your local filesystem with files you want to scan. This will be mapped in the docker container to /app/scan_folder.
 
-2. **Deploy the connector:**
+    ```yaml
+    volumes:
+      - type: bind
+        source: /path/to/local/folder # modify to the directory to be scanned and monitored
+        target: /app/scan_folder
+    ```
+
+2.  **Deploy the connector:**
    ```bash
    docker-compose -f docker-compose-filesystem-connector.yaml up -d
    ```
 
-**What You Get with No Config Changes:**
+**What You Get with Minimal Config Changes:**
 - **Full recursive scanning** of your specified directory
 - **No action taken** on malicious files (files remain in place for analysis)
 - **Automatic registration** with DSX-Connect (if DSX-Connect is running)
@@ -73,8 +78,12 @@ The filesystem connector requires configuration of ports and two volume mappings
       ports:
         - "8590:8590"
       volumes:
-        - /path/to/local/folder:/app/scan_folder  # `<host scan directory>:<container directory>` - modify the `<host scan directory>` to the directory to be scanned and monitored
-        - /path/to/local/folder/dsxconnect-quarantine:/app/quarantine  # `<host quarantine directory>:<container directory>` - modify the `<host quarantine directory>` to where quarantined files will be moved
+        - type: bind
+          source: /path/to/local/folder # modify to the directory to be scanned and monitored
+          target: /app/scan_folder
+        - type: bind
+          source: /path/to/local/folder/dsxconnect-quarantine # modify to the directory where files will be moved
+          target: /app/quarantine
 ```
 
 #### Port Configuration
@@ -142,7 +151,7 @@ or specify rsync-based patterns for subdirectory structure and/or file extension
     | `"sub1"`                                                | Files within subtree 'sub1' and recurse into its subtrees                                                                                                                        |
     | `"sub1/*"`                                              | Files within subtree 'sub1', not including subtrees.                                                                                                                             |
     | `"sub1/sub2"`                                           | Files within subtree 'sub1/sub2', recurse into subtrees.                                                                                                                         |
-    | `"*.zip,*.docx"`                                        | All zip and docx anywhere in the tree                                                                                                                                            |
+    | `"*.zip,*.docx"`                                        | All files with .zip and .docx extensions anywhere in the tree                                                                                                                    |
     | `"-tmp --exclude cache"`                                | Exclude noisy directories (tmp, cache) but include everything else                                                                                                               |
     | `"sub1 -tmp --exclude sub2"`                            | Combine includes and excludes - scan under 'sub1' subtree, but skip 'tmp' or 'sub2' subtrees (note the mix of exclude prefixes '-' and '--excludes', either are valid)           |
     | `"test/2025*/*"`                                        | All files in subtrees matching 'test/2025*/*'. Example: test/2025-01-15, test/2025-07-30, test/2025-08-12.  Does not recurse.                                                    |

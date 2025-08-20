@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 from connectors.framework.base_config import BaseConnectorConfig
 from dsx_connect.models.connector_models import ItemActionEnum
 # from dsx_connect.utils.file_ops import _tokenize_filter
-from dsx_connect.utils.app_logging import dsx_logging
+from shared.dsx_logging import dsx_logging
 
 
 class FilesystemConnectorConfig(BaseConnectorConfig):
@@ -32,15 +32,18 @@ class FilesystemConnectorConfig(BaseConnectorConfig):
     item_action: ItemActionEnum = ItemActionEnum.NOTHING
     item_action_move_metainfo: str = "dsxconnect-quarantine"
 
+    # asset: str = Field("/Users/logangilbert/Documents/SAMPLES",
+    #                    description="Directory to scan for files")
+    # filter: str = "test/2025*/*"
     asset: str = Field("/Users/logangilbert/Documents/SAMPLES",
                        description="Directory to scan for files")
-    filter: str = "test/2025*/*"
-
-    # DEPRECATED
-    recursive: bool = Field(default=True, description="DEPRECATED")
-    test_mode: bool = False
+    filter: str = "PDF"
+    scan_by_path: bool = False
 
     ## Config settings specific to this Connector
+    asset_display_name: str = "" # filessytem connector poses an issue for frontend since
+    # the asset is actually map to folder on the connector's running container/pod, which is mapped to a folder on the host.
+    # what we ant to display on the frontend, is the host folder, not the app/scan_folder.
     monitor: bool = False # if true, Connector will monitor location for new or modified files.
 
     # @field_validator("filter")

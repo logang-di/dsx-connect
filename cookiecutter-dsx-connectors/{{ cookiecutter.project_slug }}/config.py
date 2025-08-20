@@ -25,7 +25,6 @@ class {{ cookiecutter.__package_config_class_name }}(BaseConnectorConfig):
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
     item_action: ItemActionEnum = ItemActionEnum.NOTHING # action to take on files - NOTHING, DELETE, MOVE, TAG, MOVE_TAG
     item_action_move_metainfo: str = "dsxconnect-quarantine"
-    test_mode: bool = True # deprecated
 
     # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
     asset: str = ""

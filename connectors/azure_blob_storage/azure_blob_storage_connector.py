@@ -2,12 +2,11 @@ import warnings
 
 from starlette.responses import StreamingResponse
 
-from connectors.azure_blob_storage.azure_blob_storage_async_client import AzureBlobAsyncClient
 from connectors.azure_blob_storage.azure_blob_storage_client import AzureBlobClient
 from connectors.framework.dsx_connector import DSXConnector
 from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, ConnectorStatusEnum
-from dsx_connect.utils.app_logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
+from shared.dsx_logging import dsx_logging
+from shared.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.azure_blob_storage.config import ConfigManager
 from connectors.azure_blob_storage.version import CONNECTOR_VERSION
 from dsx_connect.utils.streaming import stream_blob
@@ -40,7 +39,6 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} configuration: {config}.")
     dsx_logging.info(f"{base.name} startup completed.")
 
-    base.status = ConnectorStatusEnum.READY
     base.meta_info = f"ABS container: {config.asset}, prefix: {config.filter}"
     return base
 

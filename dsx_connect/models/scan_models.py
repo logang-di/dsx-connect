@@ -3,7 +3,7 @@ from enum import Enum
 from pydantic import BaseModel
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictModel2
 from dsx_connect.models.connector_models import ScanRequestModel
-from dsx_connect.models.responses import ItemActionStatusResponse
+from shared.status_responses import ItemActionStatusResponse
 
 
 class ScanResultStatusEnum(str, Enum):

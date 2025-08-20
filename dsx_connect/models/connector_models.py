@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, HttpUrl, Field
@@ -34,6 +35,9 @@ class ConnectorInstanceModel(BaseModel):
     item_action_move_metainfo: str = ''
     asset: str = ''
     filter: str = ''
+    last_repo_check_ts: Optional[float] = None
+    last_repo_check_reason: Optional[str] = None   # e.g., "auth_failure", "bucket_not_found"
+    last_repo_check_message: Optional[str] = None  # human-readable
 
 
 class ScanRequestModel(BaseModel):

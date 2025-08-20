@@ -43,6 +43,100 @@
             padding: 1rem; transition: right 0.3s ease; z-index: 1000;
         }
         .config-sidebar.active { right: 0; }
+        .config-modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(2px);
+        }
+
+        .config-modal-content {
+            background-color: #fff;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 8px;
+            width: 80%;
+            max-width: 800px;
+            max-height: 80vh;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .config-modal-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #f8f9fa;
+            border-radius: 8px 8px 0 0;
+        }
+
+        .config-modal-header h3 {
+            margin: 0;
+            color: #333;
+        }
+
+        .config-modal-close {
+            font-size: 1.5rem;
+            font-weight: bold;
+            cursor: pointer;
+            color: #999;
+            transition: color 0.2s;
+        }
+
+        .config-modal-close:hover {
+            color: #333;
+        }
+
+        .config-modal-body {
+            padding: 1.5rem;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .config-tree {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 4px;
+            border-left: 3px solid #007bff;
+            white-space: pre-wrap;
+            overflow-x: auto;
+        }
+
+        .config-tree ul {
+            list-style: none;
+            padding-left: 1.5rem;
+            margin: 0.25rem 0;
+        }
+
+        .config-tree li {
+            margin: 0.25rem 0;
+            padding: 0.125rem 0;
+        }
+
+        .config-tree strong {
+            color: #2563eb;
+        }
+
+        .config-error {
+            color: #dc3545;
+            font-style: italic;
+            padding: 1rem;
+            text-align: center;
+            background: #f8d7da;
+            border-radius: 4px;
+            border: 1px solid #f5c6cb;
+        }
+
         .grid {
             display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
             gap: 1rem; margin-top: 1rem;
@@ -167,7 +261,45 @@
     <div id="configTree">Loading config...</div>
 </div>
 
+<!-- Config Modal -->
+<div id="configModal" class="config-modal">
+    <div class="config-modal-content">
+        <div class="config-modal-header">
+            <h3 id="configModalTitle">Connector Configuration</h3>
+            <span class="config-modal-close">&times;</span>
+        </div>
+        <div class="config-modal-body">
+            <div id="configModalContent">Loading configuration...</div>
+        </div>
+    </div>
+</div>
+
 <script>
+    // ---- API base: service-slug FIRST (matches APIRouter(prefix=route_path(API_PREFIX_V1))) ----
+    // Server prefix is now: /dsx-connect/api/v1
+    const API_BASE = '/dsx-connect/api/v1';
+    const api = (p) => `${API_BASE}/${p}`;
+
+    // Route helpers (avoid fragile string concat everywhere)
+    const r = {
+        sse: {
+            scanResult:          () => api('subscribe/scan-result'),
+            connectorRegistered: () => api('subscribe/connector-registered'),
+        },
+        connectors: {
+            list:       () => api('connectors/list'),
+            readyz:     (uuid) => api(`connectors/readyz/${encodeURIComponent(uuid)}`),
+            config:     (uuid) => api(`connectors/config/${encodeURIComponent(uuid)}`),
+            fullscan:   (uuid) => api(`connectors/full_scan/${encodeURIComponent(uuid)}`),
+            unregister: (uuid) => api(`connectors/unregister/${encodeURIComponent(uuid)}`),
+            register:   () => api('connectors/register'),
+        },
+        scan: {
+            request: () => api('scan/request'),
+            status:  (id) => api(`scan/request/${encodeURIComponent(id)}`),
+        },
+    };
+
     // ===== GLOBAL VARIABLES =====
     const gearIcon = document.getElementById('gearIcon');
     const configSidebar = document.getElementById('configSidebar');
@@ -313,7 +445,7 @@
 
     // ===== API FUNCTIONS =====
     function fetchStatus() {
-        fetch('/dsx-connect/test/dsxa-connection')
+        fetch(api('test/dsxa-connection'))
             .then(res => res.json())
             .then(data => {
                 const el = document.getElementById('statusIndicator');
@@ -357,7 +489,7 @@
     }
 
     function fetchConfig() {
-        fetch('/dsx-connect/config')
+        fetch(api('config'))
             .then(res => res.json())
             .then(data => {
                 document.getElementById('configTree').innerHTML = renderTree(data);
@@ -367,36 +499,35 @@
             });
     }
 
-    function fetchConnectors() {
-        fetch('/dsx-connect/connectors')
-            .then(res => res.json())
-            .then(connectors => {
-                const container = document.getElementById('connectorsGrid');
+    async function fetchConnectors() {
+        try {
+            const listRes = await fetch(r.connectors.list());
+            if (!listRes.ok) throw new Error(`list ${listRes.status}`);
+            const connectors = await listRes.json();
 
-                Promise.all(connectors.map(conn =>
-                    fetch(`/dsx-connect/connectors/config/${conn.uuid}`)
-                        .then(res => res.json())
-                        .then(cfg => ({ conn, cfg }))
-                        .catch(() => ({ conn, cfg: {} }))
-                )).then(results => {
-                    container.innerHTML = '';
+            const results = await Promise.all((connectors || []).map(async (conn) => {
+                try {
+                    const rz = await fetch(r.connectors.readyz(conn.uuid));
+                    const body = await rz.json().catch(() => ({}));
+                    return { conn, ready: rz.ok, statusBody: body };
+                } catch {
+                    return { conn, ready: false, statusBody: {} };
+                }
+            }));
 
-                    if (!results.length) {
-                        container.innerHTML = '<p>No connectors registered.</p>';
-                        return;
-                    }
-
-                    results.forEach(({ conn, cfg }, idx) => {
-                        seenConnectors.add(conn.uuid);
-                        connectorLastSeen.set(conn.uuid, Date.now());
-                        const card = renderConnectorCard(conn, cfg, idx);
-                        container.appendChild(card);
-                    });
-                });
-            })
-            .catch(() => {
-                document.getElementById('connectorsGrid').textContent = 'Error loading connectors.';
+            const container = document.getElementById('connectorsGrid');
+            container.innerHTML = '';
+            if (!results.length) {
+                container.innerHTML = '<p>No connectors registered.</p>';
+                return;
+            }
+            results.forEach(({ conn, ready, statusBody }, idx) => {
+                const card = renderConnectorCard(conn, /* cfg */ statusBody, idx, ready);
+                container.appendChild(card);
             });
+        } catch (e) {
+            document.getElementById('connectorsGrid').textContent = 'Error loading connectors.';
+        }
     }
 
     function invokeFullScan(idx, scanUrl, connectorName) {
@@ -425,13 +556,18 @@
 
 
     // ===== CONNECTOR MANAGEMENT =====
-    function renderConnectorCard(conn, cfg = {}, idx = 0) {
-        const scanUrl = `/dsx-connect/connectors/full_scan/${encodeURIComponent(conn.uuid)}`;
+    function renderConnectorCard(conn, cfg = {}, idx = 0, isReady = false) {
+        const scanUrl   = r.connectors.fullscan(conn.uuid);
+        const readyzUrl = r.connectors.readyz(conn.uuid);
+        const configUrl = r.connectors.config(conn.uuid);
+
         const card = document.createElement('div');
         card.classList.add('connector-card');
         card.dataset.connectorUuid = conn.uuid;
 
         const lastSeenTime = new Date().toLocaleTimeString();
+        const dotColor = isReady ? '#10b981' : '#f59e0b';
+        const dotTitle = isReady ? 'Ready' : 'Not ready';
 
         card.innerHTML = `
             <h4>
@@ -440,17 +576,26 @@
                     display: inline-block;
                     width: 8px;
                     height: 8px;
-                    background: #10b981;
+                    background: ${dotColor};
                     border-radius: 50%;
                     margin-left: 8px;
                     animation: pulse 2s infinite;
-                " title="Connected"></span>
+                " title="${dotTitle}"></span>
+                <i class="fas fa-cog"
+                   style="font-size: 0.9rem; cursor: pointer; color: #666; opacity: 0.7; transition: opacity 0.2s;"
+                   title="View configuration"
+                   onclick="showConnectorConfig('${conn.uuid}', '${conn.name.replace(/'/g, "\\'")}'); event.stopPropagation();"
+                   onmouseover="this.style.opacity='1'"
+                   onmouseout="this.style.opacity='0.7'">
+                </i>
             </h4>
             <div class="connector-uuid" style="font-size: 0.8rem; color: #666; margin-bottom: 0.5rem;">
                 UUID: ${conn.uuid.substring(0, 8)}... • Connected: ${lastSeenTime}
             </div>
-            <div class="asset-line" title="${cfg.asset}">Asset: ${cfg.asset || 'n/a'}</div>
-            <div class="filter-line" title="${cfg.filter}">Filter: ${cfg.filter || 'n/a'}</div>
+            ${cfg && (cfg.asset || cfg.filter) ? `
+                <div class="asset-line" title="${cfg.asset || ''}">Asset: ${cfg.asset || 'n/a'}</div>
+                <div class="filter-line" title="${cfg.filter || ''}">Filter: ${cfg.filter || 'n/a'}</div>
+            ` : ''}
             <button onclick="invokeFullScan(${idx}, '${scanUrl}', '${conn.name.replace(/'/g, "\\'")}')">Full Scan</button>
             <span class="scan-note" id="scan-note-${idx}"></span>
         `;
@@ -506,7 +651,7 @@
 
         let config = {};
         try {
-            const res = await fetch(`/dsx-connect/connectors/config/${newConnector.uuid}`);
+            const res = await fetch(r.connectors.config(newConnector.uuid));
             if (res.ok) {
                 config = await res.json();
             }
@@ -703,15 +848,19 @@
             return this.eventSource && this.eventSource.readyState === EventSource.OPEN;
         }
     }
-
     function initializeSSEConnections() {
         if (scanResultsSSE) scanResultsSSE.close();
         if (connectorRegistrationSSE) connectorRegistrationSSE.close();
 
+        const safeParse = (s) => { try { return JSON.parse(s); } catch { return null; } };
+        const isNoise = (m) => !m || m.type === 'connected' || m.type === 'heartbeat';
+
+        // Scan results stream
         scanResultsSSE = new SSEManager(
-            '/dsx-connect/notifications/scan-result',
+            api('subscribe/scan-result'),      // <-- was notifications/...
             (event) => {
-                const message = JSON.parse(event.data);
+                const message = safeParse(event.data);
+                if (isNoise(message)) return;
                 console.log('Received scan result:', message);
                 renderScanResult(message);
             },
@@ -721,10 +870,12 @@
             }
         );
 
+        // Connector registration/unregistration stream
         connectorRegistrationSSE = new SSEManager(
-            '/dsx-connect/notifications/connector-registered',
+            api('subscribe/connector-registered'),   // <-- was notifications/...
             async (event) => {
-                const message = JSON.parse(event.data);
+                const message = safeParse(event.data);
+                if (isNoise(message)) return;
                 console.log('Received connector event:', message);
 
                 if (message.type === 'unregistered') {
@@ -732,13 +883,12 @@
                     return;
                 }
 
-                if (message.uuid) {
-                    connectorLastSeen.set(message.uuid, Date.now());
-
+                if (message.type === 'registered' || message.type === 'refreshed') {
                     if (!seenConnectors.has(message.uuid)) {
                         seenConnectors.add(message.uuid);
                         await handleNewConnector(message);
                     }
+                    // For refresh events, we could update the card but it's not necessary
                 }
             },
             (error) => {
@@ -747,36 +897,6 @@
             }
         );
     }
-
-    // ===== HEARTBEAT MONITORING =====
-    setInterval(() => {
-        const now = Date.now();
-        const staleThreshold = 90000; // 90 seconds
-
-        const container = document.getElementById('connectorsGrid');
-        const connectorCards = container.querySelectorAll('.connector-card');
-
-        connectorCards.forEach(card => {
-            const uuid = card.dataset.connectorUuid;
-            if (uuid) {
-                const lastSeen = connectorLastSeen.get(uuid);
-
-                if (!lastSeen || (now - lastSeen) > staleThreshold) {
-                    console.log('Removing stale connector (heartbeat timeout):', uuid);
-                    handleConnectorUnregister(uuid, 'timeout');
-                } else {
-                    // Update visual indicator
-                    const statusIndicator = card.querySelector('.connector-status');
-                    if (statusIndicator) {
-                        statusIndicator.style.animation = 'none';
-                        setTimeout(() => {
-                            statusIndicator.style.animation = 'pulse 2s infinite';
-                        }, 100);
-                    }
-                }
-            }
-        });
-    }, 60000); // Check every 60 seconds
 
     // ===== EVENT LISTENERS =====
     gearIcon.addEventListener('click', () => {
@@ -799,6 +919,87 @@
             gear.classList.add('white');
         }
     });
+
+    async function showConnectorConfig(uuid, connectorName) {
+        const modal = document.getElementById('configModal');
+        const title = document.getElementById('configModalTitle');
+        const content = document.getElementById('configModalContent');
+
+        // Set title and show modal
+        title.textContent = `Configuration: ${connectorName}`;
+        content.innerHTML = 'Loading configuration...';
+        modal.style.display = 'block';
+
+        try {
+            const response = await fetch(r.connectors.config(uuid));
+
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+
+            const config = await response.json();
+            content.innerHTML = `<div class="config-tree">${renderConfigTree(config)}</div>`;
+
+        } catch (error) {
+            console.error('Error fetching connector config:', error);
+            content.innerHTML = `<div class="config-error">Failed to load configuration: ${error.message}</div>`;
+        }
+    }
+
+    // Render configuration as a tree
+    function renderConfigTree(obj, depth = 0) {
+        if (typeof obj !== 'object' || obj === null) {
+            return `<span style="color: #059669;">${JSON.stringify(obj)}</span>`;
+        }
+
+        let html = '<ul>';
+        for (const [key, value] of Object.entries(obj)) {
+            const isObject = typeof value === 'object' && value !== null;
+            html += `<li>`;
+            html += `<strong>${key}:</strong> `;
+
+            if (isObject) {
+                html += renderConfigTree(value, depth + 1);
+            } else {
+                // Color-code different types
+                let colorClass = '#059669'; // green for strings
+                if (typeof value === 'number') colorClass = '#dc2626'; // red for numbers
+                if (typeof value === 'boolean') colorClass = '#7c3aed'; // purple for booleans
+                if (value === null) colorClass = '#6b7280'; // gray for null
+
+                html += `<span style="color: ${colorClass};">${JSON.stringify(value)}</span>`;
+            }
+            html += `</li>`;
+        }
+        html += '</ul>';
+        return html;
+    }
+
+    // Modal event handlers
+    document.addEventListener('DOMContentLoaded', () => {
+        const modal = document.getElementById('configModal');
+        const closeBtn = document.querySelector('.config-modal-close');
+
+        // Close modal when clicking the X
+        closeBtn.addEventListener('click', () => {
+            modal.style.display = 'none';
+        });
+
+        // Close modal when clicking outside
+        modal.addEventListener('click', (event) => {
+            if (event.target === modal) {
+                modal.style.display = 'none';
+            }
+        });
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && modal.style.display === 'block') {
+                modal.style.display = 'none';
+            }
+        });
+    });
+
 
     // ===== INITIALIZATION =====
     document.addEventListener('DOMContentLoaded', () => {
