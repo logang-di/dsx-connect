@@ -58,7 +58,6 @@ connector_api = None
 
 class DSXConnector:
     def __init__(self, connector_config: BaseConnectorConfig):
-        self.test_mode = connector_config.test_mode
         self.connector_id = connector_config.name
 
         uuid = get_or_create_connector_uuid()

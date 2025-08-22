@@ -31,8 +31,6 @@ class BaseConnectorConfig(BaseSettings):
     item_action_move_metainfo: str = "dsxconnect-quarantine"
     asset: str = ""
     filter: str = ""
-    recursive: bool = True
-    test_mode: bool = False
 
     class Config:
         env_prefix = "DSXCONNECTOR_"

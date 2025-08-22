@@ -32,12 +32,12 @@ class FilesystemConnectorConfig(BaseConnectorConfig):
     item_action: ItemActionEnum = ItemActionEnum.NOTHING
     item_action_move_metainfo: str = "dsxconnect-quarantine"
 
+    asset: str = Field("/Users/logangilbert/OneDrive - Deepinstinct",
+                       description="Directory to scan for files")
+    filter: str = "Partners -demovideo"
     # asset: str = Field("/Users/logangilbert/Documents/SAMPLES",
     #                    description="Directory to scan for files")
-    # filter: str = "test/2025*/*"
-    asset: str = Field("/Users/logangilbert/Documents/SAMPLES",
-                       description="Directory to scan for files")
-    filter: str = "PDF"
+    # filter: str = "PDF"
     scan_by_path: bool = False
 
     ## Config settings specific to this Connector

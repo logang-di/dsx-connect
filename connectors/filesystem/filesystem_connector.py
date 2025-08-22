@@ -81,7 +81,7 @@ async def shutdown_event():
 @connector.full_scan
 async def full_scan_handler() -> StatusResponse:
     dsx_logging.debug(
-        f"Scanning files at: {config.asset} (recursive={config.recursive}, filter='{config.filter}')"
+        f"Scanning files at: {config.asset}, filter='{config.filter}')"
     )
     async for file_path in get_filepaths_async(
             pathlib.Path(config.asset),
