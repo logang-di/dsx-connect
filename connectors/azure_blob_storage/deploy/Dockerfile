@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY connectors/framework connectors/framework
 COPY connectors/azure_blob_storage connectors/azure_blob_storage
-COPY dsx_connect/ dsx_connect/
+COPY shared/ shared/
 COPY start.py .
 
 ENV PYTHONPATH=/app

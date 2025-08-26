@@ -1,21 +1,9 @@
 import asyncio
 import inspect
 
-import os
-import pathlib
-import urllib
 from random import random
-from urllib.parse import quote
-import uuid
 from contextlib import asynccontextmanager
-
-import redis
-
-import httpx
 from fastapi.encoders import jsonable_encoder
-from httpx import HTTPStatusError
-from requests.exceptions import RequestException, HTTPError, Timeout, ConnectionError
-
 from fastapi import FastAPI, APIRouter, Request, BackgroundTasks, Depends, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
 from typing import Callable, Awaitable, Optional
@@ -23,20 +11,19 @@ from typing import Callable, Awaitable, Optional
 from starlette.responses import StreamingResponse, JSONResponse, Response
 
 from connectors.framework.base_config import BaseConnectorConfig
-from dsx_connect.models.connector_models import ScanRequestModel, ConnectorInstanceModel, ConnectorStatusEnum, \
+from shared.models.connector_models import ScanRequestModel, ConnectorInstanceModel, ConnectorStatusEnum, \
     ItemActionEnum
 from shared.routes import DSXConnectAPI, ConnectorAPI, service_url, API_PREFIX_V1, ConnectorPath, ScanPath, route_path, \
      format_route
-from shared.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
+from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from shared.dsx_logging import dsx_logging
-from dsx_connect.models.connector_api_key import APIKeySettings
+from shared.models.connector_api_key import APIKeySettings
 from connectors.framework.connector_id import get_or_create_connector_uuid
-from dsx_connect.config import get_config
 import httpx
-from dsx_connect.connectors.client import get_async_connector_client
 from shared.routes import ConnectorAPI
 
-# read API key if available from environment settings (via Pydantic's BaseSettings)
+# Read API key if available from environment settings (via Pydantic's BaseSettings).
+# An empty or unset DSXCONNECTOR_API_KEY means no API key enforcement is desired.
 api_key_setting = APIKeySettings()
 dsx_logging.info(
     f"Using API key for authorization: {'True' if api_key_setting.api_key else 'False. Configure DSXCONNECTOR_API_KEY environment setting.'}")
@@ -46,9 +33,21 @@ API_KEY_NAME = "x-api-key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 
-async def validate_api_key(api_key: str = Security(api_key_header)):
-    if api_key != api_key_setting.api_key:
+async def validate_api_key(api_key: Optional[str] = Security(api_key_header)):
+    """
+    Validate the provided API key against the configured value.  When no API key
+    has been configured (i.e. DSXCONNECTOR_API_KEY is empty or unset),
+    this function accepts any value and does not enforce authentication.
+    """
+    expected = api_key_setting.api_key or None
+    # If no API key is configured, skip enforcement
+    if not expected:
+        return
+    # If key is missing or mismatched, raise 403
+    if not api_key or api_key != expected:
         raise HTTPException(status_code=403, detail="Invalid or missing API key")
+
+
 
 
 # <end> API key config and validation
@@ -452,4 +451,3 @@ class DSXAConnectorRouter(APIRouter):
         if self._connector.config_handler:
             return await self._connector.config_handler(self._connector.connector_running_model)
         return self._connector.connector_running_model
-

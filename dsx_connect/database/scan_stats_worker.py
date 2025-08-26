@@ -1,5 +1,5 @@
 from dsx_connect.database.scan_stats_base_db import ScanStatsBaseDB
-from dsx_connect.models.scan_models import ScanResultModel, ScanStatsModel
+from dsx_connect.models.scan_result import ScanResultModel, ScanStatsModel
 
 import heapq
 

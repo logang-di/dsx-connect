@@ -6,7 +6,7 @@ import json
 
 from dsx_connect.database.scan_results_base_db import ScanResultsBaseDB
 from shared.dsx_logging import dsx_logging
-from dsx_connect.models.scan_models import ScanResultModel, ScanResultStatusEnum
+from dsx_connect.models.scan_result import ScanResultModel, ScanResultStatusEnum
 
 
 class ScanResultsTinyDB(ScanResultsBaseDB):

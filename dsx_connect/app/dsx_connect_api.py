@@ -16,8 +16,9 @@ from starlette.responses import FileResponse, StreamingResponse, JSONResponse
 from dsx_connect.config import get_config
 from dsx_connect.connectors.registry import ConnectorsRegistry
 from dsx_connect.messaging.bus import Bus
+from dsx_connect.messaging.channels import Channel
 from dsx_connect.messaging.notifiers import Notifiers
-from dsx_connect.messaging.topics import Topics
+
 
 from shared.routes import (
     API_PREFIX_V1,
@@ -27,8 +28,6 @@ from shared.routes import (
     Action, route_path,
 )
 from dsx_connect.dsxa_client.dsxa_client import DSXAClient
-from dsx_connect.messaging.topics import Topics
-from shared.status_responses import StatusResponse, StatusResponseEnum
 from shared.dsx_logging import dsx_logging
 
 from dsx_connect.app.dependencies import static_path
@@ -206,19 +205,42 @@ sse_notifications = APIRouter(prefix=route_path(API_PREFIX_V1), tags=["server si
 )
 async def notifications_scan_result(request: Request):
     async def stream():
-        yield 'data: {"type":"connected"}\n\n'
-        hb = 0
-        async for raw in request.app.state.bus.listen(Topics.NOTIFY_SCAN_RESULT):
-            if await request.is_disconnected(): break
-            data = raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
-            yield f"data: {data}\n\n"
+        try:
+            yield 'data: {"type":"connected"}\n\n'
             hb = 0
-            # simple heartbeat every ~10 frames without data
-            hb += 1
-            if hb >= 10:
-                yield 'data: {"type":"heartbeat"}\n\n'
+
+            # Check if notifier is available before attempting to listen
+            if not hasattr(request.app.state, 'notifiers') or request.app.state.notifiers is None:
+                yield 'data: {"type":"error","message":"Notifier unavailable"}\n\n'
+                return
+
+            async for raw in request.app.state.notifiers.subscribe_scan_results():
+                if await request.is_disconnected():
+                    break
+                # raw is a parsed dict from Notifiers; ensure JSON string for SSE data
+                try:
+                    from json import dumps
+                    if isinstance(raw, (bytes, bytearray)):
+                        data = raw.decode()
+                    elif isinstance(raw, str):
+                        data = raw
+                    else:
+                        data = dumps(raw, separators=(",", ":"))
+                except Exception:
+                    data = str(raw)
+                yield f"data: {data}\n\n"
                 hb = 0
-            await asyncio.sleep(0)
+                # simple heartbeat every ~10 frames without data
+                hb += 1
+                if hb >= 10:
+                    yield 'data: {"type":"heartbeat"}\n\n'
+                    hb = 0
+                await asyncio.sleep(0)
+        except Exception as e:
+            # Handle Redis connection errors gracefully
+            dsx_logging.error(f"SSE scan result stream error: {e}")
+            yield f'data: {{"type":"error","message":"Connection lost: {str(e)}"}}\n\n'
+
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
 
@@ -230,37 +252,61 @@ async def notifications_scan_result(request: Request):
 async def connector_registered_stream(request: Request):
     async def stream():
         from contextlib import suppress
-        yield "retry: 5000\n"
-        yield 'data: {"type":"connected","message":"Connector SSE stream started"}\n\n'
-
-        q: asyncio.Queue[bytes | str] = asyncio.Queue()
-
-        async def reader():
-            async for raw in request.app.state.bus.listen(Topics.NOTIFY_CONNECTORS):
-                await q.put(raw)
-
-        reader_task = asyncio.create_task(reader())
         try:
-            while True:
-                if await request.is_disconnected():
-                    break
+            yield "retry: 5000\n"
+            yield 'data: {"type":"connected","message":"Connector SSE stream started"}\n\n'
+
+            # Check if notifier is available before attempting to listen
+            if not hasattr(request.app.state, 'notifiers') or request.app.state.notifiers is None:
+                yield 'data: {"type":"error","message":"Notifier unavailable"}\n\n'
+                return
+
+            q: asyncio.Queue[bytes | str] = asyncio.Queue()
+
+            async def reader():
                 try:
-                    raw = await asyncio.wait_for(q.get(), timeout=10.0)
-                    data = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else raw
-                    yield f"data: {data}\n\n"
-                except asyncio.TimeoutError:
-                    yield 'data: {"type":"heartbeat"}\n\n'
-                await asyncio.sleep(0)
-        finally:
-            reader_task.cancel()
-            with suppress(Exception):
-                await reader_task
+                    async for raw in request.app.state.notifiers.subscribe_connector_notify():
+                        await q.put(raw)
+                except Exception as e:
+                    # Signal error to main loop
+                    await q.put(f'{{"type":"error","message":"Reader error: {str(e)}"}}')
+
+            reader_task = asyncio.create_task(reader())
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        raw = await asyncio.wait_for(q.get(), timeout=10.0)
+                        if isinstance(raw, str) and raw.startswith('{"type":"error"'):
+                            yield f"data: {raw}\n\n"
+                            break
+                        # Normalize to JSON string for SSE
+                        from json import dumps
+                        if isinstance(raw, (bytes, bytearray)):
+                            data = raw.decode("utf-8", "replace")
+                        elif isinstance(raw, str):
+                            data = raw
+                        else:
+                            data = dumps(raw, separators=(",", ":"))
+                        yield f"data: {data}\n\n"
+                    except asyncio.TimeoutError:
+                        yield 'data: {"type":"heartbeat"}\n\n'
+                    await asyncio.sleep(0)
+            finally:
+                reader_task.cancel()
+                with suppress(Exception):
+                    await reader_task
+        except Exception as e:
+            dsx_logging.error(f"SSE connector stream error: {e}")
+            yield f'data: {{"type":"error","message":"Connection lost: {str(e)}"}}\n\n'
 
     return StreamingResponse(
         stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
 app.include_router(api)
 
 app.include_router(sse_notifications)

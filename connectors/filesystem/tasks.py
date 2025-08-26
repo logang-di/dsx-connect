@@ -23,7 +23,7 @@ project_root_dir = str(pathlib.Path(__file__).resolve().parent.parent.parent)
 
 # total hack, but necessary to import common task helpers
 sys.path.insert(0, project_root_dir)
-from connectors.framework.tasks.common import build_image, push_image, prepare_dsx_connect_files, prepare_common_files, bump_patch_version, clean_export, zip_export, prepare_shared_files
+from connectors.framework.tasks.common import build_image, push_image, prepare_common_files, bump_patch_version, clean_export, zip_export, prepare_shared_files
 
 version = bump_patch_version("version.py")
 export_folder = os.path.join(build_dir, f"{name}-{version}")
@@ -40,7 +40,6 @@ def prepare(c):
     """Prepare distribution folder with necessary files."""
     print(f"Preparing release files for version {version}...")
     prepare_shared_files(c, project_root=project_root_dir, export_folder=export_folder)
-    prepare_dsx_connect_files(c, project_root=project_root_dir, export_folder=export_folder)
     prepare_common_files(c, project_slug, name, version, project_root_dir, export_folder)
 
 

@@ -10,10 +10,10 @@ from redis.exceptions import ConnectionError as RedisConnectionError, TimeoutErr
 from shared.dsx_logging import dsx_logging
 from shared.routes import (API_PREFIX_V1, DSXConnectAPI, ScanPath,
                            api_path, Action, route_name, route_path)
-from dsx_connect.models.connector_models import ScanRequestModel
+from shared.models.connector_models import ScanRequestModel
 from dsx_connect.taskworkers.celery_app import celery_app
 from dsx_connect.taskworkers.names import Tasks, Queues
-from shared.status_responses import StatusResponse, StatusResponseEnum
+from shared.models.status_responses import StatusResponse, StatusResponseEnum
 
 
 class ScanRequestStatus(BaseModel):

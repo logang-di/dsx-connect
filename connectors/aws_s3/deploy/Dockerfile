@@ -10,8 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY connectors/framework connectors/framework
 COPY connectors/aws_s3 connectors/aws_s3
-COPY dsx_connect/ dsx_connect/
-COPY start.py .
+COPY shared/ shared/
 
 ENV PYTHONPATH=/app
 RUN mkdir -p data && chown appuser:appuser data

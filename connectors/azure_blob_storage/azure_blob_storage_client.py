@@ -9,7 +9,7 @@ from functools import partial
 from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
 from azure.core.exceptions import ResourceNotFoundError
 
-from dsx_connect.utils import file_ops, async_ops
+from shared import file_ops, async_ops
 from shared.dsx_logging import dsx_logging
 import tenacity
 import os, base64, binascii

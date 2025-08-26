@@ -6,7 +6,7 @@ import asyncio
 from typing import List, Optional
 import httpx
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictModel2
-from shared.status_responses import StatusResponse, StatusResponseEnum
+from shared.models.status_responses import StatusResponse, StatusResponseEnum
 from shared.dsx_logging import dsx_logging
 
 CHUNK_SIZE = 1024 * 1024

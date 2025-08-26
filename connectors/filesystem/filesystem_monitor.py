@@ -1,3 +1,4 @@
+import threading
 from abc import ABC, abstractmethod
 
 from pydantic import BaseModel
@@ -27,6 +28,8 @@ class FilesystemMonitor(FileSystemEventHandler):
         self._scheduled_observers = []
         self._callback = callback
         self._initialized = False
+        self._shutdown_event = threading.Event()
+
 
     @property
     def monitor_folder(self) -> ScanFolderModel:
@@ -37,6 +40,10 @@ class FilesystemMonitor(FileSystemEventHandler):
         # observers = [Observer() for _ in scan_list]
         # for observer, event_handler, path in zip(observers, event_handlers, scan_list):
         # scan anything that already exists in that folder that
+        if self._shutdown_event.is_set():
+            dsx_logging.warning("Cannot start FilesystemMonitor - already shut down")
+            return
+
         self._observer = Observer()
 
         # in the even that we've got watchers still scheduled (if this app died), unschedule them
@@ -53,11 +60,39 @@ class FilesystemMonitor(FileSystemEventHandler):
         self._observer.start()
 
     def stop(self):
+        self._shutdown_event.set()
         if self._observer:
-            self._observer.stop()
-            self._observer.join()
+            try:
+                # First, unschedule all watches to stop new events
+                self._observer.unschedule_all()
+                dsx_logging.debug("Unscheduled all file watches")
+
+                # Stop the observer
+                self._observer.stop()
+                dsx_logging.debug("Observer stop() called")
+
+                # Wait for the observer thread to finish with a timeout
+                self._observer.join(timeout=10.0)  # 10 second timeout
+
+                if self._observer.is_alive():
+                    dsx_logging.warning("Observer thread did not shut down cleanly within timeout")
+                else:
+                    dsx_logging.debug("Observer thread shut down cleanly")
+
+            except Exception as e:
+                dsx_logging.error(f"Error during FilesystemMonitor shutdown: {e}")
+            finally:
+                self._observer = None
+                self._scheduled_observers.clear()
+
+        dsx_logging.info("FilesystemMonitor stopped")
+
 
     def on_modified(self, event):
+        if self._shutdown_event.is_set():
+            dsx_logging.debug("Ignoring file event - monitor is shutting down")
+            return
+
         if event.is_directory:
             return
 
@@ -87,5 +122,11 @@ class FilesystemMonitor(FileSystemEventHandler):
                 # self._lock.release()
 
         dsx_logging.info(f'New or modified file detected: {event.src_path}')
-        self._callback.file_modified_callback(file_path=filename)
+
+        # Check again before callback in case shutdown happened during file operations
+        if not self._shutdown_event.is_set():
+            try:
+                self._callback.file_modified_callback(file_path=filename)
+            except Exception as e:
+                dsx_logging.error(f"Error in file callback: {e}")
 

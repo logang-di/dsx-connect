@@ -3,7 +3,6 @@ from celery import Celery
 from kombu import Exchange, Queue
 from dsx_connect.config import get_config
 from dsx_connect.taskworkers.names import Queues, Tasks
-from dsx_connect.utils.log_chain import dsx_logging
 
 cfg = get_config().workers
 
@@ -29,11 +28,13 @@ celery_app.conf.update(
         Queue(Queues.REQUEST, Exchange(Queues.REQUEST), routing_key=Queues.REQUEST),
         Queue(Queues.RESULT,  Exchange(Queues.RESULT),  routing_key=Queues.RESULT),
         Queue(Queues.VERDICT, Exchange(Queues.VERDICT), routing_key=Queues.VERDICT),
+        Queue(Queues.NOTIFICATION, Exchange(Queues.NOTIFICATION), routing_key=Queues.NOTIFICATION)
     ],
     task_routes={
         Tasks.REQUEST: {"queue": Queues.REQUEST, "routing_key": Queues.REQUEST},
         Tasks.RESULT:  {"queue": Queues.RESULT,  "routing_key": Queues.RESULT},
         Tasks.VERDICT: {"queue": Queues.VERDICT, "routing_key": Queues.VERDICT},
+        Tasks.NOTIFICATION: {"queue": Queues.NOTIFICATION, "routing_key": Queues.NOTIFICATION}
     },
     # backoff/retry knobs (defaults—each task can override)
     task_soft_time_limit=120,   # seconds

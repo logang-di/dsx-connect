@@ -1,6 +1,6 @@
 import typer
 import uvicorn
-from dsx_connect.utils.app_logging import dsx_logging
+from shared.dsx_logging import dsx_logging
 
 # Ensure connector is registered via decorators
 import connectors.aws_s3.aws_s3_connector  # noqa: F401
@@ -32,4 +32,3 @@ def start(
 
 if __name__ == "__main__":
     app()
-

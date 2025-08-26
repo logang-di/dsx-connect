@@ -2,16 +2,18 @@
 from starlette.responses import StreamingResponse
 
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel
-from dsx_connect.utils.app_logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
+from shared.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel
+from shared.dsx_logging import dsx_logging
+from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.sharepoint.config import ConfigManager
 from connectors.sharepoint.version import CONNECTOR_VERSION
+from connectors.sharepoint.sharepoint_client import SharePointClient
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
 # Initialize DSX Connector instance
 connector = DSXConnector(config)
+sp_client = SharePointClient(config)
 
 
 @connector.startup
@@ -31,8 +33,13 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} configuration: {config}.")
     dsx_logging.info(f"{base.name} startup completed.")
 
-    # modify ConnectorModel as needed and return
-    # base.meta_info = ...
+    # Attempt to resolve site/drive on startup so readiness can pass
+    try:
+        await sp_client._ensure_site_and_drive()
+        base.meta_info = f"SharePoint site={config.sp_site_path}, drive={config.sp_drive_name or 'default'}"
+    except Exception as e:
+        dsx_logging.warning(f"SharePoint discovery failed on startup: {e}")
+        base.meta_info = "SharePoint discovery pending"
     return base
 
 
@@ -84,11 +91,26 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
-    return StatusResponse(
-        status=StatusResponseEnum.NOTHING,
-        message="Full scan not implemented",
-        description=""
-    )
+    # Iterate files and enqueue scan requests
+    try:
+        if config.recursive:
+            async for item in sp_client.iter_files_recursive(config.asset or ""):
+                if item.get("folder"):
+                    continue
+                item_id = item.get("id")
+                name = item.get("name")
+                await connector.scan_file_request(ScanRequestModel(location=item_id, metainfo=name))
+        else:
+            items = await sp_client.list_files(config.asset or "")
+            for item in items:
+                if item.get("folder"):
+                    continue
+                item_id = item.get("id")
+                name = item.get("name")
+                await connector.scan_file_request(ScanRequestModel(location=item_id, metainfo=name))
+        return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
+    except Exception as e:
+        return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
 
 
 @connector.item_action
@@ -109,10 +131,42 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> ItemAc
         SimpleResponse: A response indicating that the remediation action was performed successfully,
             or an error if the action is not implemented.
     """
-    return ItemActionStatusResponse(
-        status=StatusResponseEnum.NOTHING,
-        item_action=ItemActionEnum.NOT_IMPLEMENTED,
-        message=f"Item action not implemented.")
+    # DELETE
+    if config.item_action == ItemActionEnum.DELETE:
+        try:
+            await sp_client.delete_file(scan_event_queue_info.location)
+            return ItemActionStatusResponse(
+                status=StatusResponseEnum.SUCCESS,
+                item_action=config.item_action,
+                message="File deleted.",
+                description=f"Deleted item id {scan_event_queue_info.location}"
+            )
+        except Exception as e:
+            return ItemActionStatusResponse(
+                status=StatusResponseEnum.ERROR,
+                item_action=config.item_action,
+                message=str(e)
+            )
+    # MOVE
+    if config.item_action == ItemActionEnum.MOVE:
+        try:
+            dest = config.item_action_move_metainfo
+            await sp_client.move_file(scan_event_queue_info.location, dest)
+            return ItemActionStatusResponse(
+                status=StatusResponseEnum.SUCCESS,
+                item_action=config.item_action,
+                message="File moved.",
+                description=f"Moved item {scan_event_queue_info.location} to {dest}"
+            )
+        except Exception as e:
+            return ItemActionStatusResponse(
+                status=StatusResponseEnum.ERROR,
+                item_action=config.item_action,
+                message=str(e)
+            )
+    return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING,
+                                    item_action=config.item_action,
+                                    message="Item action not implemented for SharePoint")
 
 
 @connector.read_file
@@ -151,12 +205,16 @@ async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusRe
         FileContentResponse or SimpleResponse: A successful FileContentResponse containing the file's content,
             or a SimpleResponse with an error message if file reading is not supported.
     """
-    # Implement file read (if applicable)
-    return StatusResponse(
-        status=StatusResponseEnum.NOTHING,
-        message="Read file not implemented",
-        description=""
-    )
+    try:
+        resp = await sp_client.download_file(scan_event_queue_info.location)
+
+        async def agen():
+            async for chunk in resp.aiter_bytes():
+                yield chunk
+
+        return StreamingResponse(agen(), media_type="application/octet-stream")
+    except Exception as e:
+        return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
 
 
 @connector.repo_check
@@ -169,11 +227,10 @@ async def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    return StatusResponse(
-        status=StatusResponseEnum.NOTHING,
-        message="Repo check not implemented",
-        description=""
-    )
+    ok = await sp_client.test_connection()
+    if ok:
+        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="SharePoint connectivity success")
+    return StatusResponse(status=StatusResponseEnum.ERROR, message="SharePoint connectivity failed")
 
 @connector.webhook_event
 async def webhook_handler(event: dict):

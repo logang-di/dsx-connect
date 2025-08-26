@@ -4,7 +4,7 @@ from pydantic import Field, HttpUrl, field_validator
 from pydantic_settings import BaseSettings
 
 from connectors.framework.base_config import BaseConnectorConfig
-from dsx_connect.models.connector_models import ItemActionEnum
+from shared.models.connector_models import ItemActionEnum
 # from dsx_connect.utils.file_ops import _tokenize_filter
 from shared.dsx_logging import dsx_logging
 
@@ -29,15 +29,15 @@ class FilesystemConnectorConfig(BaseConnectorConfig):
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
     dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586/",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
-    item_action: ItemActionEnum = ItemActionEnum.NOTHING
+    item_action: ItemActionEnum = ItemActionEnum.MOVE
     item_action_move_metainfo: str = "dsxconnect-quarantine"
 
-    asset: str = Field("/Users/logangilbert/OneDrive - Deepinstinct",
-                       description="Directory to scan for files")
-    filter: str = "Partners -demovideo"
-    # asset: str = Field("/Users/logangilbert/Documents/SAMPLES",
+    # asset: str = Field("/Users/logangilbert/OneDrive - Deepinstinct",
     #                    description="Directory to scan for files")
-    # filter: str = "PDF"
+    # filter: str = "Partners -demovideo"
+    asset: str = Field("/Users/logangilbert/Documents/SAMPLES",
+                       description="Directory to scan for files")
+    filter: str = "PDF1"
     scan_by_path: bool = False
 
     ## Config settings specific to this Connector

@@ -1,163 +1,163 @@
-"""Task worker module for dsx-connect.
-
-This module defines Celery tasks for processing scan requests, verdicts, and scan result storage
-in the dsx-connect system. It integrates with external services via HTTP to fetch file content,
-scan binaries for malware, perform actions based on verdicts, and store results persistently.
-The tasks are designed to run synchronously in a Celery worker process.
-
-The primary task, `scan_request_task`, fetches file content, scans it, and dispatches to
-`verdict_action_task` for action-taking and `scan_result_task` for persistent storage.
-`verdict_action_task` processes verdicts and executes actions if needed. `scan_result_task`
-stores scan results in a database.
-
-Usage:
-    Run as a Celery worker from the dsx-connect root directory:
-    ```bash
-    celery_app -A dsx_connect.celery_app.celery_app worker --loglevel=info -Q scan_request_queue,verdict_action_queue,scan_result_queue
-    ```
-    Or run standalone for debugging:
-    ```bash
-    python taskworkers/taskworkers.py
-    ```
-
-Dependencies:
-    - httpx: For synchronous HTTP requests.
-    - celery_app: For task queue management.
-    - dsx_connect: Internal models, config, and client utilities.
-"""
-import io
-import json
-import time
-import unicodedata
-from io import BytesIO
-from typing import Dict, Optional
-
-import httpx
-import pyzipper
-import redis
-from celery.signals import worker_process_init
-from fastapi.encoders import jsonable_encoder
-from pydantic import ValidationError
-
-from dsx_connect.database.scan_stats_worker import ScanStatsWorker
-from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum, DPAVerdictModel2
-from dsx_connect.database.scan_results_base_db import ScanResultsBaseDB
-from dsx_connect.database.scan_stats_base_db import ScanStatsBaseDB
-from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest, DSXAConnectionError, DSXATimeoutError, \
-    DSXAServiceError, DSXAClientError
-from dsx_connect.messaging.topics import Topics
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
-from dsx_connect.taskworkers import names
-from shared.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
-from dsx_connect.models.scan_models import ScanResultModel, ScanResultStatusEnum
-from dsx_connect.connectors.client import get_connector_client
-from dsx_connect.models.dead_letter import DeadLetterItem
-from dsx_connect.taskworkers.celery_app import celery_app
-from dsx_connect.config import DatabaseConfig, ConfigDatabaseType
-from shared.dsx_logging import (dsx_logging)
-from dsx_connect.config import get_config
-from shared.routes import DSXConnectAPI, service_url, ScanPath, ConnectorAPI
-from dsx_connect.taskworkers.names import Queues, Tasks
+# """Task worker module for dsx-connect.
+#
+# This module defines Celery tasks for processing scan requests, verdicts, and scan result storage
+# in the dsx-connect system. It integrates with external services via HTTP to fetch file content,
+# scan binaries for malware, perform actions based on verdicts, and store results persistently.
+# The tasks are designed to run synchronously in a Celery worker process.
+#
+# The primary task, `scan_request_task`, fetches file content, scans it, and dispatches to
+# `verdict_action_task` for action-taking and `scan_result_task` for persistent storage.
+# `verdict_action_task` processes verdicts and executes actions if needed. `scan_result_task`
+# stores scan results in a database.
+#
+# Usage:
+#     Run as a Celery worker from the dsx-connect root directory:
+#     ```bash
+#     celery_app -A dsx_connect.celery_app.celery_app worker --loglevel=info -Q scan_request_queue,verdict_action_queue,scan_result_queue
+#     ```
+#     Or run standalone for debugging:
+#     ```bash
+#     python taskworkers/taskworkers.py
+#     ```
+#
+# Dependencies:
+#     - httpx: For synchronous HTTP requests.
+#     - celery_app: For task queue management.
+#     - dsx_connect: Internal models, config, and client utilities.
+# """
+# import io
+# import json
+# import time
+# import unicodedata
+# from io import BytesIO
+# from typing import Dict, Optional
+#
+# import httpx
+# import pyzipper
+# import redis
+# from celery.signals import worker_process_init
+# from fastapi.encoders import jsonable_encoder
+# from pydantic import ValidationError
+#
+# from dsx_connect.database.scan_stats_worker import ScanStatsWorker
+# from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum, DPAVerdictModel2
+# from dsx_connect.database.scan_results_base_db import ScanResultsBaseDB
+# from dsx_connect.database.scan_stats_base_db import ScanStatsBaseDB
+# from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest, DSXAConnectionError, DSXATimeoutError, \
+#     DSXAServiceError, DSXAClientError
+# from dsx_connect.messaging.topics import Topics
+# from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum
+# from dsx_connect.taskworkers import names
+# from shared.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
+# from dsx_connect.models.scan_models import ScanResultModel, ScanResultStatusEnum
+# from dsx_connect.connectors.client import get_connector_client
+# from dsx_connect.models.dead_letter import DeadLetterItem
+# from dsx_connect.taskworkers.celery_app import celery_app
+# from dsx_connect.config import DatabaseConfig, ConfigDatabaseType
+# from shared.dsx_logging import (dsx_logging)
+# from dsx_connect.config import get_config
+# from shared.routes import DSXConnectAPI, service_url, ScanPath, ConnectorAPI
+# from dsx_connect.taskworkers.names import Queues, Tasks
 
 
 # Shared client pools and scan client per worker process
 # _connector_clients: Dict[str, httpx.Client] = {}
 # Lock for thread-safe access to the client pool
 # _client_pool_lock = threading.Lock()
-_scan_results_db: Optional[ScanResultsBaseDB] = None  # Assuming initialized via database_scan_results_factory
-_scan_stats_db: Optional[ScanStatsBaseDB] = None  # Assuming initialized via database_scan_stats_factory
-_scan_stats_worker: Optional[ScanStatsWorker] = None  # Assuming initialized via passing _scan_stats_db
-
-config = get_config()
-
-
-@worker_process_init.connect
-def init_worker(**kwargs):
-    """Initialize shared httpx.Client for scan requests and empty connector client pool."""
-    global _connector_clients
-    global _scan_results_db
-    global _scan_stats_db
-    global _scan_stats_worker
-    _connector_clients = {}
-    dsx_logging.debug("Initialized shared httpx.Client for scan requests and empty connector pool")
-
-    from dsx_connect.database.database_factory import database_scan_results_factory
-    _scan_results_db = database_scan_results_factory(
-        database_type=config.database.type,
-        database_loc=config.database.loc,
-        retain=config.database.retain,
-        collection_name="scan_results"
-    )
-    dsx_logging.info(f"Initialized scan results database of type {config.database.type} at {config.database.loc}")
-
-    from dsx_connect.database.database_factory import database_scan_stats_factory
-    from dsx_connect.database.scan_stats_worker import ScanStatsWorker
-    _scan_stats_db = database_scan_stats_factory(
-        database_type=ConfigDatabaseType.TINYDB,
-        database_loc=config.database.scan_stats_db,
-        collection_name="scan_stats"
-    )
-    _scan_stats_worker = ScanStatsWorker(_scan_stats_db)
-    dsx_logging.debug("Initialized shared httpx.Client and database")
-
-    # By initializing syslog inside init_worker, each worker process gets its own syslog handler, ensuring thread/process
-    # safety in the event there is more than one worker/concurrency
-    # Importing log_chain and calling init_syslog_handler at the module level could trigger side effects (e.g.,
-    # network I/O to connect to the syslog server) during import, which might fail if the environment isn’t ready
-    # (e.g., no network, invalid config). Deferring this to init_worker ensures it happens when the worker
-    # is fully operational.
-    from dsx_connect.utils.log_chain import init_syslog_handler
-    init_syslog_handler(syslog_host=config.syslog.syslog_server_url,
-                        syslog_port=config.syslog.syslog_server_port)
-
-
-# HELPER FUNCTIONS - Define these OUTSIDE the task function
-def _handle_retryable_error(task_instance, scan_request, error, task_id, retry_count, max_retries, failure_reason,
-                            backoff_base=60):
-    """Handle errors that should be retried with configurable backoff, then sent to DLQ"""
-    if retry_count < max_retries:
-        # Use configurable backoff_base instead of hardcoded values
-        retry_delay = backoff_base * (3 ** retry_count)  # exponential backoff with configurable base
-
-        next_retry = retry_count + 1
-        total_retries = max_retries
-
-        dsx_logging.info(f"Scheduling retry due to '{failure_reason}' for {scan_request.location} in {retry_delay}s "
-                         f"(retry {next_retry}/{total_retries})")
-
-        # Raise retry to let Celery handle it - use the task_instance
-        raise task_instance.retry(countdown=retry_delay, exc=error)
-    else:
-        # Max retries exceeded - send to DLQ
-        return _send_to_dlq_final_error(scan_request, error, task_id, retry_count, failure_reason)
-
-
-def _send_to_dlq_final_error(scan_request, error, task_id, retry_count, failure_reason):
-    """Send item to dead letter queue for final errors or after max retries"""
-    dsx_logging.error(f"Max retries exceeded for '{failure_reason}' attempting to scan: {scan_request.location} after {retry_count + 1} attempts. "
-                      f"Moving to dead letter queue.")
-
-    dead_letter_item = DeadLetterItem(
-        scan_request=scan_request,
-        failure_reason=failure_reason,
-        error_details=str(error),
-        failed_at=time.time(),
-        original_task_id=task_id,
-        retry_count=retry_count + 1
-    )
-
-    # try:
-    #     success = redis_manager.add_to_dead_letter_queue(
-    #         queue_name=RedisDeadLetterQueueNames.DLQ_SCAN_FILE,
-    #         item_data=dead_letter_item.model_dump_json(),
-    #         ttl_days=config.taskqueue.dlq_expire_after_days
-    #     )
-    #     dsx_logging.info(f"Added {scan_request.location} to dead letter queue: {failure_reason}")
-    # except Exception as redis_err:
-    #     dsx_logging.error(f"Failed to add to dead letter queue: {redis_err}")
-
-    return StatusResponseEnum.ERROR
-
+# _scan_results_db: Optional[ScanResultsBaseDB] = None  # Assuming initialized via database_scan_results_factory
+# _scan_stats_db: Optional[ScanStatsBaseDB] = None  # Assuming initialized via database_scan_stats_factory
+# _scan_stats_worker: Optional[ScanStatsWorker] = None  # Assuming initialized via passing _scan_stats_db
+#
+# config = get_config()
+#
+#
+# @worker_process_init.connect
+# def init_worker(**kwargs):
+#     """Initialize shared httpx.Client for scan requests and empty connector client pool."""
+#     global _connector_clients
+#     global _scan_results_db
+#     global _scan_stats_db
+#     global _scan_stats_worker
+#     _connector_clients = {}
+#     dsx_logging.debug("Initialized shared httpx.Client for scan requests and empty connector pool")
+#
+#     from dsx_connect.database.database_factory import database_scan_results_factory
+#     _scan_results_db = database_scan_results_factory(
+#         database_type=config.database.type,
+#         database_loc=config.database.loc,
+#         retain=config.database.retain,
+#         collection_name="scan_results"
+#     )
+#     dsx_logging.info(f"Initialized scan results database of type {config.database.type} at {config.database.loc}")
+#
+#     from dsx_connect.database.database_factory import database_scan_stats_factory
+#     from dsx_connect.database.scan_stats_worker import ScanStatsWorker
+#     _scan_stats_db = database_scan_stats_factory(
+#         database_type=ConfigDatabaseType.TINYDB,
+#         database_loc=config.database.scan_stats_db,
+#         collection_name="scan_stats"
+#     )
+#     _scan_stats_worker = ScanStatsWorker(_scan_stats_db)
+#     dsx_logging.debug("Initialized shared httpx.Client and database")
+#
+#     # By initializing syslog inside init_worker, each worker process gets its own syslog handler, ensuring thread/process
+#     # safety in the event there is more than one worker/concurrency
+#     # Importing log_chain and calling init_syslog_handler at the module level could trigger side effects (e.g.,
+#     # network I/O to connect to the syslog server) during import, which might fail if the environment isn’t ready
+#     # (e.g., no network, invalid config). Deferring this to init_worker ensures it happens when the worker
+#     # is fully operational.
+#     from dsx_connect.utils.log_chain import init_syslog_handler
+#     init_syslog_handler(syslog_host=config.syslog.syslog_server_url,
+#                         syslog_port=config.syslog.syslog_server_port)
+#
+#
+# # HELPER FUNCTIONS - Define these OUTSIDE the task function
+# def _handle_retryable_error(task_instance, scan_request, error, task_id, retry_count, max_retries, failure_reason,
+#                             backoff_base=60):
+#     """Handle errors that should be retried with configurable backoff, then sent to DLQ"""
+#     if retry_count < max_retries:
+#         # Use configurable backoff_base instead of hardcoded values
+#         retry_delay = backoff_base * (3 ** retry_count)  # exponential backoff with configurable base
+#
+#         next_retry = retry_count + 1
+#         total_retries = max_retries
+#
+#         dsx_logging.info(f"Scheduling retry due to '{failure_reason}' for {scan_request.location} in {retry_delay}s "
+#                          f"(retry {next_retry}/{total_retries})")
+#
+#         # Raise retry to let Celery handle it - use the task_instance
+#         raise task_instance.retry(countdown=retry_delay, exc=error)
+#     else:
+#         # Max retries exceeded - send to DLQ
+#         return _send_to_dlq_final_error(scan_request, error, task_id, retry_count, failure_reason)
+#
+#
+# def _send_to_dlq_final_error(scan_request, error, task_id, retry_count, failure_reason):
+#     """Send item to dead letter queue for final errors or after max retries"""
+#     dsx_logging.error(f"Max retries exceeded for '{failure_reason}' attempting to scan: {scan_request.location} after {retry_count + 1} attempts. "
+#                       f"Moving to dead letter queue.")
+#
+#     dead_letter_item = DeadLetterItem(
+#         scan_request=scan_request,
+#         failure_reason=failure_reason,
+#         error_details=str(error),
+#         failed_at=time.time(),
+#         original_task_id=task_id,
+#         retry_count=retry_count + 1
+#     )
+#
+#     # try:
+#     #     success = redis_manager.add_to_dead_letter_queue(
+#     #         queue_name=RedisDeadLetterQueueNames.DLQ_SCAN_FILE,
+#     #         item_data=dead_letter_item.model_dump_json(),
+#     #         ttl_days=config.taskqueue.dlq_expire_after_days
+#     #     )
+#     #     dsx_logging.info(f"Added {scan_request.location} to dead letter queue: {failure_reason}")
+#     # except Exception as redis_err:
+#     #     dsx_logging.error(f"Failed to add to dead letter queue: {redis_err}")
+#
+#     return StatusResponseEnum.ERROR
+#
 
 # @celery_app.task(name=Tasks.REQUEST, bind=True,
 #                  max_retries=config.workers.scan_request_max_retries)

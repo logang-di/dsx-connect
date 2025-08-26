@@ -69,18 +69,23 @@ def prepare(c):
     c.run(f"mkdir -p {export_folder}/dsx_connect")
     c.run(f"cp __init__.py {export_folder}/dsx_connect/")
     c.run(f"cp config.py {export_folder}/dsx_connect/")
-    c.run(f"rsync -av --exclude '__pycache__' app/ {export_folder}/dsx_connect/app/")
-    c.run(f"rsync -av --exclude '__pycache__' celery_app/ {export_folder}/dsx_connect/celery_app/")
-    c.run(f"rsync -av --exclude '__pycache__' common/ {export_folder}/dsx_connect/common/")
-    c.run(f"rsync -av --exclude '__pycache__' connector_utils/ {export_folder}/dsx_connect/connector_utils/")
-    c.run(f"rsync -av --exclude '__pycache__' diagrams/ {export_folder}/dsx_connect/diagrams/")
-    c.run(f"rsync -av --exclude '__pycache__' database/ {export_folder}/dsx_connect/database/")
-    c.run(f"rsync -av --exclude '__pycache__' dsxa_client/ {export_folder}/dsx_connect/dsxa_client/")
-    c.run(f"rsync -av --exclude '__pycache__' models/ {export_folder}/dsx_connect/models/")
-    c.run(f"rsync -av --exclude '__pycache__' superlog/ {export_folder}/dsx_connect/superlog/")
-    c.run(f"rsync -av --exclude '__pycache__' taskworkers/ {export_folder}/dsx_connect/taskworkers/")
-    c.run(f"rsync -av --exclude '__pycache__' utils/ {export_folder}/dsx_connect/utils/")
-    c.run(f"rsync -av --exclude '__pycache__' config.py {export_folder}/dsx_connect/")
+
+    folders = [
+        "app",
+        "auth",
+        "connectors",
+        "database",
+        "dsxa_client",
+        "messaging",
+        "models",
+        "security",
+        "superlog",
+        "taskworkers"
+    ]
+    for folder in folders:
+        c.run(f"rsync -av --exclude '__pycache__' {folder}/ {export_folder}/dsx_connect/{folder}/")
+
+    c.run(f"rsync -av --exclude '__pycache__' ../shared/ {export_folder}/shared")
 
     # move docker files to topmost directory for building
     c.run(f"cp deploy/docker/Dockerfile {export_folder}/")

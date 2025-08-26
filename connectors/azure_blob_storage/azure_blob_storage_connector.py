@@ -4,12 +4,12 @@ from starlette.responses import StreamingResponse
 
 from connectors.azure_blob_storage.azure_blob_storage_client import AzureBlobClient
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, ConnectorStatusEnum
+from shared.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, ConnectorStatusEnum
 from shared.dsx_logging import dsx_logging
-from shared.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
+from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.azure_blob_storage.config import ConfigManager
 from connectors.azure_blob_storage.version import CONNECTOR_VERSION
-from dsx_connect.utils.streaming import stream_blob
+from shared.streaming import stream_blob
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()

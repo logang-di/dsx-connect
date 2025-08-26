@@ -8,8 +8,8 @@ from fastapi import APIRouter, BackgroundTasks
 from dsx_connect.dsxa_client.verdict_models import DPAVerdictEnum
 from shared.routes import DSXConnectAPI, ConnectorAPI
 from dsx_connect.dsxa_client.dsxa_client import DSXAClient, DSXAScanRequest
-from dsx_connect.models.connector_models import ScanRequestModel
-from shared.status_responses import StatusResponse, StatusResponseEnum
+from shared.models.connector_models import ScanRequestModel
+from shared.models.status_responses import StatusResponse, StatusResponseEnum
 
 from dsx_connect.config import get_config
 

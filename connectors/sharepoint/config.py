@@ -1,6 +1,8 @@
+from typing import Optional
+
 from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
-from dsx_connect.models.connector_models import ItemActionEnum
+from shared.models.connector_models import ItemActionEnum
 from connectors.framework.base_config import BaseConnectorConfig
 
 class SharepointConnectorConfig(BaseConnectorConfig):
@@ -29,7 +31,20 @@ class SharepointConnectorConfig(BaseConnectorConfig):
     # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
     asset: str = ""
     filter: str = ""
-    recursive: bool = True # deprecated
+    recursive: bool = True  # deprecated
+
+    # SharePoint / Graph settings (client-credentials)
+    sp_tenant_id: str = Field(default="", description="Azure AD Tenant ID")
+    sp_client_id: str = Field(default="", description="Azure AD App (client) ID")
+    sp_client_secret: str = Field(default="", description="Azure AD App client secret")
+    sp_hostname: str = Field(default="", description="SharePoint hostname, e.g., contoso.sharepoint.com")
+    sp_site_path: str = Field(default="", description="SharePoint site path, e.g., MySiteOrCollection")
+    sp_drive_name: Optional[str] = Field(default=None, description="Optional drive name; default drive if omitted")
+
+    # TLS toggles for outbound Graph requests
+    sp_use_tls: bool = Field(default=True, description="Use HTTPS for Graph (always true for graph.microsoft.com)")
+    sp_verify_tls: bool = Field(default=True, description="Verify TLS certificates for outbound requests")
+    sp_ca_bundle: Optional[str] = Field(default=None, description="Optional CA bundle path for certificate verification")
 
     ### Connector specific configuration
 
@@ -56,4 +71,3 @@ class ConfigManager:
 
 
 config = ConfigManager.get_config()
-

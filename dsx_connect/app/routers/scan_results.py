@@ -2,7 +2,7 @@ from typing import List
 
 from fastapi import APIRouter
 
-from dsx_connect.models.scan_models import ScanResultModel, ScanStatsModel
+from dsx_connect.models.scan_result import ScanResultModel, ScanStatsModel
 from dsx_connect.config import get_config
 from shared.routes import DSXConnectAPI, API_PREFIX_V1, route_name, Action, ScanPath, route_path
 from dsx_connect.database.database_factory import database_scan_stats_factory, database_scan_results_factory

@@ -4,7 +4,7 @@ import json
 from typing import List, Optional
 
 from dsx_connect.database.scan_results_base_db import ScanResultsBaseDB
-from dsx_connect.models.scan_models import ScanResultModel
+from dsx_connect.models.scan_result import ScanResultModel
 import threading
 
 

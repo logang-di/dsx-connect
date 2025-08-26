@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi.encoders import jsonable_encoder
-from dsx_connect.models.scan_models import ScanResultModel
+from dsx_connect.models.scan_result import ScanResultModel
 
 
 # -------------------------------------------------------------------
@@ -50,7 +50,7 @@ def init_syslog_handler(syslog_host: str = "localhost", syslog_port: int = 514):
         dsx_logging.error(f"Failed to initialize syslog handler: {e}")
 
 
-def log_verdict_chain(scan_result: ScanResultModel, original_task_id: str, current_task_id: Optional[str] = None) -> None:
+def log_verdict_chain(scan_result: ScanResultModel, scan_request_task_id: str, current_task_id: Optional[str] = None) -> None:
     """
     Log the complete chain (scan request, verdict, and item action) to syslog.
 
@@ -58,7 +58,7 @@ def log_verdict_chain(scan_result: ScanResultModel, original_task_id: str, curre
         scan_request: The original scan request details.
         verdict: The scan verdict result.
         item_action_status: Whether the item_action (if triggered) was successful and the action performed.
-        original_task_id: The task ID of the initiating scan_request_task.
+        scan_request_task_id: The task ID of the initiating scan_request_task.
         current_task_id: The task ID of the verdict_task (optional).
 
     """
@@ -69,8 +69,8 @@ def log_verdict_chain(scan_result: ScanResultModel, original_task_id: str, curre
 
     try:
         log_data = {
-            "original_task_id": original_task_id,
-            "current_task_id": current_task_id,
+            "scan_request_task_id": scan_request_task_id,
+            "final_task_id": current_task_id,
             "timestamp": datetime.utcnow().isoformat(),
             "scan_request": scan_result.scan_request.model_dump(),
             "verdict": scan_result.verdict.model_dump(),

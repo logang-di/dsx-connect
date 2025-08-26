@@ -10,10 +10,9 @@ from dsx_connect.connectors import registration
 from dsx_connect.connectors.client import get_connector_client, \
     get_async_connector_client  # ← new auth-aware async client
 from dsx_connect.connectors.registry import ConnectorsRegistry
-from dsx_connect.messaging.topics import Keys
-from dsx_connect.models.connector_models import ConnectorInstanceModel
+from shared.models.connector_models import ConnectorInstanceModel
 from shared.dsx_logging import dsx_logging
-from shared.status_responses import StatusResponse, StatusResponseEnum
+from shared.models.status_responses import StatusResponse, StatusResponseEnum
 
 from shared.routes import (
     API_PREFIX_V1,

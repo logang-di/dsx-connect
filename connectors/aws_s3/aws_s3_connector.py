@@ -2,14 +2,12 @@ from starlette.responses import StreamingResponse
 
 from connectors.aws_s3.aws_s3_client import AWSS3Client
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.utils import file_ops
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, ConnectorStatusEnum
-from dsx_connect.utils.async_ops import run_async
-from dsx_connect.utils.app_logging import dsx_logging
-from dsx_connect.models.responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
+from shared.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, ConnectorStatusEnum
+from shared.dsx_logging import dsx_logging
+from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.aws_s3.config import ConfigManager
 from connectors.aws_s3.version import CONNECTOR_VERSION
-from dsx_connect.utils.streaming import stream_blob
+from shared.streaming import stream_blob
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()

@@ -1,4 +1,3 @@
-# dsx_connect/connectors/heartbeat.py
 import time
 import httpx
 
@@ -74,3 +73,4 @@ def heartbeat_all_connectors(app, interval: int = SLEEP_SECONDS_DEFAULT) -> None
                 dsx_logging.error(f"Error removing connector {conn.uuid}: {e}")
 
         time.sleep(interval)
+

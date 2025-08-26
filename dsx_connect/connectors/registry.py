@@ -1,4 +1,3 @@
-# dsx_connect/connectors/registry.py
 from __future__ import annotations
 import asyncio, json
 from typing import Dict, List, Optional
@@ -9,15 +8,15 @@ from redis.asyncio import Redis as AsyncRedis
 
 from dsx_connect.connectors.client import get_async_connector_client
 from shared.dsx_logging import dsx_logging
-from dsx_connect.models.connector_models import ConnectorInstanceModel
-from dsx_connect.messaging.topics import Topics, Keys
+from shared.models.connector_models import ConnectorInstanceModel
+from dsx_connect.messaging.channels import Channel
+from dsx_connect.messaging.connector_keys import ConnectorKeys  # presence/config key helper
 from shared.routes import ConnectorAPI
-
 
 class ConnectorsRegistry:
     def __init__(self, redis: AsyncRedis, sweep_period: int = 20):
-        self._r: AsyncRedis = redis               # <- injected
-        self._pubsub = None                       # created from the same client
+        self._r: AsyncRedis = redis
+        self._pubsub = None
         self._by_id: Dict[str, ConnectorInstanceModel] = {}
         self._lock = asyncio.Lock()
         self._tasks: List[asyncio.Task] = []
@@ -28,7 +27,6 @@ class ConnectorsRegistry:
         if self._started:
             return
         try:
-            # sanity check: confirm the same pool is usable
             await self._r.ping()
         except Exception as e:
             dsx_logging.warning(f"Registry: Redis unavailable at start: {e}")
@@ -37,10 +35,7 @@ class ConnectorsRegistry:
 
         self._pubsub = self._r.pubsub(ignore_subscribe_messages=True)
         await self._load_from_redis()
-
-        # let's check if there is any existing entries in redis we just loaded and if they are still valid
         await self._validate_startup_connectors()
-
 
         self._tasks.append(asyncio.create_task(self._pubsub_listener(), name="connector-registry-pubsub"))
         self._tasks.append(asyncio.create_task(self._sweeper(), name="connector-registry-sweeper"))
@@ -63,7 +58,7 @@ class ConnectorsRegistry:
 
         if self._pubsub:
             try:
-                await self._pubsub.unsubscribe(Topics.REGISTRY_CONNECTORS)
+                await self._pubsub.unsubscribe(str(Channel.REGISTRY_CONNECTORS))
             except Exception:
                 pass
             try:
@@ -78,7 +73,7 @@ class ConnectorsRegistry:
     async def get(self, uuid: str | UUID) -> Optional[ConnectorInstanceModel]:
         uid = str(uuid)
         try:
-            raw = await self._r.get(Keys.presence(uid))
+            raw = await self._r.get(ConnectorKeys.presence(uid))
             if raw:
                 text = raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
                 model = ConnectorInstanceModel(**json.loads(text))
@@ -107,7 +102,7 @@ class ConnectorsRegistry:
 
     async def _load_from_redis(self) -> None:
         found = 0
-        pattern = f"{Keys.CONNECTOR_PRESENCE_BASE}:*"
+        pattern = f"{ConnectorKeys.CONNECTOR_PRESENCE_BASE}:*"
         try:
             async for key in self._r.scan_iter(pattern):
                 try:
@@ -167,36 +162,22 @@ class ConnectorsRegistry:
         if alive_connectors:
             dsx_logging.info(f"Startup validation confirmed {len(alive_connectors)} healthy connector(s)")
 
+
     async def _evict_connector(self, uuid: str, reason: str = "health_check_failed") -> None:
-        """
-        Remove connector from cache, Redis, and notify frontend.
-        This centralizes the eviction logic used by both sweeper and startup validation.
-        """
         try:
-            # Remove from local cache
             await self.remove(uuid)
-
-            # Remove from Redis
-            key = Keys.presence(str(uuid))
+            key = ConnectorKeys.presence(uuid)
             await self._r.delete(key)
-
-            # Notify frontend via pub/sub (same as unregister does)
             unregister_event = {
                 "type": "unregistered",
-                "uuid": str(uuid),
+                "uuid": uuid,
                 "reason": reason
             }
-
             try:
-                # Publish to internal registry topic
-                await self._r.publish(Topics.REGISTRY_CONNECTORS, json.dumps(unregister_event))
-
-                # Also publish to notification topic if you have access to bus/notifiers
-                # This would require passing them to the registry constructor
+                await self._r.publish(str(Channel.REGISTRY_CONNECTORS), json.dumps(unregister_event))
                 dsx_logging.debug(f"Published unregister event for {uuid} (reason: {reason})")
             except Exception as notify_error:
                 dsx_logging.warning(f"Failed to notify about connector {uuid} removal: {notify_error}")
-
         except Exception as e:
             dsx_logging.error(f"Failed to evict connector {uuid}: {e}")
 
@@ -204,8 +185,8 @@ class ConnectorsRegistry:
         if not self._pubsub:
             return
         try:
-            await self._pubsub.subscribe(Topics.REGISTRY_CONNECTORS)
-            dsx_logging.info(f"ConnectorsRegistry subscribed to {Topics.REGISTRY_CONNECTORS}")
+            await self._pubsub.subscribe(Channel.REGISTRY_CONNECTORS)
+            dsx_logging.info(f"ConnectorsRegistry subscribed to {Channel.REGISTRY_CONNECTORS}")
 
             while True:
                 try:
@@ -243,7 +224,75 @@ class ConnectorsRegistry:
 
         finally:
             try:
-                await self._pubsub.unsubscribe(Topics.REGISTRY_CONNECTORS)
+                await self._pubsub.unsubscribe(Channel.REGISTRY_CONNECTORS)
+            except Exception:
+                pass
+
+
+    async def _check_connector_health(self, model: ConnectorInstanceModel) -> bool:
+        """
+        Check if a connector is still responsive by calling its /readyz endpoint.
+        Returns True if connector is healthy, False if unresponsive.
+        """
+        try:
+            async with get_async_connector_client(model) as client:
+                # Use a short timeout for health checks
+                response = await asyncio.wait_for(
+                    client.request("GET", ConnectorAPI.HEALTHZ
+                                   ),
+                    timeout=5.0
+                )
+                response.raise_for_status()
+                dsx_logging.debug(f"Connector {model.uuid} health check passed")
+                return True
+        except asyncio.TimeoutError:
+            dsx_logging.info(f"Connector {model.uuid} health check timed out")
+            return False
+        except (httpx.ConnectError, httpx.HTTPStatusError) as e:
+            dsx_logging.info(f"Connector {model.uuid} health check failed: {type(e).__name__}")
+            return False
+        except Exception as e:
+            dsx_logging.warning(f"Unexpected error checking connector {model.uuid} health: {e}")
+            return False
+
+    async def _pubsub_listener(self):
+        if not self._pubsub:
+            return
+        try:
+            await self._pubsub.subscribe(str(Channel.REGISTRY_CONNECTORS))
+            dsx_logging.info(f"ConnectorsRegistry subscribed to {Channel.REGISTRY_CONNECTORS}")
+            while True:
+                try:
+                    msg = await self._pubsub.get_message(timeout=5.0, ignore_subscribe_messages=True)
+                    if msg is None:
+                        await asyncio.sleep(0.1)
+                        continue
+                    data = msg.get("data")
+                    try:
+                        text = data.decode() if isinstance(data, (bytes, bytearray)) else data
+                        payload = json.loads(text)
+                    except Exception:
+                        continue
+                    if payload.get("type") == "unregistered":
+                        uid = payload.get("uuid")
+                        if uid:
+                            await self.remove(uid)
+                            dsx_logging.info(f"Registry: removed {uid}")
+                        continue
+                    try:
+                        model = ConnectorInstanceModel(**payload)
+                        await self.upsert(model)
+                        dsx_logging.info(f"Registry: upserted {model.uuid} ({getattr(model, 'name', '')})")
+                    except Exception:
+                        pass
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    dsx_logging.debug(f"PubSub poll error: {e}", exc_info=True)
+                    await asyncio.sleep(1.0)
+        finally:
+            try:
+                await self._pubsub.unsubscribe(str(Channel.REGISTRY_CONNECTORS))
             except Exception:
                 pass
 
@@ -279,7 +328,7 @@ class ConnectorsRegistry:
         Returns True if successful, False otherwise.
         """
         try:
-            key = Keys.presence(str(model.uuid))
+            key = ConnectorKeys.presence(str(model.uuid))
             # Refresh the TTL - you may want to make this configurable
             ttl_seconds = 300  # 5 minutes - much more reasonable than 120s
 
@@ -316,7 +365,7 @@ class ConnectorsRegistry:
 
                 # Check which connectors have expired in Redis
                 pipe = self._r.pipeline()
-                keys = [Keys.presence(str(m.uuid)) for m in items]
+                keys = [ConnectorKeys.presence(str(m.uuid)) for m in items]
                 for k in keys:
                     await pipe.exists(k)
                 exists = await pipe.execute()

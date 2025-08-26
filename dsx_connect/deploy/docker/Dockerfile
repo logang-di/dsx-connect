@@ -6,6 +6,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY dsx_connect/ dsx_connect/
+COPY shared/ shared/
 
 # Create data directory and set ownership
 RUN mkdir -p /app/data && \

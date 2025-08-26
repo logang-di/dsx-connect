@@ -13,7 +13,7 @@ RUN mkdir scan_folder
 
 COPY connectors/framework connectors/framework
 COPY connectors/filesystem connectors/filesystem
-COPY dsx_connect/ dsx_connect/
+COPY shared/ shared/
 COPY start.py .
 
 ENV PYTHONPATH=/app

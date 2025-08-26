@@ -1,7 +1,7 @@
 import pathlib
 import json
 from tinydb import TinyDB
-from dsx_connect.models.scan_models import ScanStatsModel
+from dsx_connect.models.scan_result import ScanStatsModel
 from dsx_connect.database.scan_stats_base_db import ScanStatsBaseDB
 
 

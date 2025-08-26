@@ -1,6 +1,6 @@
 import typer
 import uvicorn
-from dsx_connect.utils.app_logging import dsx_logging
+from shared.dsx_logging import dsx_logging
 
 # Ensure connector is registered via decorators
 import connectors.sharepoint.sharepoint_connector  # noqa: F401
@@ -19,7 +19,7 @@ def start(
     Launch the Connector FastAPI app.
     """
     dsx_logging.info(
-        f"Starting Azure Blob Storage Connector on {host}:{port} "
+        f"Starting SharePoint Connector on {host}:{port} "
         f"(reload={'on' if reload else 'off'}, workers={workers})"
     )
 

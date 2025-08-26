@@ -1,6 +1,6 @@
 from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
-from dsx_connect.models.connector_models import ItemActionEnum
+from shared.models.connector_models import ItemActionEnum
 
 
 class BaseConnectorConfig(BaseSettings):

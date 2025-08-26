@@ -73,7 +73,31 @@ or by adding this setting in a .env file. The format for overriding a setting is
 Connectors use Invoke to manage tasks for bundling up files, creating requirements (for pip) and
 building a Docker image.  All the steps needed to prepare a new release for deployment.
 
-### Prerequisites
+### Configuration
+
+- Required env vars (can be set via `.env` or compose):
+  - `DSXCONNECTOR_SP_TENANT_ID`: Azure AD Tenant ID
+  - `DSXCONNECTOR_SP_CLIENT_ID`: App (client) ID
+  - `DSXCONNECTOR_SP_CLIENT_SECRET`: App client secret
+  - `DSXCONNECTOR_SP_HOSTNAME`: e.g., `contoso.sharepoint.com`
+  - `DSXCONNECTOR_SP_SITE_PATH`: e.g., `MySite`
+  - Optional: `DSXCONNECTOR_SP_DRIVE_NAME`
+  - TLS: `DSXCONNECTOR_SP_VERIFY_TLS=true|false`, `DSXCONNECTOR_SP_CA_BUNDLE=/path/to/ca.pem`
+
+`connectors/sharepoint/.env.example` contains a ready-to-copy template.
+
+### Handlers
+
+This connector implements handlers via `DSXConnector`:
+
+- `full_scan`: Enumerates files in the configured SharePoint drive (recursive when `recursive=True`), enqueuing scan requests (location=item-id).
+- `read_file`: Streams file content via Microsoft Graph `/drives/{drive}/items/{id}/content`.
+- `item_action`: Supports `DELETE` (removes item by id). Other actions return NOT_IMPLEMENTED.
+- `repo_check`: Validates connectivity by resolving site/drive and listing root.
+
+### Compose
+
+The compose file under `deploy/` includes the SP_* envs and TLS toggles. Provide values via a `.env` file or your environment.
 Local running Docker instance: if building a Docker image (a "release")
 
 Ideally, also a remote docker hub instance that you can push the image to.  This can be configured in the tasks.py file by setting the following:
@@ -99,5 +123,4 @@ Other invoke options:
 * build - (runs bump, clean, prepare) and builds a Docker image tagged as sharepoint-connector:<version> from the prepared dist folder if it doesn’t already exist.
 * push - (runs build) tags the Docker image with the repository username (dsxconnect/<name>:<version>) and pushes it to Docker Hub.
 * release - executes the full release cycle by running the following tasks in order: bump, clean, prepare, build, and push.
-
 

@@ -8,13 +8,13 @@ from starlette.responses import StreamingResponse
 
 from shared.file_ops import get_filepaths_rsync_async, get_filepaths_async
 from connectors.framework.dsx_connector import DSXConnector
-from dsx_connect.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, \
+from shared.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, \
     ConnectorStatusEnum
 from shared.dsx_logging import dsx_logging
-from shared.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
-from dsx_connect.utils.streaming import stream_blob
+from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
+from shared.streaming import (stream_blob)
 from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback, ScanFolderModel
-from dsx_connect.utils.async_ops import run_async
+from shared.async_ops import run_async
 from connectors.filesystem.config import ConfigManager
 from connectors.filesystem.version import CONNECTOR_VERSION
 
@@ -63,10 +63,16 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     Returns:
         ConnectorInstanceModel: the base dsx-connector will have populated this model, modify as needed and return
     """
-    await start_monitor()
+
     dsx_logging.info(f"{base.name} version: {CONNECTOR_VERSION}.")
     dsx_logging.info(f"{base.name} configuration: {config}.")
     dsx_logging.info(f"{base.name} startup completed.")
+
+    if not config.monitor:
+        dsx_logging.info(f"Monitor set to false, {config.asset} will not be monitored for new or modified files")
+    else:
+        await start_monitor()
+        dsx_logging.info(f"Monitor set on {config.asset} for new or modified files")
 
     base.status = ConnectorStatusEnum.READY
     base.meta_info = f"Filesystem location: {config.asset}"

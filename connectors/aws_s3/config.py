@@ -2,7 +2,7 @@ from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
 
 from connectors.framework.base_config import BaseConnectorConfig
-from dsx_connect.models.connector_models import ItemActionEnum
+from shared.models.connector_models import ItemActionEnum
 
 
 class AWSS3ConnectorConfig(BaseConnectorConfig):

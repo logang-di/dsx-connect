@@ -1,9 +1,7 @@
 from dsx_connect.config import get_config
 from shared.dsx_logging import dsx_logging
-from dsx_connect.taskworkers.celery_app import celery_app
-from dsx_connect.taskworkers.taskworkers_deprecated import init_worker
 from dsx_connect.taskworkers.names import Queues
-
+from dsx_connect.taskworkers.celery_app import celery_app
 """
 Primarily for use in debugging, this start script will start all Celery queues and the workers
 """
@@ -30,7 +28,6 @@ if __name__ == "__main__":
 
     # Configure and run the Celery worker
     dsx_logging.info("Starting Celery worker for debugging...")
-    init_worker() # necessary for when running in debug mode
 
     # Configure and run the Celery worker
     dsx_logging.info("Starting Celery worker for debugging...")

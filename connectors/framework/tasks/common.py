@@ -46,18 +46,8 @@ def clean_export(export_folder: str):
 
 
 def prepare_shared_files(c: Context, project_root: str, export_folder: str):
-    base = Path(export_folder) / "shared"
-    c.run(f"rsync -av --exclude='__pycache__' {project_root} {base}/")
-    (base / "__init__.py").touch()
-
-
-def prepare_dsx_connect_files(c: Context, project_root: str, export_folder: str):
-    base = Path(export_folder) / "dsx_connect"
-    base.mkdir(parents=True, exist_ok=True)  # <-- build the parent tree
-    for sub in ("models", "utils"):
-        src = f"{project_root}/dsx_connect/{sub}/"
-        dst = base / sub
-        c.run(f"rsync -av --exclude='__pycache__' {src} {dst}/")
+    base = Path(export_folder)
+    c.run(f"rsync -av --exclude='__pycache__' {project_root}/shared {base}/")
     (base / "__init__.py").touch()
 
 
@@ -69,11 +59,12 @@ def prepare_common_files(c: Context, project_slug: str, connector_name: str, ver
     c.run(
         f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/framework/ {export_folder}/connectors/framework/ --exclude 'tasks'")
     c.run(f"touch {export_folder}/connectors/__init__.py")
-    # Copy start.py
-    c.run(f"cp start.py {export_folder}")
 
     # move Dockerfile, docker-compose files and requirements.txt to topmost directory
     c.run(f"rsync -av {project_root_dir}/connectors/{project_slug}/deploy/ {export_folder}")
+
+    # copy start file to topmost directory
+    c.run(f"rsync -av {project_root_dir}/connectors/{project_slug}/start.py {export_folder}/")
 
     # change the docker compose image: to reflect the new image tag
     file_path = Path(f"{export_folder}/docker-compose-{connector_name}.yaml")
@@ -83,6 +74,11 @@ def prepare_common_files(c: Context, project_slug: str, connector_name: str, ver
         content = content.replace("__VERSION__", version)
     with file_path.open("w") as f:
         f.write(content)
+
+
+def prepare_dsx_connect_files(c: Context, project_root: str, export_folder: str):
+    # Deprecated: no longer copy dsx_connect into connector exports.
+    return
 
 
 def zip_export(c: Context, export_folder: str, build_dir: str):

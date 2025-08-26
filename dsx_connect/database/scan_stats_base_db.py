@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dsx_connect.models.scan_models import ScanStatsModel
+from dsx_connect.models.scan_result import ScanStatsModel
 
 
 class ScanStatsBaseDB(ABC):
