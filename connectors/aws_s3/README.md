@@ -17,6 +17,25 @@ and the following API endpoints as applicable:
 - **repo_check:** Request that the connector checks its connectivity to its repository
 - **webhook_event:** Process external webhook events.
 
+### Changing Configuration (dev)
+
+Leave `config.py` alone — it contains sane defaults. During development, override via:
+
+- `.devenv` file next to `config.py` (not included in releases)
+  - Example:
+    - `DSXCONNECTOR_USE_TLS=false`
+    - `DSXCONNECTOR_TLS_CERTFILE=../framework/deploy/certs/dev.localhost.crt`
+    - `DSXCONNECTOR_TLS_KEYFILE=../framework/deploy/certs/dev.localhost.key`
+    - `DSXCONNECTOR_CONNECTOR_URL=https://aws-s3-connector:8591`
+    - `DSXCONNECTOR_DSX_CONNECT_URL=https://dsx-connect-api:8586`
+    - `DSXCONNECTOR_VERIFY_TLS=false`
+    - `DSXCONNECTOR_ASSET=lg-test-02`
+    - `DSXCONNECTOR_FILTER=`
+  - Or set `DSXCONNECTOR_ENV_FILE=/path/to/custom.env` to use a different file.
+
+- Environment variables (shell/Compose/CI)
+  - Any setting can be overridden as `DSXCONNECTOR_<SETTING_NAME>`.
+
 ## Build a Deployment Release
 
 Connectors use Invoke to manage tasks for bundling up files, creating requirements (for pip) and
@@ -45,5 +64,4 @@ Other invoke options:
 * build - (runs bump, clean, prepare) and builds a Docker image tagged as aws-s3-connector:<version> from the prepared dist folder if it doesn’t already exist.
 * push - (runs build) tags the Docker image with the repository username (logangilbert/<name>:<version>) and pushes it to Docker Hub.
 * release - executes the full release cycle by running the following tasks in order: bump, clean, prepare, build, and push.
-
 

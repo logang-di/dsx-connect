@@ -21,6 +21,10 @@ services:
       - "8586:8586"
     environment:
       <<: *common-env
+      # TLS for API (enable and provide cert/key paths inside the container)
+      # DSXCONNECT_USE_TLS: "false"
+      # DSXCONNECT_TLS_CERTFILE: "/app/certs/server.crt"
+      # DSXCONNECT_TLS_KEYFILE: "/app/certs/server.key"
       # using common-env setting for SCAN_BINARY_URL if commented out
 #      DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
       LOG_LEVEL: debug
@@ -32,14 +36,7 @@ services:
         aliases:
           - dsx-connect-api
     # Updated uvicorn command with SSE-friendly settings
-    command: >
-      uvicorn dsx_connect.app.dsx_connect_api:app 
-      --host 0.0.0.0 
-      --port 8586 
-      --workers 1 
-      --timeout-keep-alive 300 
-      --limit-concurrency 1000 
-      --no-access-log
+    command: ["python", "dsx_connect/dsx-connect-api-start.py"]
     # Health check for the API service
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8586/dsx-connect/test/connection"]
@@ -52,7 +49,7 @@ services:
     restart: unless-stopped
 
   dsx_connect_scan_request_worker:
-    image: dsxconnect/dsx-connect:0.2.45
+    image: dsxconnect/dsx-connect:__VERSION__
     environment:
       <<: *common-env
       # using common-env setting for SCAN_BINARY_URL if commented out
@@ -72,7 +69,7 @@ services:
 
 
   dsx_connect_verdict_action_worker:
-    image: dsxconnect/dsx-connect:0.2.45
+    image: dsxconnect/dsx-connect:__VERSION__
     environment:
       <<: *common-env
       LOG_LEVEL: debug
@@ -89,7 +86,7 @@ services:
     restart: unless-stopped
 
   dsx_connect_results_worker:
-    image: dsxconnect/dsx-connect:0.2.45
+    image: dsxconnect/dsx-connect:__VERSION__
     environment:
       <<: *common-env
       LOG_LEVEL: debug
@@ -111,7 +108,7 @@ services:
     restart: unless-stopped
 
   dsx_connect_notification_worker:
-    image: dsxconnect/dsx-connect:0.2.45
+    image: dsxconnect/dsx-connect:__VERSION__
     environment:
       <<: *common-env
       LOG_LEVEL: debug

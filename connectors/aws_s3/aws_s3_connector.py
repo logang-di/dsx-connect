@@ -156,7 +156,7 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
                                         message=f'Item action {config.item_action} was invoked. File {full_path} successfully tagged.')
 
     return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action,
-                                    message=f"Item action did nothing or not implemented")
+                                    message="Item action did nothing or not implemented")
 
 
 @connector.read_file

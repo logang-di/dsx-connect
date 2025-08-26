@@ -14,6 +14,7 @@ RUN mkdir scan_folder
 COPY connectors/framework connectors/framework
 COPY connectors/filesystem connectors/filesystem
 COPY shared/ shared/
+COPY connectors/framework/deploy/certs certs/
 COPY start.py .
 
 ENV PYTHONPATH=/app

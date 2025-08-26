@@ -1,8 +1,0 @@
-# .codex/config.toml
-model = "gpt-5"
-preferred_auth_method = "chatgpt"
-
-[profiles.dsx_local]
-model = "gpt-5"
-approval_policy = "on-request"     # use "never" for suggestions-only
-sandbox_mode    = "workspace-write" # or "read-only"

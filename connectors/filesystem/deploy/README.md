@@ -122,6 +122,17 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=`<value>` (note all CAPS)
       # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
       # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
       DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
+
+### TLS/SSL (HTTPS)
+
+- Dev certs are packaged into the image at `/app/certs` (see `connectors/framework/deploy/certs`). To enable HTTPS:
+  - `DSXCONNECTOR_USE_TLS=true`
+  - `DSXCONNECTOR_TLS_CERTFILE=/app/certs/dev.localhost.crt`
+  - `DSXCONNECTOR_TLS_KEYFILE=/app/certs/dev.localhost.key`
+- Outbound verification to dsx_connect (when DSX Connect runs HTTPS):
+  - `DSXCONNECTOR_VERIFY_TLS=true|false`
+  - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+- For staging/production, replace certs via bind mounts or bake your own into the image.
 ```
 
 #### Environment Variable Definitions

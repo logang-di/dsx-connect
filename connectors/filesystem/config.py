@@ -5,6 +5,8 @@ from pydantic_settings import BaseSettings
 
 from connectors.framework.base_config import BaseConnectorConfig
 from shared.models.connector_models import ItemActionEnum
+from pathlib import Path
+from shared.dev_env import load_devenv
 # from dsx_connect.utils.file_ops import _tokenize_filter
 from shared.dsx_logging import dsx_logging
 
@@ -32,12 +34,10 @@ class FilesystemConnectorConfig(BaseConnectorConfig):
     item_action: ItemActionEnum = ItemActionEnum.MOVE
     item_action_move_metainfo: str = "dsxconnect-quarantine"
 
-    # asset: str = Field("/Users/logangilbert/OneDrive - Deepinstinct",
-    #                    description="Directory to scan for files")
-    # filter: str = "Partners -demovideo"
-    asset: str = Field("/Users/logangilbert/Documents/SAMPLES",
+    asset: str = Field("/path/to/local/folder",
+                       title="Scan folder",
                        description="Directory to scan for files")
-    filter: str = "PDF1"
+    filter: str = ""
     scan_by_path: bool = False
 
     ## Config settings specific to this Connector
@@ -73,11 +73,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> FilesystemConnectorConfig:
         if cls._config is None:
+            load_devenv(Path(__file__).with_name('.devenv'))
             cls._config = FilesystemConnectorConfig()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> FilesystemConnectorConfig:
+        load_devenv(Path(__file__).with_name('.devenv'))
         cls._config = FilesystemConnectorConfig()
         return cls._config
 

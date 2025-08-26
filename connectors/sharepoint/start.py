@@ -4,6 +4,7 @@ from shared.dsx_logging import dsx_logging
 
 # Ensure connector is registered via decorators
 import connectors.sharepoint.sharepoint_connector  # noqa: F401
+from connectors.sharepoint.config import ConfigManager
 
 app = typer.Typer(help="Start the Sharepoint Connector.")
 
@@ -23,12 +24,18 @@ def start(
         f"(reload={'on' if reload else 'off'}, workers={workers})"
     )
 
+    cfg = ConfigManager.reload_config()
+    ssl_kwargs = {}
+    if cfg.use_tls and cfg.tls_certfile and cfg.tls_keyfile:
+        ssl_kwargs = {"ssl_certfile": cfg.tls_certfile, "ssl_keyfile": cfg.tls_keyfile}
+
     uvicorn.run(
         "connectors.framework.dsx_connector:connector_api",
         host=host,
         port=port,
         reload=reload,
-        workers=workers
+        workers=workers,
+        **ssl_kwargs
     )
 
 

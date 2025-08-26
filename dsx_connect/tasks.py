@@ -92,6 +92,10 @@ def prepare(c):
     c.run(f"cp deploy/docker/docker-compose-dsx-connect-all-services.yaml {export_folder}/")
     c.run(f"cp deploy/docker/docker-compose-dsxa.yaml {export_folder}/")
     c.run(f"cp deploy/docker/README.md {export_folder}/")
+    # Include dev TLS certs (optional; safe even if not used)
+    # Prefer shared certs; then dsx_connect's docker certs
+    c.run(f"mkdir -p {export_folder}/certs && rsync -av ../shared/deploy/certs/ {export_folder}/certs/ 2>/dev/null || true")
+    c.run(f"mkdir -p {export_folder}/certs && rsync -av deploy/docker/certs/ {export_folder}/certs/ 2>/dev/null || true")
 
     # change the docker compose image: to reflect the new image tag
     file_path = pathlib.Path(f"{export_folder}/docker-compose-dsx-connect-all-services.yaml")

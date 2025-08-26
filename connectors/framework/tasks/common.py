@@ -4,6 +4,7 @@ import shutil
 from pathlib import Path
 
 from invoke import Context
+import os
 
 
 def bump_patch_version(version_file: str) -> str:
@@ -53,12 +54,35 @@ def prepare_shared_files(c: Context, project_root: str, export_folder: str):
 
 def prepare_common_files(c: Context, project_slug: str, connector_name: str, version: str, project_root_dir: str,
                          export_folder: str):
+    # Optionally generate dev certs once (shared across connectors)
+    gen_flag = os.environ.get("GEN_DEV_CERTS", "").lower() in ("1", "true", "yes")
+    if gen_flag:
+        # Attempt to generate certs in shared first; fallback to connectors/framework
+        for rel in ("shared/deploy/certs", "connectors/framework/deploy/certs"):
+            try:
+                cert_dir = Path(project_root_dir) / rel
+                crt = cert_dir / "dev.localhost.crt"
+                key = cert_dir / "dev.localhost.key"
+                script = cert_dir / "generate-dev-cert.sh"
+                if not crt.exists() or not key.exists():
+                    if script.exists():
+                        c.run(f"sh {script}", warn=True)
+                # stop after first successful location
+                if crt.exists() and key.exists():
+                    break
+            except Exception:
+                pass
     #c.run(f"mkdir -p {export_folder}/connectors/azure_blob_storage")
     c.run(
-        f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/{project_slug}/ {export_folder}/connectors/{project_slug}/ --exclude 'deploy' --exclude 'dist' --exclude 'tasks.py'")
+        f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/{project_slug}/ {export_folder}/connectors/{project_slug}/ --exclude 'deploy' --exclude 'dist' --exclude 'tasks.py' --exclude '.devenv'")
     c.run(
         f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/framework/ {export_folder}/connectors/framework/ --exclude 'tasks'")
     c.run(f"touch {export_folder}/connectors/__init__.py")
+
+    # Also surface certs at export root for convenience/visibility (not required by Dockerfile)
+    # Prefer shared certs; fallback to framework certs
+    c.run(f"mkdir -p {export_folder}/certs && rsync -av {project_root_dir}/shared/deploy/certs/ {export_folder}/certs/ 2>/dev/null || true")
+    c.run(f"mkdir -p {export_folder}/certs && rsync -av {project_root_dir}/connectors/framework/deploy/certs/ {export_folder}/certs/ 2>/dev/null || true")
 
     # move Dockerfile, docker-compose files and requirements.txt to topmost directory
     c.run(f"rsync -av {project_root_dir}/connectors/{project_slug}/deploy/ {export_folder}")

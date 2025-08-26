@@ -4,6 +4,8 @@ from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
 from shared.models.connector_models import ItemActionEnum
 from connectors.framework.base_config import BaseConnectorConfig
+from pathlib import Path
+from shared.dev_env import load_devenv
 
 class SharepointConnectorConfig(BaseConnectorConfig):
     """
@@ -61,11 +63,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> SharepointConnectorConfig:
         if cls._config is None:
+            load_devenv(Path(__file__).with_name('.devenv'))
             cls._config = SharepointConnectorConfig()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> SharepointConnectorConfig:
+        load_devenv(Path(__file__).with_name('.devenv'))
         cls._config = SharepointConnectorConfig()
         return cls._config
 

@@ -100,6 +100,17 @@ To shut down:
 docker-compose <docker compose file>.yaml down
 ```
 
+### TLS/SSL (HTTPS)
+
+- Dev certs are packaged into the image at `/app/certs` (see `connectors/framework/deploy/certs`). To enable HTTPS:
+  - `DSXCONNECTOR_USE_TLS=true`
+  - `DSXCONNECTOR_TLS_CERTFILE=/app/certs/dev.localhost.crt`
+  - `DSXCONNECTOR_TLS_KEYFILE=/app/certs/dev.localhost.key`
+- Outbound verification to dsx_connect (when DSX Connect runs HTTPS):
+  - `DSXCONNECTOR_VERIFY_TLS=true|false`
+  - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+- For staging/production, replace certs via bind mounts or bake your own into the image.
+
 #### Deployment of Two or More Connectors in Same Docker Environment
 In the case that you want two or more dsx-connectors running in the same docker host (for example, if each connector
 scans different parts of a file repository), you will need to make sure that they are uniquely identifiable as a service

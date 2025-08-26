@@ -10,6 +10,7 @@ just want to deploy now and learn more later:
 - docker-compose-dsxa.yaml: docker compose for running DSXA scanner.  Not necessary, but here for convenience.
 - docker-compose-dsx-connect-all-services.yaml: runs all services related to dsx-connect
 - README.md: this file
+- certs/: dev TLS certs and script to generate self-signed certificates
 
 ## Components
 dsx-connect is comprised of several services:
@@ -141,13 +142,23 @@ graph TB
 
 #### **dsx_connect_api** (FastAPI Server)
 - **Purpose**: HTTP API endpoint for all client interactions
-- **Port**: 8586
+- **Port**: 8586 (HTTPS optional via TLS)
 - **Features**:
   - RESTful API for scan requests and results
   - Server-Sent Events (SSE) for real-time updates to frontend UI
   - Web-based dashboard and monitoring
   - Task queue management and status
 - **Dependencies**: Redis (message broker)
+
+TLS/SSL:
+- Dev certs can be generated under `deploy/docker/certs` (see `generate-dev-cert.sh`). The image includes `/app/certs`.
+- Enable in compose:
+  - `DSXCONNECT_USE_TLS=true`
+  - `DSXCONNECT_TLS_CERTFILE=/app/certs/dev.localhost.crt`
+  - `DSXCONNECT_TLS_KEYFILE=/app/certs/dev.localhost.key`
+- Connectors verifying HTTPS:
+  - Prefer `DSXCONNECTOR_VERIFY_TLS=true` and provide `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` if using private CA.
+  - For development only, you may set `DSXCONNECTOR_VERIFY_TLS=false`.
 
 #### **Redis** (Message Broker)
 - **Purpose**: Task queue broker and caching layer

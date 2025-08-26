@@ -1,9 +1,12 @@
 # dsx_connect/config.py
 from enum import Enum
+from pathlib import Path
 from typing import Final
 
 from pydantic import AnyUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from shared.dev_env import load_devenv
 
 
 class AppEnv(str, Enum):
@@ -90,6 +93,11 @@ class DSXConnectConfig(BaseSettings):
     redis_url: AnyUrl = "redis://localhost:6379/3"
     syslog: SyslogConfig = SyslogConfig()
 
+    # TLS/SSL for API server
+    use_tls: bool = False
+    tls_certfile: str | None = None
+    tls_keyfile: str | None = None
+
     # Top-level settings config: env prefix + nested delimiter
     model_config = SettingsConfigDict(
         env_prefix="DSXCONNECT_",
@@ -103,6 +111,7 @@ from functools import lru_cache
 
 @lru_cache
 def get_config() -> DSXConnectConfig:
+    load_devenv(Path(__file__).with_name('.devenv'))
     return DSXConnectConfig()
 
 @lru_cache
@@ -111,6 +120,7 @@ def get_auth_config() -> AuthConfig:
 
 def reload_config() -> DSXConnectConfig:
     get_config.cache_clear()
+    load_devenv(Path(__file__).with_name('.devenv'))
     return get_config()
 
 

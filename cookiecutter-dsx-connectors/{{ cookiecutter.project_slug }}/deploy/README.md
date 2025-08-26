@@ -35,6 +35,19 @@ or complex infrastructure.
 
 This package contains an easy to use docker-compose.yaml file for configuration and deployment of the Connector in a docker environment.
 
+### TLS/SSL (HTTPS)
+
+- Dev certs are packaged into the image at `/app/certs` (see `connectors/framework/deploy/certs`). To enable HTTPS:
+  - `DSXCONNECTOR_USE_TLS=true`
+  - `DSXCONNECTOR_TLS_CERTFILE=/app/certs/dev.localhost.crt`
+  - `DSXCONNECTOR_TLS_KEYFILE=/app/certs/dev.localhost.key`
+- Outbound verification to dsx_connect (when DSX Connect runs HTTPS):
+  - `DSXCONNECTOR_VERIFY_TLS=true|false`
+  - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+- For staging/production, replace certs via bind mounts or bake your own into the image.
+
+Dev builds: you can optionally auto-generate the dev certs during export by setting `GEN_DEV_CERTS=1` when running the invoke tasks (e.g., `GEN_DEV_CERTS=1 invoke release`).
+
 #### Config via docker-compose
 
 ##### Connector service configuration

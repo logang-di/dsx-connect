@@ -3,6 +3,8 @@ from pydantic_settings import BaseSettings
 
 from connectors.framework.base_config import BaseConnectorConfig
 from shared.models.connector_models import ItemActionEnum
+from pathlib import Path
+from shared.dev_env import load_devenv
 
 
 class GoogleCloudStorageConnectorConfig(BaseConnectorConfig):
@@ -54,11 +56,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> GoogleCloudStorageConnectorConfig:
         if cls._config is None:
+            load_devenv(Path(__file__).with_name('.devenv'))
             cls._config = GoogleCloudStorageConnectorConfig()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> GoogleCloudStorageConnectorConfig:
+        load_devenv(Path(__file__).with_name('.devenv'))
         cls._config = GoogleCloudStorageConnectorConfig()
         return cls._config
 

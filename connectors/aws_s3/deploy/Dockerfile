@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY connectors/framework connectors/framework
 COPY connectors/aws_s3 connectors/aws_s3
 COPY shared/ shared/
+COPY connectors/framework/deploy/certs certs/
 
 ENV PYTHONPATH=/app
 RUN mkdir -p data && chown appuser:appuser data

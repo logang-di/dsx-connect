@@ -1,0 +1,17 @@
+## Filesystem connector TLS + outbound verification
+
+# Serve connector over HTTPS (optional)
+DSXCONNECTOR_USE_TLS=true
+DSXCONNECTOR_TLS_CERTFILE=../../shared/deploy/certs/dev.localhost.crt
+DSXCONNECTOR_TLS_KEYFILE=../../shared/deploy/certs/dev.localhost.key
+
+# Connector URL and dsx-connect URL (use https if TLS enabled)
+DSXCONNECTOR_CONNECTOR_URL=https://127.0.0.1:8590
+DSXCONNECTOR_DSX_CONNECT_URL=https://127.0.0.1:8586
+
+# Outbound TLS verification to dsx-connect
+# For self-signed, either set VERIFY_TLS=false or provide CA bundle
+DSXCONNECTOR_VERIFY_TLS=false
+# DSXCONNECTOR_CA_BUNDLE=shared/deploy/certs/dev.localhost.crt
+DSXCONNECTOR_ASSET=~/Documents/SAMPLES
+DSXCONNECTOR_FILTER=PDFs

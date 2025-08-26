@@ -67,6 +67,17 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
         <connector specific configuration>
 ```
 
+### TLS/SSL (HTTPS)
+
+- Dev certs are packaged into the image at `/app/certs` (see `connectors/framework/deploy/certs`). To enable HTTPS:
+  - `DSXCONNECTOR_USE_TLS=true`
+  - `DSXCONNECTOR_TLS_CERTFILE=/app/certs/dev.localhost.crt`
+  - `DSXCONNECTOR_TLS_KEYFILE=/app/certs/dev.localhost.key`
+- Outbound verification to dsx_connect (when DSX Connect runs HTTPS):
+  - `DSXCONNECTOR_VERIFY_TLS=true|false`
+  - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+- For staging/production, replace certs via bind mounts or bake your own into the image.
+
 ##### Networking
 The remainder is configuration of this service, and the docker network this connector shares with
 DSX Connect.  The external name of the dsx-network below should be the same as the network

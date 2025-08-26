@@ -1,8 +1,9 @@
 from pydantic import HttpUrl, Field
-from pydantic_settings import BaseSettings
 
 from connectors.framework.base_config import BaseConnectorConfig
 from shared.models.connector_models import ItemActionEnum
+from pathlib import Path
+from shared.dev_env import load_devenv
 
 
 class AWSS3ConnectorConfig(BaseConnectorConfig):
@@ -53,11 +54,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> AWSS3ConnectorConfig:
         if cls._config is None:
+            load_devenv(Path(__file__).with_name('.devenv'))
             cls._config = AWSS3ConnectorConfig()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> AWSS3ConnectorConfig:
+        load_devenv(Path(__file__).with_name('.devenv'))
         cls._config = AWSS3ConnectorConfig()
         return cls._config
 

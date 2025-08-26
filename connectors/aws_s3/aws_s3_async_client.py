@@ -3,12 +3,10 @@ import io
 import logging
 import pathlib
 
-import boto3
 import aioboto3
-import botocore
 import tenacity
 from botocore.config import Config
-from botocore.exceptions import ClientError, NoCredentialsError, EndpointConnectionError, ParamValidationError
+from botocore.exceptions import ClientError
 
 import os
 
@@ -164,7 +162,7 @@ class AWSS3AsyncClient:
             return sha256_hash
         except Exception as e:
             msg = f'Error retrieving {key} from {bucket_name} and calculating hash'
-            dsx_logging.error(msg)
+            dsx_logging.error(f"{msg}: {e}")
             raise FileNotFoundError(msg)
 
     async def test_s3_connection(self, bucket_name) -> bool:
@@ -175,5 +173,5 @@ class AWSS3AsyncClient:
             buckets = await self.buckets()
             return bucket_name in buckets
         except Exception as e:
-            dpx_logging.error(f"Error testing connection: {e}")
+            dsx_logging.error(f"Error testing connection: {e}")
             raise

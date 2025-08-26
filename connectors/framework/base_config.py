@@ -1,3 +1,4 @@
+from typing import Optional
 from pydantic import HttpUrl, Field
 from pydantic_settings import BaseSettings
 from shared.models.connector_models import ItemActionEnum
@@ -31,6 +32,13 @@ class BaseConnectorConfig(BaseSettings):
     item_action_move_metainfo: str = "dsxconnect-quarantine"
     asset: str = ""
     filter: str = ""
+
+    # TLS/SSL settings (server + outbound)
+    use_tls: bool = Field(default=False, description="Serve connector over HTTPS using provided cert/key")
+    tls_certfile: Optional[str] = Field(default=None, description="Path to TLS certificate file")
+    tls_keyfile: Optional[str] = Field(default=None, description="Path to TLS private key file")
+    verify_tls: bool = Field(default=True, description="Verify TLS when making outbound HTTP calls")
+    ca_bundle: Optional[str] = Field(default=None, description="Optional CA bundle path for outbound verification")
 
     class Config:
         env_prefix = "DSXCONNECTOR_"

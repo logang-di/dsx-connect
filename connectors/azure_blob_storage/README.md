@@ -59,37 +59,24 @@ or
 ```shell
 AZURE_STORAGE_CONNECTION_STRING="..." python start.py
 ```
-#### Changing Configuration
-The easiest method is to edit `config.py` directly, however, just keep in mind that config.py file
-defines all of the default config values.  When you good to release a connector, you will likely want
-your defaults to make sense (i.e. most of the time, the default value suffices), as opposed to
-whatever settings you tested the connector with.   The best way to test connectors with various configuration settings,
-without permanently changing the defaults, is to override settings with environment settings.
+#### Changing Configuration (dev)
 
-For example, in the config file:
-```python
-    name: str = 'azure-blob-storage-connector'
-    connector_url: HttpUrl = Field(default="http://0.0.0.0:8599",
-                                   description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    item_action: ItemActionEnum = ItemActionEnum.NOTHING
-    dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586",
-                                     description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
-    test_mode: bool = True
+Leave `config.py` alone — it contains sane defaults. During development, override via:
 
-    ### Connector specific configuration
+- `.devenv` file next to `config.py` (not included in releases)
+  - Example:
+    - `DSXCONNECTOR_USE_TLS=false`
+    - `DSXCONNECTOR_TLS_CERTFILE=../framework/deploy/certs/dev.localhost.crt`
+    - `DSXCONNECTOR_TLS_KEYFILE=../framework/deploy/certs/dev.localhost.key`
+    - `DSXCONNECTOR_CONNECTOR_URL=https://azure-blob-storage-connector:8599`
+    - `DSXCONNECTOR_DSX_CONNECT_URL=https://dsx-connect-api:8586`
+    - `DSXCONNECTOR_VERIFY_TLS=false`
+    - `DSXCONNECTOR_ASSET=lg-test-01`
+    - `DSXCONNECTOR_FILTER=sub1`
+  - Or set `DSXCONNECTOR_ENV_FILE=/path/to/custom.env` to use a different file.
 
-    class Config:
-        env_prefix = "DSXCONNECTOR_"
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        extra = "forbid"
-```
-if you wanted to change the dsx_connect_url, you can do so adding a setting on the command to run:
-```
-DSXCONNECTOR_DSX_CONNECT_URL=https://sdfsdfgasdg.aws.com:8586 python start.py
-```
-or by adding this setting in a .env file.  The format for overriding a setting is:
-```DSXCONNECTOR_<capitalized config variable>```
+- Environment variables (shell/Compose/CI)
+  - Any setting can be overridden as `DSXCONNECTOR_<SETTING_NAME>`.
 
 
 ## Build a Deployment Release
@@ -120,5 +107,3 @@ Other invoke options:
 * build - (runs bump, clean, prepare) and builds a Docker image tagged as azure-blob-storage-connector:<version> from the prepared dist folder if it doesn’t already exist.
 * push - (runs build) tags the Docker image with the repository username (logangilbert/<name>:<version>) and pushes it to Docker Hub.
 * release - executes the full release cycle by running the following tasks in order: bump, clean, prepare, build, and push.
-
-

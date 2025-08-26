@@ -6,13 +6,10 @@ invoke <task>
 ex: invoke release
 """
 import pathlib
-import re
 import os
-import shutil
 import sys
 
-from invoke import task, run
-from version import CONNECTOR_VERSION
+from invoke import task
 
 project_slug = 'aws_s3'
 name = 'aws-s3-connector'
@@ -23,7 +20,7 @@ project_root_dir = str(pathlib.Path(__file__).resolve().parent.parent.parent)
 
 # total hack, but necessary to import common task helpers
 sys.path.insert(0, project_root_dir)
-from connectors.framework.tasks.common import build_image, push_image, prepare_common_files, bump_patch_version, clean_export, zip_export, prepare_shared_files
+from connectors.framework.tasks.common import build_image, push_image, prepare_common_files, bump_patch_version, clean_export, zip_export, prepare_shared_files  # noqa: E402
 
 version = bump_patch_version("version.py")
 export_folder = os.path.join(build_dir, f"{name}-{version}")

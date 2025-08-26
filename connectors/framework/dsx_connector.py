@@ -94,6 +94,14 @@ class DSXConnector:
         self._hb_task: asyncio.Task | None = None
         self.HEARTBEAT_INTERVAL_SECONDS: int = 60  # <= half of server TTL (120s) is safe
 
+        # httpx verify option for outbound calls to dsx-connect
+        if not connector_config.verify_tls:
+            self._httpx_verify = False
+        elif connector_config.ca_bundle:
+            self._httpx_verify = connector_config.ca_bundle
+        else:
+            self._httpx_verify = True
+
 
         # --------- FastAPI lifespan: startup/shutdown ----------
         @asynccontextmanager
@@ -218,7 +226,7 @@ class DSXConnector:
         scan_request.connector = self.connector_running_model
         scan_request.connector_url = self.connector_running_model.url
         try:
-            async with httpx.AsyncClient(verify=False) as client:
+            async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.SCAN_PREFIX, ScanPath.REQUEST)
                 resp = await client.post(url, json=jsonable_encoder(scan_request))
             resp.raise_for_status()
@@ -243,7 +251,7 @@ class DSXConnector:
 
     async def register_connector(self, conn_model: ConnectorInstanceModel) -> StatusResponse:
         try:
-            async with httpx.AsyncClient(verify=False) as client:
+            async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.CONNECTORS_PREFIX, ConnectorPath.REGISTER_CONNECTORS)
                 resp = await client.post(url, json=jsonable_encoder(conn_model))
             resp.raise_for_status()
@@ -298,7 +306,7 @@ class DSXConnector:
                           DSXConnectAPI.CONNECTORS_PREFIX,
                           format_route(ConnectorPath.UNREGISTER_CONNECTORS, connector_uuid=uuid_str))
         try:
-            async with httpx.AsyncClient(verify=False) as client:
+            async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 resp = await client.delete(url)
             if resp.status_code == 204:
                 return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Unregistered",
@@ -311,7 +319,7 @@ class DSXConnector:
 
     async def test_dsx_connect(self) -> Optional[dict]:
         try:
-            async with httpx.AsyncClient(verify=False) as client:
+            async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.CONNECTION_TEST)
                 resp = await client.get(url)
             resp.raise_for_status()

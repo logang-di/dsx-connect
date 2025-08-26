@@ -1,0 +1,18 @@
+## DSX Connect API TLS toggle (local dev)
+# Set to 'true' to enable HTTPS on port 8586; 'false' for HTTP.
+DSXCONNECT_USE_TLS=true
+
+# When DSXCONNECT_USE_TLS=true, provide certificate and key files.
+# The repo includes dev certs you can use for quick local testing:
+# Prefer shared certs for local dev (also available under shared/deploy/certs)
+DSXCONNECT_TLS_CERTFILE=../shared/deploy/certs/dev.localhost.crt
+DSXCONNECT_TLS_KEYFILE=../shared/deploy/certs/dev.localhost.key
+
+# Optional: If you want curl/clients to verify TLS with a CA bundle, set this.
+# DSXCONNECT_CA_BUNDLE=connectors/framework/deploy/certs/dev.localhost.crt
+
+# Example usage:
+#   - Toggle HTTPS on:  set DSXCONNECT_USE_TLS=true
+#   - Start API:        python dsx_connect/dsx-connect-api-start.py
+#   - Health check:     scripts/curl-dsx-health.sh             # uses DSXCONNECT_USE_TLS
+#   - Or override:      DSXCONNECT_USE_TLS=true scripts/curl-dsx-health.sh

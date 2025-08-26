@@ -18,8 +18,18 @@ http://0.0.0.0:8595/docs
 
 ## Deploying Filesystem Connector
 ### Docker Compose
-This package contains an easy to use docker-compose.yaml file for configuration and deployment of the
-Filesystem Connector in a docker environment.
+This package contains an easy to use docker-compose.yaml file for configuration and deployment.
+
+### TLS/SSL (HTTPS)
+
+- Dev certs are packaged into the image at `/app/certs` (see `connectors/framework/deploy/certs`). To enable HTTPS:
+  - `DSXCONNECTOR_USE_TLS=true`
+  - `DSXCONNECTOR_TLS_CERTFILE=/app/certs/dev.localhost.crt`
+  - `DSXCONNECTOR_TLS_KEYFILE=/app/certs/dev.localhost.key`
+- Outbound verification to dsx_connect (when DSX Connect runs HTTPS):
+  - `DSXCONNECTOR_VERIFY_TLS=true|false`
+  - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+- For staging/production, replace certs via bind mounts or bake your own into the image.
 
 #### Config via docker-compose
 

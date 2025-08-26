@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY connectors/framework connectors/framework
 COPY connectors/azure_blob_storage connectors/azure_blob_storage
 COPY shared/ shared/
+COPY connectors/framework/deploy/certs certs/
 COPY start.py .
 
 ENV PYTHONPATH=/app

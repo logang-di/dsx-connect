@@ -39,6 +39,8 @@ def clean(c):
 def prepare(c):
     """Prepare distribution folder with necessary files."""
     print(f"Preparing release files for version {version}...")
+    if os.environ.get("GEN_DEV_CERTS", "").lower() in ("1", "true", "yes"):
+        print("[prepare] GEN_DEV_CERTS enabled — will ensure dev certs exist in connectors/framework/deploy/certs")
     prepare_shared_files(c, project_root=project_root_dir, export_folder=export_folder)
     prepare_common_files(c, project_slug, name, version, project_root_dir, export_folder)
 

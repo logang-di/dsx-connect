@@ -31,16 +31,22 @@ import os
 import sys
 import pathlib
 import uvicorn
+from dsx_connect.config import get_config
 
 # Add the distribution root (directory containing this script) to sys.path
 dist_root = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(dist_root))
 
 if __name__ == "__main__":
+    cfg = get_config()
+    ssl_kwargs = {}
+    if getattr(cfg, "use_tls", False) and cfg.tls_certfile and cfg.tls_keyfile:
+        ssl_kwargs = {"ssl_certfile": cfg.tls_certfile, "ssl_keyfile": cfg.tls_keyfile}
     uvicorn.run(
         "dsx_connect.app.dsx_connect_api:app",
         host="0.0.0.0",
         port=8586,
         reload=False,  # Set to False in production with multiple workers
-        workers=1
+        workers=1,
+        **ssl_kwargs
     )
