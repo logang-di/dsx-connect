@@ -1,6 +1,6 @@
 services:
   {{ cookiecutter.project_slug }}_connector: # if deploying two of more of this service within a single docker, this name must be unique for each instance
-    image: {{ cookiecutter.__release_name }}:__VERSION__
+    image: dsxconnect/{{ cookiecutter.__release_name }}:__VERSION__
     # Uncomment if you want to use docker compose to build the image
     #build:
     #  context: .
@@ -23,7 +23,7 @@ services:
 
       # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
       # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
-      DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
+      #DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
 
     networks:
       dsx-network:

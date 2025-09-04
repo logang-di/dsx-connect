@@ -40,7 +40,6 @@ class GoogleCloudStorageConnectorConfig(BaseConnectorConfig):
     filter: str = ""
     recursive: bool = True
 
-    test_mode: bool = False
 
     class Config:
         env_prefix = "DSXCONNECTOR_"
@@ -56,13 +55,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> GoogleCloudStorageConnectorConfig:
         if cls._config is None:
-            load_devenv(Path(__file__).with_name('.devenv'))
+            load_devenv(Path(__file__).with_name('.dev.env'))
             cls._config = GoogleCloudStorageConnectorConfig()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> GoogleCloudStorageConnectorConfig:
-        load_devenv(Path(__file__).with_name('.devenv'))
+        load_devenv(Path(__file__).with_name('.dev.env'))
         cls._config = GoogleCloudStorageConnectorConfig()
         return cls._config
 

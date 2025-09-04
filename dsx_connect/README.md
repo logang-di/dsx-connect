@@ -149,7 +149,7 @@ From the dsx_connect/ directory, execute:
   * Prepares the distribution (dsx-connect-<version>/) with application code, Dockerfile, docker-compose.yaml, and helper files. 
   * Zips the distribution into dsx-connect-<version>.zip. 
   * Builds the Docker image (dsx-connect:<version>). 
-  * Pushes the image to Docker Hub (logangilbert/dsx-connect:<version>).
+  * Pushes the image to Docker Hub (dsxconnect/dsx-connect:<version>).
 
 
 3. Verify the Release:

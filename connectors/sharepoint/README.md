@@ -73,12 +73,41 @@ building a Docker image.  All the steps needed to prepare a new release for depl
   - `DSXCONNECTOR_SP_TENANT_ID`: Azure AD Tenant ID
   - `DSXCONNECTOR_SP_CLIENT_ID`: App (client) ID
   - `DSXCONNECTOR_SP_CLIENT_SECRET`: App client secret
-  - `DSXCONNECTOR_SP_HOSTNAME`: e.g., `contoso.sharepoint.com`
-  - `DSXCONNECTOR_SP_SITE_PATH`: e.g., `MySite`
+  - `DSXCONNECTOR_ASSET`: SharePoint URL to the library or folder to scan (see below)
+  - Optional (auto‑derived from ASSET if omitted):
+    - `DSXCONNECTOR_SP_HOSTNAME`: e.g., `contoso.sharepoint.com`
+    - `DSXCONNECTOR_SP_SITE_PATH`: e.g., `MySite`
   - Optional: `DSXCONNECTOR_SP_DRIVE_NAME`
   - TLS: `DSXCONNECTOR_SP_VERIFY_TLS=true|false`, `DSXCONNECTOR_SP_CA_BUNDLE=/path/to/ca.pem`
 
 `connectors/sharepoint/.env.example` contains a ready-to-copy template.
+
+#### Asset + Filter (recommended)
+- `DSXCONNECTOR_ASSET`: Paste the full SharePoint URL for the library or folder you want as the scan root.
+  - Examples:
+    - Library root: `https://<host>/sites/<SiteName>/Shared%20Documents`
+    - Folder: `https://<host>/sites/<SiteName>/Shared%20Documents/dsx-connect/scantest`
+- `DSXCONNECTOR_FILTER` (optional): additional subpath appended inside the above asset.
+  - Example: `DSXCONNECTOR_FILTER=customerA/inbox`
+
+Behavior
+- On startup, the connector parses `DSXCONNECTOR_ASSET` once and derives:
+  - `SP_HOSTNAME`, `SP_SITE_PATH` (if omitted in env), and a resolved base path inside the drive.
+  - If ASSET host/site differ from explicitly configured values, a warning is logged and the configured values are used.
+- Full scan uses the resolved base path directly (no runtime parsing) and enqueues scan requests by item ID.
+- read_file and item_action receive the same item IDs back from dsx-connect and do not need the original URL context.
+
+Notes
+- “Documents” and “Shared Documents” are treated as the same default library when resolving drives.
+- You can still set `DSXCONNECTOR_SP_DRIVE_NAME` to target a specific document library; avoid putting folders in this field.
+
+#### Permissions (Microsoft Entra ID → Microsoft Graph Application)
+- Read/list/download: `Files.Read.All` or `Sites.Read.All` (admin consent)
+- Write (create/upload/move/delete): `Files.ReadWrite.All` or `Sites.ReadWrite.All` (admin consent)
+- Least privilege alternative: `Sites.Selected` plus a per‑site grant with role `read` or `write` via Graph:
+  - Get site id: `GET https://graph.microsoft.com/v1.0/sites/{hostname}:/sites/{sitePath}`
+  - Grant: `POST https://graph.microsoft.com/v1.0/sites/{siteId}/permissions/grant`
+    - Body: `{ "recipients": [{ "appId": "<client-id>" }], "roles": ["read"] }` or `["write"]`
 
 ### Handlers
 
@@ -88,6 +117,10 @@ This connector implements handlers via `DSXConnector`:
 - `read_file`: Streams file content via Microsoft Graph `/drives/{drive}/items/{id}/content`.
 - `item_action`: Supports `DELETE` (removes item by id). Other actions return NOT_IMPLEMENTED.
 - `repo_check`: Validates connectivity by resolving site/drive and listing root.
+
+Handler semantics with ASSET URLs
+- full_scan accepts `DSXCONNECTOR_ASSET` as a full SharePoint URL; the connector resolves the URL to a drive subpath at startup.
+- full_scan enqueues scan requests using item IDs; read_file and item_action therefore operate on IDs without needing to re-parse URLs.
 
 ### Compose
 

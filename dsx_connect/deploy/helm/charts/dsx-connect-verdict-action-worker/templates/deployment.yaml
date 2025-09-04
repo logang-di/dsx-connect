@@ -1,0 +1,79 @@
+{{- if .Values.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "dsx-connect-verdict-action-worker.fullname" . }}
+  labels:
+    helm.sh/chart: {{ include "dsx-connect-verdict-action-worker.chart" . }}
+    app.kubernetes.io/name: {{ include "dsx-connect-verdict-action-worker.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- if .Chart.AppVersion }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    {{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "dsx-connect-verdict-action-worker.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "dsx-connect-verdict-action-worker.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: dsx-connect-verdict-action-worker
+          image: "{{ default .Values.image.repository $.Values.global.image.repository }}:{{ default .Values.image.tag $.Values.global.image.tag }}"
+          imagePullPolicy: {{ default .Values.image.pullPolicy $.Values.global.image.pullPolicy }}
+          command: ["celery"]
+          {{ $env := merge (default (dict) $.Values.global.env) (default (dict) .Values.env) }}
+          {{ $queueDefault := printf "%s.%s" (default "dev" $env.DSXCONNECT_APP_ENV) "dsx_connect.scans.verdict" }}
+          {{ $queue := default $queueDefault .Values.celery.queue }}
+          args: [
+            "-A", "dsx_connect.taskworkers.celery_app.celery_app",
+            "worker",
+            "--loglevel=warning",
+            "-Q", "{{ $queue }}",
+            "--concurrency", "{{ .Values.celery.concurrency }}"
+          ]
+          env:
+            {{ $env := merge (default (dict) $.Values.global.env) (default (dict) .Values.env) }}
+            {{ $scanner := default (dict) $.Values.global.scanner }}
+            {{ $svc := default (printf "%s-dsxa-scanner" $.Release.Name) $scanner.serviceName }}
+            {{ $port := default 5000 $scanner.port }}
+            {{ $scheme := default "http" $scanner.scheme }}
+            - name: DSXCONNECT_APP_ENV
+              value: {{ $env.DSXCONNECT_APP_ENV | default "dev" | quote }}
+            - name: DSXCONNECTOR_API_KEY
+              value: {{ $env.DSXCONNECTOR_API_KEY | default "api-key-NOT-FOR-PRODUCTION" | quote }}
+            - name: DSXCONNECT_SCANNER__SCAN_BINARY_URL
+              value: {{ $env.DSXCONNECT_SCANNER__SCAN_BINARY_URL | default (printf "%s://%s:%d/scan/binary/v2" $scheme $svc $port) | quote }}
+            - name: DSXCONNECT_WORKERS__BROKER
+              value: {{ $env.DSXCONNECT_WORKERS__BROKER | default "redis://redis:6379/5" | quote }}
+            - name: DSXCONNECT_WORKERS__BACKEND
+              value: {{ $env.DSXCONNECT_WORKERS__BACKEND | default "redis://redis:6379/6" | quote }}
+            - name: DSXCONNECT_REDIS_URL
+              value: {{ $env.DSXCONNECT_REDIS_URL | default "redis://redis:6379/3" | quote }}
+            - name: DSXCONNECT_DATABASE__TYPE
+              value: {{ $env.DSXCONNECT_DATABASE__TYPE | default "sqlite3" | quote }}
+            - name: DSXCONNECT_DATABASE__LOC
+              value: {{ $env.DSXCONNECT_DATABASE__LOC | default "/app/data/dsx-connect.db.sql" | quote }}
+            - name: DSXCONNECT_DATABASE__RETAIN
+              value: {{ $env.DSXCONNECT_DATABASE__RETAIN | default "100" | quote }}
+            - name: DSXCONNECT_DATABASE__SCAN_STATS_DB
+              value: {{ $env.DSXCONNECT_DATABASE__SCAN_STATS_DB | default "/app/data/scan-stats.db.json" | quote }}
+            - name: PYTHONUNBUFFERED
+              value: {{ $env.PYTHONUNBUFFERED | default "1" | quote }}
+            - name: LOG_LEVEL
+              value: {{ $env.LOG_LEVEL | default "warning" | quote }}
+            {{- with $env }}
+            {{- range $key, $value := . }}
+            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECTOR_API_KEY" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_DATABASE__TYPE" "DSXCONNECT_DATABASE__LOC" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_DATABASE__SCAN_STATS_DB" "PYTHONUNBUFFERED" "LOG_LEVEL")) }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+            {{- end }}
+            {{- end }}
+            {{- end }}
+{{- end }}

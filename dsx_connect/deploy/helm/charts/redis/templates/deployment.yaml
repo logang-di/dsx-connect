@@ -14,9 +14,26 @@ spec:
         app: redis
     spec:
       containers:
-        - name: redis1
+        - name: redis
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: {{ .Values.command | toYaml | nindent 12 }}
           ports:
-            - containerPort: 6379
+            - containerPort: {{ .Values.service.port }}
+          livenessProbe:
+            exec:
+              command: {{ .Values.healthcheck.test | toYaml | nindent 18 }}
+            initialDelaySeconds: {{ .Values.healthcheck.startPeriod | default 0 }}
+            periodSeconds: {{ .Values.healthcheck.interval | default 10 }}
+            timeoutSeconds: {{ .Values.healthcheck.timeout | default 1 }}
+            successThreshold: 1
+            failureThreshold: {{ .Values.healthcheck.retries | default 3 }}
+          readinessProbe:
+            exec:
+              command: {{ .Values.healthcheck.test | toYaml | nindent 18 }}
+            initialDelaySeconds: {{ .Values.healthcheck.startPeriod | default 0 }}
+            periodSeconds: {{ .Values.healthcheck.interval | default 10 }}
+            timeoutSeconds: {{ .Values.healthcheck.timeout | default 1 }}
+            successThreshold: 1
+            failureThreshold: {{ .Values.healthcheck.retries | default 3 }}
 {{- end }}

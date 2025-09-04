@@ -23,9 +23,9 @@ class SharepointConnectorConfig(BaseConnectorConfig):
     You can also read in an optional .env file, which will be ignored is not available
     """
     name: str = 'sharepoint-connector'
-    connector_url: HttpUrl = Field(default="http://0.0.0.0:8620",
+    connector_url: HttpUrl = Field(default="http://localhost:8620",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586",
+    dsx_connect_url: HttpUrl = Field(default="http://localhost:8586",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
     item_action: ItemActionEnum = ItemActionEnum.NOTHING # action to take on files - NOTHING, DELETE, MOVE, TAG, MOVE_TAG
     item_action_move_metainfo: str = "dsxconnect-quarantine"
@@ -34,6 +34,10 @@ class SharepointConnectorConfig(BaseConnectorConfig):
     asset: str = ""
     filter: str = ""
     recursive: bool = True  # deprecated
+    # Concurrency for enqueueing scan requests during full scan
+    scan_concurrency: int = Field(default=10, description="Max concurrent scan_file_request enqueues during full scan")
+    # Internal: resolved base path within the drive (derived at startup from asset/filter/URL)
+    resolved_asset_base: Optional[str] = None
 
     # SharePoint / Graph settings (client-credentials)
     sp_tenant_id: str = Field(default="", description="Azure AD Tenant ID")
@@ -47,6 +51,7 @@ class SharepointConnectorConfig(BaseConnectorConfig):
     sp_use_tls: bool = Field(default=True, description="Use HTTPS for Graph (always true for graph.microsoft.com)")
     sp_verify_tls: bool = Field(default=True, description="Verify TLS certificates for outbound requests")
     sp_ca_bundle: Optional[str] = Field(default=None, description="Optional CA bundle path for certificate verification")
+    sp_log_token_claims: bool = Field(default=False, description="Log decoded OAuth token claims once (no raw token)")
 
     ### Connector specific configuration
 
@@ -63,13 +68,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> SharepointConnectorConfig:
         if cls._config is None:
-            load_devenv(Path(__file__).with_name('.devenv'))
+            load_devenv(Path(__file__).with_name('.dev.env'))
             cls._config = SharepointConnectorConfig()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> SharepointConnectorConfig:
-        load_devenv(Path(__file__).with_name('.devenv'))
+        load_devenv(Path(__file__).with_name('.dev.env'))
         cls._config = SharepointConnectorConfig()
         return cls._config
 

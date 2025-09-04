@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from invoke import task, Exit
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re as _re
 
 # ---------- Edit me ----------
 # Explicit, human-edited list of connectors (folder names under ./connectors)
@@ -13,7 +14,7 @@ CONNECTORS_CONFIG = [
     {"name": "azure_blob_storage", "enabled": True},
     {"name": "filesystem", "enabled": True},
     {"name": "google_cloud_storage", "enabled": True},
-    # {"name": "sharepoint", "enabled": False},  # example future connector
+    {"name": "sharepoint", "enabled": False},  # example future connector
 ]
 # ---------- /Edit me ----------
 
@@ -233,34 +234,150 @@ def bundle(c):
     """
     Bundle Docker Compose files for core and each connector into their respective dist directories.
     """
-    # Core compose
-    core_version = read_version_file(CORE_VERSION_FILE)
-    core_compose_src = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version}" / "docker-compose-dsx-connect-all-services.yaml"
-    dsxa_compose_src = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version}" / "docker-compose-dsxa.yaml"
-    readme_src = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version}" / "README.md"
-    core_dist_dir = PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"
-    core_dist_dir.mkdir(parents=True, exist_ok=True)
-    c.run(f"cp {core_compose_src} {core_dist_dir}/docker-compose-dsx-connect-all-services.yaml")
-    c.run(f"cp {dsxa_compose_src} {core_dist_dir}/docker-compose-dsxa.yaml")
-    c.run(f"cp {readme_src} {core_dist_dir}/README.md")
-    print(f"Copied core compose to {core_dist_dir}")
+    def _emit_bundle_to(target_dir: Path):
+        # Core compose
+        core_version_local = read_version_file(CORE_VERSION_FILE)
+        core_compose_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "docker-compose-dsx-connect-all-services.yaml"
+        dsxa_compose_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "docker-compose-dsxa.yaml"
+        readme_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "README.md"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        c.run(f"cp -f {core_compose_src_l} {target_dir}/docker-compose-dsx-connect-all-services.yaml")
+        c.run(f"cp -f {dsxa_compose_src_l} {target_dir}/docker-compose-dsxa.yaml")
+        c.run(f"cp -f {readme_src_l} {target_dir}/README.md")
+        # Append bundle quickstart to README
+        _append_bundle_readme(target_dir / "README.md")
+        # Copy helper scripts and Makefile from the core export if present
+        core_scripts_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "scripts"
+        core_makefile_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "Makefile"
+        # if core_scripts_src_l.exists():
+        #     c.run(f"mkdir -p {target_dir}/scripts && rsync -av {core_scripts_src_l}/ {target_dir}/scripts/")
+        # if core_makefile_src_l.exists():
+        #     c.run(f"cp -f {core_makefile_src_l} {target_dir}/Makefile")
 
-    # Connector composes
-    if CONNECTORS_DIR.exists():
-        for connector_path in CONNECTORS_DIR.iterdir():
-            name = connector_path.name
-            connector_name = name.replace("_", "-") + "-connector"
-            version_file = connector_path / "version.py"
-            if not version_file.exists():
-                continue
-            version = read_version_file(version_file)
-            compose_src = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}" / f"docker-compose-{connector_name}.yaml"
-            readme_src = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}" / f"README.md"
-            if not compose_src.exists():
-                print(f"Warning: compose file not found for {name}: {compose_src}")
-                continue
-            dest_dir = core_dist_dir / f"{connector_name}-{version}"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            c.run(f"cp {compose_src} {dest_dir}/{compose_src.name}")
-            c.run(f"cp {readme_src} {dest_dir}/README.md")
-            print(f"Copied {name} compose to {dest_dir}")
+        # Connector composes
+        if CONNECTORS_DIR.exists():
+            for connector_path in CONNECTORS_DIR.iterdir():
+                name = connector_path.name
+                connector_name = name.replace("_", "-") + "-connector"
+                version_file = connector_path / "version.py"
+                if not version_file.exists():
+                    continue
+                version = read_version_file(version_file)
+                compose_src = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}" / f"docker-compose-{connector_name}.yaml"
+                readme_src_conn = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}" / f"README.md"
+                if not compose_src.exists():
+                    print(f"Warning: compose file not found for {name}: {compose_src}")
+                    continue
+                dest_dir = target_dir / f"{connector_name}-{version}"
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                c.run(f"cp -f {compose_src} {dest_dir}/{compose_src.name}")
+                if readme_src_conn.exists():
+                    c.run(f"cp -f {readme_src_conn} {dest_dir}/README.md")
+
+    # Emit to versioned and latest bundle directories
+    core_version = read_version_file(CORE_VERSION_FILE)
+    versioned_dir = PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"
+    latest_dir = PROJECT_ROOT / DEPLOYMENT_DIR / "dsx-connect-latest"
+    _emit_bundle_to(versioned_dir)
+    print(f"Copied bundle to {versioned_dir}")
+    _emit_bundle_to(latest_dir)
+    print(f"Copied bundle to {latest_dir}")
+
+
+def _text_replace(path: Path, subs: list[tuple[str, str]]):
+    """Apply a list of (pattern, replacement) regex substitutions to a file in-place."""
+    text = path.read_text()
+    for pat, repl in subs:
+        text = _re.sub(pat, repl, text, flags=_re.MULTILINE)
+    path.write_text(text)
+
+
+def _enable_core_tls(core_compose: Path):
+    # Uncomment and set TLS env vars in the dsx_connect_api service
+    subs = [
+        (r"^\s+# DSXCONNECT_USE_TLS: .*$", "      DSXCONNECT_USE_TLS: \"true\""),
+        (r"^\s+# DSXCONNECT_TLS_CERTFILE: .*$", "      DSXCONNECT_TLS_CERTFILE: \"/app/certs/dev.localhost.crt\""),
+        (r"^\s+# DSXCONNECT_TLS_KEYFILE: .*$", "      DSXCONNECT_TLS_KEYFILE: \"/app/certs/dev.localhost.key\""),
+    ]
+    _text_replace(core_compose, subs)
+
+
+def _enable_connector_tls(compose_path: Path):
+    # Force connector + dsx-connect URLs to https and enable TLS envs
+    subs = [
+        # Allow optional quote before the scheme
+        (r"(DSXCONNECTOR_CONNECTOR_URL:\s*[\"']?)http://", r"\\1https://"),
+        (r"(DSXCONNECTOR_DSX_CONNECT_URL:\s*[\"']?)http://", r"\\1https://"),
+        (r"^\s+# DSXCONNECTOR_USE_TLS: .*$", "      DSXCONNECTOR_USE_TLS: \"true\""),
+        (r"^\s+# DSXCONNECTOR_TLS_CERTFILE: .*$", "      DSXCONNECTOR_TLS_CERTFILE: \"/app/certs/dev.localhost.crt\""),
+        (r"^\s+# DSXCONNECTOR_TLS_KEYFILE: .*$", "      DSXCONNECTOR_TLS_KEYFILE: \"/app/certs/dev.localhost.key\""),
+        (r"^\s+# DSXCONNECTOR_VERIFY_TLS: .*$", "      DSXCONNECTOR_VERIFY_TLS: \"false\""),
+    ]
+    _text_replace(compose_path, subs)
+
+
+@task(pre=[generate_manifest])
+def bundle_usetls(c):
+    """
+    Create the bundle like `bundle`, but enable TLS everywhere:
+    - dsx-connect API: DSXCONNECT_USE_TLS=true and dev cert paths
+    - connectors: DSXCONNECTOR_USE_TLS=true, URLs switched to https, VERIFY_TLS=false by default
+
+    Note: health checks may still use http in compose; the API will present HTTPS on port 8586.
+    """
+    bundle(c)
+    core_version = read_version_file(CORE_VERSION_FILE)
+    # Apply TLS transforms to both the versioned and 'latest' bundles
+    for bundle_dir in [
+        PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}",
+        PROJECT_ROOT / DEPLOYMENT_DIR / "dsx-connect-latest",
+    ]:
+        core_compose = bundle_dir / "docker-compose-dsx-connect-all-services.yaml"
+        if core_compose.exists():
+            _enable_core_tls(core_compose)
+        # connectors under the bundle
+        if bundle_dir.exists():
+            for sub in bundle_dir.iterdir():
+                if sub.is_dir():
+                    for f in sub.glob("docker-compose-*-connector.yaml"):
+                        _enable_connector_tls(f)
+
+        # Ensure README has bundle quickstart
+        _append_bundle_readme(bundle_dir / "README.md")
+
+
+@task(pre=[generate_manifest], name="bundle-tls")
+def bundle_tls(c):
+    """Alias for bundle_usetls (enable TLS across API and connectors in the bundle)."""
+    bundle_usetls(c)
+
+def _append_bundle_readme(path: Path):
+    """Append a minimal bundle quickstart section to the README if not present."""
+    section_title = "\n\n## Bundle Quickstart\n"
+    if path.exists():
+        content = path.read_text()
+    else:
+        content = ""
+    if "Bundle Quickstart" in content:
+        return
+    quickstart = f"""{section_title}
+Run the following from this bundle directory (or use Makefile targets):
+
+- Up: `./scripts/stack-up.sh`  (auto-detects this folder)
+- Status: `./scripts/stack-status.sh`
+- Down: `./scripts/stack-down.sh`
+
+Filters and project name
+- Only specific connectors: `./scripts/stack-up.sh --only=filesystem,aws-s3`
+- Skip connectors: `./scripts/stack-down.sh --skip=sharepoint`
+- Stable compose project name: `PROJECT_NAME=dsx-fullstack ./scripts/stack-up.sh`
+
+TLS toggles for status checks
+- Self-signed (skip verify): `DSXCONNECT_USE_TLS=true CONNECTOR_USE_TLS=true ./scripts/stack-status.sh`
+- Verify with a CA: `CURL_INSECURE=false DSXCONNECT_USE_TLS=true DSXCONNECT_CA_BUNDLE=certs/dev.localhost.crt CONNECTOR_USE_TLS=true CONNECTOR_CA_BUNDLE=certs/dev.localhost.crt ./scripts/stack-status.sh`
+
+Makefile shortcuts
+- `make up` / `make status` / `make down`  (optional `BUNDLE=...` if running outside)
+- Filters via env: `CONNECTORS_ONLY=filesystem,aws-s3 make up`
+"""
+    path.write_text(content + quickstart)

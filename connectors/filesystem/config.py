@@ -1,14 +1,10 @@
-import pathlib
-
-from pydantic import Field, HttpUrl, field_validator
-from pydantic_settings import BaseSettings
+from pydantic import Field, HttpUrl
 
 from connectors.framework.base_config import BaseConnectorConfig
 from shared.models.connector_models import ItemActionEnum
 from pathlib import Path
 from shared.dev_env import load_devenv
 # from dsx_connect.utils.file_ops import _tokenize_filter
-from shared.dsx_logging import dsx_logging
 
 
 class FilesystemConnectorConfig(BaseConnectorConfig):
@@ -73,13 +69,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> FilesystemConnectorConfig:
         if cls._config is None:
-            load_devenv(Path(__file__).with_name('.devenv'))
+            load_devenv(Path(__file__).with_name('.dev.env'))
             cls._config = FilesystemConnectorConfig()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> FilesystemConnectorConfig:
-        load_devenv(Path(__file__).with_name('.devenv'))
+        load_devenv(Path(__file__).with_name('.dev.env'))
         cls._config = FilesystemConnectorConfig()
         return cls._config
 

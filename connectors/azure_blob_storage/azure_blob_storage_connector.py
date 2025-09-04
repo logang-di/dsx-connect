@@ -1,10 +1,8 @@
-import warnings
-
 from starlette.responses import StreamingResponse
 
 from connectors.azure_blob_storage.azure_blob_storage_client import AzureBlobClient
 from connectors.framework.dsx_connector import DSXConnector
-from shared.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, ConnectorStatusEnum
+from shared.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel
 from shared.dsx_logging import dsx_logging
 from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.azure_blob_storage.config import ConfigManager
@@ -148,7 +146,7 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> ItemAc
                                         description=f"File moved from {config.asset}: {file_path} to {dest_key} and tagged.")
 
     return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action,
-                                    message=f"Item action did nothing or not implemented")
+                                    message="Item action did nothing or not implemented")
 
 
 @connector.read_file

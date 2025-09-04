@@ -62,20 +62,35 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
         - DSXCONNECTOR_ASSET=lg-test-01 # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
         - DSXCONNECTOR_FILTER=  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
         - DSXCONNECTOR_RECURSIVE=True
-        - TEST_MODE=False
+        
 
         <connector specific configuration>
 ```
 
 ### TLS/SSL (HTTPS)
 
-- Dev certs are packaged into the image at `/app/certs` (see `connectors/framework/deploy/certs`). To enable HTTPS:
+ - Dev certs are packaged into the image at `/app/certs` (see `shared/deploy/certs`). To enable HTTPS:
   - `DSXCONNECTOR_USE_TLS=true`
   - `DSXCONNECTOR_TLS_CERTFILE=/app/certs/dev.localhost.crt`
   - `DSXCONNECTOR_TLS_KEYFILE=/app/certs/dev.localhost.key`
 - Outbound verification to dsx_connect (when DSX Connect runs HTTPS):
   - `DSXCONNECTOR_VERIFY_TLS=true|false`
-  - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+   - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+
+Using your own TLS certificates (production)
+- Option A: Volume‑mount certs (no image rebuild)
+  ```yaml
+  services:
+    aws_s3_connector:
+      volumes:
+        - ./certs:/app/certs:ro
+      environment:
+        DSXCONNECTOR_USE_TLS: "true"
+        DSXCONNECTOR_TLS_CERTFILE: "/app/certs/server.crt"
+        DSXCONNECTOR_TLS_KEYFILE: "/app/certs/server.key"
+  ```
+  Ensure files are readable by the container user (e.g., 0644), or rebuild the image to set ownership.
+- Option B: Bake certs into the image and set 0644/0600 permissions.
 - For staging/production, replace certs via bind mounts or bake your own into the image.
 
 ##### Networking

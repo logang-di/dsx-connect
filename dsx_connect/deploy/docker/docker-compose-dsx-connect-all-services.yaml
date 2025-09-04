@@ -23,8 +23,8 @@ services:
       <<: *common-env
       # TLS for API (enable and provide cert/key paths inside the container)
       # DSXCONNECT_USE_TLS: "false"
-      # DSXCONNECT_TLS_CERTFILE: "/app/certs/server.crt"
-      # DSXCONNECT_TLS_KEYFILE: "/app/certs/server.key"
+      # DSXCONNECT_TLS_CERTFILE: "/app/certs/dev.localhost.crt"
+      # DSXCONNECT_TLS_KEYFILE: "/app/certs/dev.localhost.key"
       # using common-env setting for SCAN_BINARY_URL if commented out
 #      DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
       LOG_LEVEL: debug

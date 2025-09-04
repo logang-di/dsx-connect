@@ -7,12 +7,24 @@ dependencies:
   - name: dsx-connect-api
     version: 0.1.0
     repository: file://charts/dsx-connect-api
-  - name: dsx-connect-workers
+  - name: dsx-connect-scan-request-worker
     version: 0.1.0
-    repository: file://charts/dsx-connect-workers
-  - name: redis1
+    repository: file://charts/dsx-connect-scan-request-worker
+  - name: dsx-connect-verdict-action-worker
+    version: 0.1.0
+    repository: file://charts/dsx-connect-verdict-action-worker
+  - name: dsx-connect-results-worker
+    version: 0.1.0
+    repository: file://charts/dsx-connect-results-worker
+  - name: dsx-connect-notification-worker
+    version: 0.1.0
+    repository: file://charts/dsx-connect-notification-worker
+  - name: redis
     version: 0.1.0
     repository: file://charts/redis
   - name: syslog
     version: 0.1.0
     repository: file://charts/syslog
+  - name: dsxa-scanner
+    version: 0.1.0
+    repository: file://charts/dsxa-scanner

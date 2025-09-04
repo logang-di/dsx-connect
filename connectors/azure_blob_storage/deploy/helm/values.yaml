@@ -1,0 +1,55 @@
+replicaCount: 1
+
+image:
+  repository: dsxconnect/azure-blob-storage-connector
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "0.2.52"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+tls:
+  enabled: false
+  port: 443
+  # The name of the k8s secret that contains the TLS certificate and key
+  secretName: ""
+  mountPath: "/app/certs"
+
+env:
+  LOG_LEVEL: "debug"
+  DSXCONNECTOR_TLS_CERTFILE: "/app/certs/tls.crt"
+  DSXCONNECTOR_TLS_KEYFILE: "/app/certs/tls.key"
+  # Outbound TLS verification to dsx-connect
+  # DSXCONNECTOR_VERIFY_TLS: "true"
+  # DSXCONNECTOR_CA_BUNDLE: "/app/certs/ca.pem"
+  # DSXCONNECTOR_DSX_CONNECT_URL: "https://my-dsx-connect.example.com"
+  # Only override this if the connector is NOT deployed in the same cluster
+  # as dsx-connect API. By default, the chart computes:
+  #   - http://dsx-connect-api  (when DSXCONNECTOR_USE_TLS != true)
+  #   - https://dsx-connect-api (when DSXCONNECTOR_USE_TLS == true)
+  DSXCONNECTOR_ITEM_ACTION: "nothing" # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)
+  DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "dsxconnect-quarantine" # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
+  # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector
+  DSXCONNECTOR_ASSET: "" # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
+  DSXCONNECTOR_FILTER: ""  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
+
+  # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
+  # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
+  DSXCONNECTOR_API_KEY: ""
+
+secrets:
+  # The name of the existing secret that contains the AZURE_STORAGE_CONNECTION_STRING
+  name: azure-storage-connection-string
+
+
+command:
+  - "python"
+  - "connectors/azure_blob_storage/start.py"
+  - "--workers"
+  - "1"

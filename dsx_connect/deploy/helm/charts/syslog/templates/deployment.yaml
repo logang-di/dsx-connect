@@ -2,21 +2,24 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: syslog
+  name: {{ include "syslog.fullname" . }}
+  labels:
+    {{- include "syslog.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: syslog
+      {{- include "syslog.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app: syslog
+        {{- include "syslog.selectorLabels" . | nindent 8 }}
     spec:
       containers:
         - name: syslog
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - containerPort: 514
+            - containerPort: {{ .Values.service.port }}
+              protocol: UDP # Syslog typically uses UDP
 {{- end }}

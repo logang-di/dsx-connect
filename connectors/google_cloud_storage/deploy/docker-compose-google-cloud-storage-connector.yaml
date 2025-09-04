@@ -20,7 +20,6 @@ services:
       DSXCONNECTOR_ASSET: lg-test-02 # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
       DSXCONNECTOR_FILTER:  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
       DSXCONNECTOR_RECURSIVE: True
-      TEST_MODE: False
 
         # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
         # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets

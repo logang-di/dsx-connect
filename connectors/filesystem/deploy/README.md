@@ -122,10 +122,11 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=`<value>` (note all CAPS)
       # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
       # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
       DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
+```
 
 ### TLS/SSL (HTTPS)
 
-- Dev certs are packaged into the image at `/app/certs` (see `connectors/framework/deploy/certs`). To enable HTTPS:
+- Dev certs are packaged into the image at `/app/certs` (see `shared/deploy/certs`). To enable HTTPS:
   - `DSXCONNECTOR_USE_TLS=true`
   - `DSXCONNECTOR_TLS_CERTFILE=/app/certs/dev.localhost.crt`
   - `DSXCONNECTOR_TLS_KEYFILE=/app/certs/dev.localhost.key`
@@ -133,7 +134,35 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=`<value>` (note all CAPS)
   - `DSXCONNECTOR_VERIFY_TLS=true|false`
   - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
 - For staging/production, replace certs via bind mounts or bake your own into the image.
-```
+
+#### Using your own TLS certificates (production)
+      
+- Option A: Volume‑mount certs (no image rebuild)
+  - Place your certs on host: `./certs/server.crt`, `./certs/server.key`
+  - Compose:
+    ```yaml
+    services:
+      filesystem_connector:
+        volumes:
+          - ./certs:/app/certs:ro
+        environment:
+          DSXCONNECTOR_USE_TLS: "true"
+          DSXCONNECTOR_TLS_CERTFILE: "/app/certs/server.crt"
+          DSXCONNECTOR_TLS_KEYFILE: "/app/certs/server.key"
+    ```
+  - Ensure files are readable by the container user (e.g., 0644), or rebuild the image to set ownership.
+- Option B: Bake certs into the image (set strict perms)
+  - Dockerfile overlay:
+    ```Dockerfile
+    FROM dsxconnect/filesystem-connector:__VERSION__
+    USER root
+    COPY certs/ /app/certs/
+    RUN chown -R appuser:appuser /app/certs \
+        && chmod 0644 /app/certs/*.crt || true \
+        && chmod 0600 /app/certs/*.key || true
+    USER appuser
+    ```
+
 
 #### Environment Variable Definitions
 

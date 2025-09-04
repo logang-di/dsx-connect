@@ -97,6 +97,10 @@ def prepare(c):
     c.run(f"mkdir -p {export_folder}/certs && rsync -av ../shared/deploy/certs/ {export_folder}/certs/ 2>/dev/null || true")
     c.run(f"mkdir -p {export_folder}/certs && rsync -av deploy/docker/certs/ {export_folder}/certs/ 2>/dev/null || true")
 
+    # Include helper scripts and Makefile to orchestrate the bundled stack
+    c.run(f"mkdir -p {export_folder}/scripts && rsync -av ../scripts/stack-*.sh {export_folder}/scripts/ 2>/dev/null || true")
+    c.run(f"cp ../Makefile {export_folder}/ 2>/dev/null || true")
+
     # change the docker compose image: to reflect the new image tag
     file_path = pathlib.Path(f"{export_folder}/docker-compose-dsx-connect-all-services.yaml")
 
@@ -116,8 +120,9 @@ def prepare(c):
     c.run(f"mkdir {export_folder}/data")
 
     c.run(f"cp version.py {export_folder}/dsx_connect")
-    c.run(f"cp dsx-connect-api-start.py {export_folder}/")
-    c.run(f"cp dsx-connect-workers-start.py {export_folder}/")
+    # Place start scripts inside the package so Dockerfile COPY dsx_connect/ ... brings them in
+    c.run(f"cp dsx-connect-api-start.py {export_folder}/dsx_connect/")
+    c.run(f"cp dsx-connect-workers-start.py {export_folder}/dsx_connect/")
     c.run(f"cp requirements.txt {export_folder}/")
 
 @task(pre=[prepare])

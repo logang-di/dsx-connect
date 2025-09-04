@@ -22,13 +22,28 @@ This package contains an easy to use docker-compose.yaml file for configuration 
 
 ### TLS/SSL (HTTPS)
 
-- Dev certs are packaged into the image at `/app/certs` (see `connectors/framework/deploy/certs`). To enable HTTPS:
+ - Dev certs are packaged into the image at `/app/certs` (see `shared/deploy/certs`). To enable HTTPS:
   - `DSXCONNECTOR_USE_TLS=true`
   - `DSXCONNECTOR_TLS_CERTFILE=/app/certs/dev.localhost.crt`
   - `DSXCONNECTOR_TLS_KEYFILE=/app/certs/dev.localhost.key`
 - Outbound verification to dsx_connect (when DSX Connect runs HTTPS):
   - `DSXCONNECTOR_VERIFY_TLS=true|false`
-  - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+   - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` (optional private CA)
+
+#### Using your own TLS certificates (production)
+- Option A: Volume‑mount certs (no image rebuild)
+  ```yaml
+  services:
+    google_cloud_storage_connector:
+      volumes:
+        - ./certs:/app/certs:ro
+      environment:
+        DSXCONNECTOR_USE_TLS: "true"
+        DSXCONNECTOR_TLS_CERTFILE: "/app/certs/server.crt"
+        DSXCONNECTOR_TLS_KEYFILE: "/app/certs/server.key"
+  ```
+  Ensure files are readable by the container user (e.g., 0644), or rebuild the image to set ownership.
+- Option B: Bake certs into the image and set 0644/0600 permissions.
 - For staging/production, replace certs via bind mounts or bake your own into the image.
 
 #### Config via docker-compose

@@ -54,13 +54,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> AWSS3ConnectorConfig:
         if cls._config is None:
-            load_devenv(Path(__file__).with_name('.devenv'))
+            load_devenv(Path(__file__).with_name('.dev.env'))
             cls._config = AWSS3ConnectorConfig()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> AWSS3ConnectorConfig:
-        load_devenv(Path(__file__).with_name('.devenv'))
+        load_devenv(Path(__file__).with_name('.dev.env'))
         cls._config = AWSS3ConnectorConfig()
         return cls._config
 

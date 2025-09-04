@@ -1,18 +1,16 @@
 import pathlib
-import random
 
 import uvicorn
 import os
 
 from starlette.responses import StreamingResponse
 
-from shared.file_ops import get_filepaths_rsync_async, get_filepaths_async
+from shared.file_ops import get_filepaths_async
 from connectors.framework.dsx_connector import DSXConnector
 from shared.models.connector_models import ScanRequestModel, ItemActionEnum, ConnectorInstanceModel, \
     ConnectorStatusEnum
 from shared.dsx_logging import dsx_logging
 from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
-from shared.streaming import (stream_blob)
 from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback, ScanFolderModel
 from shared.async_ops import run_async
 from connectors.filesystem.config import ConfigManager
@@ -114,7 +112,7 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
         path_obj.unlink()
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS,
                                         item_action=config.item_action,
-                                        message=f'File deleted.',
+                                        message='File deleted.',
                                         description=f"File deleted from {file_path}")
     elif config.item_action == ItemActionEnum.MOVE:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE} on {file_path} invoked.')

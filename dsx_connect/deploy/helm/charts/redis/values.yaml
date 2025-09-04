@@ -2,7 +2,7 @@ enabled: true
 
 image:
   repository: redis
-  tag: "6"
+  tag: "7-alpine"
   pullPolicy: IfNotPresent
 
 service:
@@ -10,3 +10,19 @@ service:
   port: 6379
 
 resources: {}
+
+command: [
+  "redis-server",
+  "--notify-keyspace-events", "Ex",
+  "--maxmemory-policy", "allkeys-lru",
+  "--timeout", "0",
+  "--tcp-keepalive", "300",
+  "--appendonly", "no"
+]
+
+healthcheck:
+  test: ["redis-cli", "ping"]
+  interval: 10s
+  timeout: 3s
+  retries: 5
+  startPeriod: 10s

@@ -11,7 +11,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY connectors/framework connectors/framework
 COPY connectors/sharepoint connectors/sharepoint
 COPY shared/ shared/
-COPY connectors/framework/deploy/certs certs/
+COPY certs/ certs/
+# Ensure certs are readable by appuser (private key restricted to owner)
+RUN chown -R appuser:appuser certs \
+    && chmod 0644 certs/*.crt || true \
+    && chmod 0600 certs/*.key || true
 
 ENV PYTHONPATH=/app
 RUN mkdir -p data && chown appuser:appuser data

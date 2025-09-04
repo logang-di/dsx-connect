@@ -6,14 +6,14 @@ import hashlib
 import os
 from functools import partial
 
-from azure.storage.blob import BlobServiceClient, BlobClient, ContainerClient
+from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
 
-from shared import file_ops, async_ops
+from shared import file_ops
 from shared.dsx_logging import dsx_logging
 import tenacity
-import os, base64, binascii
-from azure.storage.blob import BlobServiceClient
+import base64
+import binascii
 from azure.core.credentials import AzureNamedKeyCredential
 
 CHUNK_SIZE = int(os.getenv('CHUNK_SIZE', 1024 * 1024))

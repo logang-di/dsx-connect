@@ -25,6 +25,12 @@ class ScanResultModel(BaseModel):
 
 class ScanStatsModel(BaseModel):
     files_scanned: int = 0
+    benign_count: int = 0
+    malicious_count: int = 0
+    unknown_count: int = 0
+    unsupported_count: int = 0
+    not_scanned_count: int = 0
+    encrypted_count: int = 0
     total_scan_time_in_microseconds: int = -1
     total_scan_time_in_seconds: float = -1
     total_file_size: int = -1

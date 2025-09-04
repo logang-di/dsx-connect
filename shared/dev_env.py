@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
+_DEVEVN_LOGGED = False
+
 
 def load_devenv(default_path: Optional[Path] = None,
                 env_var: str = "DSXCONNECTOR_ENV_FILE") -> None:
@@ -21,7 +23,11 @@ def load_devenv(default_path: Optional[Path] = None,
         if not path.exists():
             return
         from shared.dsx_logging import dsx_logging
-        dsx_logging.info(f"Loading dev env from {path}")
+        global _DEVEVN_LOGGED
+        if not _DEVEVN_LOGGED:
+            # Reduce chatter: log only once and at debug level
+            dsx_logging.debug(f"Loading dev env from {path}")
+            _DEVEVN_LOGGED = True
         for line in path.read_text().splitlines():
             s = line.strip()
             if not s or s.startswith("#"):
@@ -36,4 +42,3 @@ def load_devenv(default_path: Optional[Path] = None,
     except Exception:
         # Silent failure: dev convenience only
         return
-

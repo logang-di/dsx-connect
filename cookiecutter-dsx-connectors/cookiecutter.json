@@ -12,8 +12,8 @@
     "connector_port": "8591",
     "docker_repo":  "dsxconnect",
     "__helm_chart_version": "0.1.0",
-    "__base_connector_url": "http://0.0.0.0:{{ cookiecutter.connector_port }}",
-    "__dsx_connect_url": "http://0.0.0.0:8586",
+    "__base_connector_url": "http://127.0.0.1:{{ cookiecutter.connector_port }}",
+    "__dsx_connect_url": "http://127.0.0.1:8586",
 
     "command_line_interface": ["No command-line interface", "Typer", "Argparse"],
     "create_author_file": "n",

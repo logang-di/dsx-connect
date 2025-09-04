@@ -160,6 +160,33 @@ TLS/SSL:
   - Prefer `DSXCONNECTOR_VERIFY_TLS=true` and provide `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.pem` if using private CA.
   - For development only, you may set `DSXCONNECTOR_VERIFY_TLS=false`.
 
+Using your own TLS certificates (production)
+- Option A: Volume‑mount certs (no image rebuild)
+  - Place your certs on host: `./certs/server.crt`, `./certs/server.key`
+  - Compose:
+    ```yaml
+    services:
+      dsx_connect_api:
+        volumes:
+          - ./certs:/app/certs:ro
+        environment:
+          DSXCONNECT_USE_TLS: "true"
+          DSXCONNECT_TLS_CERTFILE: "/app/certs/server.crt"
+          DSXCONNECT_TLS_KEYFILE: "/app/certs/server.key"
+    ```
+  - Ensure files are readable by the container user (e.g., 0644 for both).
+- Option B: Bake certs into the image (set strict perms)
+  - Dockerfile overlay:
+    ```Dockerfile
+    FROM dsxconnect/dsx-connect:__VERSION__
+    USER root
+    COPY certs/ /app/certs/
+    RUN chown -R dsxconnectuser:dsxconnectuser /app/certs \
+        && chmod 0644 /app/certs/*.crt || true \
+        && chmod 0600 /app/certs/*.key || true
+    USER dsxconnectuser
+    ```
+
 #### **Redis** (Message Broker)
 - **Purpose**: Task queue broker and caching layer
 - **Port**: 6379

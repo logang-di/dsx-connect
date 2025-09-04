@@ -111,7 +111,7 @@ from functools import lru_cache
 
 @lru_cache
 def get_config() -> DSXConnectConfig:
-    load_devenv(Path(__file__).with_name('.devenv'))
+    load_devenv(Path(__file__).with_name('.dev.env'))
     return DSXConnectConfig()
 
 @lru_cache
@@ -120,7 +120,7 @@ def get_auth_config() -> AuthConfig:
 
 def reload_config() -> DSXConnectConfig:
     get_config.cache_clear()
-    load_devenv(Path(__file__).with_name('.devenv'))
+    load_devenv(Path(__file__).with_name('.dev.env'))
     return get_config()
 
 

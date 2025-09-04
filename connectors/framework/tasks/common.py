@@ -48,7 +48,10 @@ def clean_export(export_folder: str):
 
 def prepare_shared_files(c: Context, project_root: str, export_folder: str):
     base = Path(export_folder)
-    c.run(f"rsync -av --exclude='__pycache__' {project_root}/shared {base}/")
+    # Exclude dev certs from shared to avoid duplication; certs are copied to export/certs separately
+    c.run(
+        f"rsync -av --exclude='__pycache__' --exclude 'deploy/certs' {project_root}/shared {base}/"
+    )
     (base / "__init__.py").touch()
 
 
@@ -74,7 +77,8 @@ def prepare_common_files(c: Context, project_slug: str, connector_name: str, ver
                 pass
     #c.run(f"mkdir -p {export_folder}/connectors/azure_blob_storage")
     c.run(
-        f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/{project_slug}/ {export_folder}/connectors/{project_slug}/ --exclude 'deploy' --exclude 'dist' --exclude 'tasks.py' --exclude '.devenv'")
+        f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/{project_slug}/ {export_folder}/connectors/{project_slug}/ "
+        f"--exclude 'deploy' --exclude 'dist' --exclude 'tasks.py' --exclude '.devenv' --exclude '.dev.env' --exclude '.env'")
     c.run(
         f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/framework/ {export_folder}/connectors/framework/ --exclude 'tasks'")
     c.run(f"touch {export_folder}/connectors/__init__.py")

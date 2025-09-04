@@ -1,6 +1,7 @@
 apiVersion: v2
 name: dsxa-scanner
-description: DSXA Scanner service
+description: Example DSXA scanner (single pod) for local/dev testing
 type: application
 version: 0.1.0
-appVersion: "4.0.0.2007"
+appVersion: "4.0.0"
+

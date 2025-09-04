@@ -31,7 +31,7 @@ from dsx_connect.dsxa_client.dsxa_client import DSXAClient
 from shared.dsx_logging import dsx_logging
 
 from dsx_connect.app.dependencies import static_path
-from dsx_connect.app.routers import scan_request, scan_request_test, scan_results, connectors, dead_letter
+from dsx_connect.app.routers import scan_request, scan_results, connectors, dead_letter
 from dsx_connect import version
 
 # ---- Helper functions ----
@@ -93,6 +93,80 @@ async def _stop_services(app):
         await app.state.registry.stop()
     if getattr(app.state, "redis", None):
         await app.state.redis.aclose()
+    # cancel reconnect loop if running
+    task = getattr(app.state, "redis_reconnect_task", None)
+    if task:
+        task.cancel()
+
+
+async def _redis_reconnect_loop(app: FastAPI, cfg):
+    """Background loop: try to (re)establish Redis, registry, and notifiers when unavailable.
+
+    Logs an info once when connections come up after being down. Uses capped exponential backoff.
+    """
+    backoff = 1.0
+    while True:
+        try:
+            # If we have a client, ensure it's healthy; on failure, drop it and restart services
+            if getattr(app.state, "redis", None) is not None:
+                try:
+                    await app.state.redis.ping()
+                except Exception as e:
+                    dsx_logging.warning(f"Redis ping failed, will attempt reconnect: {e.__class__.__name__}: {e}")
+                    # tear down
+                    try:
+                        if getattr(app.state, "registry", None):
+                            await app.state.registry.stop()
+                    except Exception:
+                        pass
+                    try:
+                        if getattr(app.state, "redis", None):
+                            await app.state.redis.aclose()
+                    except Exception:
+                        pass
+                    app.state.redis = None
+                    app.state.registry = None
+                    app.state.notifiers = None
+
+            # If no Redis, try to create one and start dependent services
+            if getattr(app.state, "redis", None) is None:
+                try:
+                    client = Redis.from_url(
+                        str(cfg.redis_url), decode_responses=True, socket_connect_timeout=0.5, socket_keepalive=False
+                    )
+                    await client.ping()
+                    app.state.redis = client
+                    dsx_logging.info("Redis connection re-established.")
+                    # start registry
+                    try:
+                        app.state.registry = ConnectorsRegistry(app.state.redis, sweep_period=20)
+                        await app.state.registry.start()
+                        dsx_logging.info("Connector registry started (after reconnect).")
+                    except Exception as e:
+                        app.state.registry = None
+                        dsx_logging.error(f"Connector registry start failed after reconnect: {e}")
+                    # start notifier bus
+                    try:
+                        bus = Bus(app.state.redis)
+                        app.state.bus = bus
+                        app.state.notifiers = Notifiers(bus)
+                        dsx_logging.info("Messaging notifier bus started (after reconnect).")
+                    except Exception as e:
+                        app.state.notifiers = None
+                        dsx_logging.error(f"Notifier bus start failed after reconnect: {e}")
+                    backoff = 1.0  # reset backoff after success
+                except Exception:
+                    # keep None and backoff
+                    pass
+
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 30.0)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            # don't crash the loop; log and keep trying
+            dsx_logging.warning(f"Redis reconnect loop error: {e}")
+            await asyncio.sleep(5.0)
 
 # ---- FastAPI app Startup ----
 
@@ -106,6 +180,8 @@ async def lifespan(app: FastAPI):
     dsx_logging.info("dsx-connect startup completed.")
 
     await _start_services(app, config)
+    # start reconnect loop in background
+    app.state.redis_reconnect_task = asyncio.create_task(_redis_reconnect_loop(app, config))
     try:
         yield
     finally:
@@ -205,41 +281,52 @@ sse_notifications = APIRouter(prefix=route_path(API_PREFIX_V1), tags=["server si
 )
 async def notifications_scan_result(request: Request):
     async def stream():
-        try:
-            yield 'data: {"type":"connected"}\n\n'
-            hb = 0
+        # Initial connected and retry hints
+        yield 'data: {"type":"connected"}\n\n'
+        yield 'retry: 5000\n'
+        hb = 0
 
-            # Check if notifier is available before attempting to listen
+        while True:
+            # Wait for notifier availability
             if not hasattr(request.app.state, 'notifiers') or request.app.state.notifiers is None:
-                yield 'data: {"type":"error","message":"Notifier unavailable"}\n\n'
-                return
-
-            async for raw in request.app.state.notifiers.subscribe_scan_results():
-                if await request.is_disconnected():
-                    break
-                # raw is a parsed dict from Notifiers; ensure JSON string for SSE data
-                try:
-                    from json import dumps
-                    if isinstance(raw, (bytes, bytearray)):
-                        data = raw.decode()
-                    elif isinstance(raw, str):
-                        data = raw
-                    else:
-                        data = dumps(raw, separators=(",", ":"))
-                except Exception:
-                    data = str(raw)
-                yield f"data: {data}\n\n"
-                hb = 0
-                # simple heartbeat every ~10 frames without data
-                hb += 1
-                if hb >= 10:
+                yield 'data: {"type":"waiting","message":"Notifier unavailable"}\n\n'
+                for _ in range(5):
+                    if await request.is_disconnected():
+                        return
                     yield 'data: {"type":"heartbeat"}\n\n'
-                    hb = 0
-                await asyncio.sleep(0)
-        except Exception as e:
-            # Handle Redis connection errors gracefully
-            dsx_logging.error(f"SSE scan result stream error: {e}")
-            yield f'data: {{"type":"error","message":"Connection lost: {str(e)}"}}\n\n'
+                    await asyncio.sleep(1.0)
+                continue
+
+            try:
+                async for raw in request.app.state.notifiers.subscribe_scan_results():
+                    if await request.is_disconnected():
+                        return
+                    # Normalize to JSON string for SSE data
+                    try:
+                        from json import dumps
+                        if isinstance(raw, (bytes, bytearray)):
+                            data = raw.decode()
+                        elif isinstance(raw, str):
+                            data = raw
+                        else:
+                            data = dumps(raw, separators=(",", ":"))
+                    except Exception:
+                        data = str(raw)
+                    yield f"data: {data}\n\n"
+                    hb += 1
+                    if hb >= 10:
+                        yield 'data: {"type":"heartbeat"}\n\n'
+                        hb = 0
+                    await asyncio.sleep(0)
+            except Exception as e:
+                dsx_logging.warning(f"SSE scan result stream disconnected: {e.__class__.__name__}: {e}")
+                # Fall back to heartbeat loop, then retry
+                for _ in range(5):
+                    if await request.is_disconnected():
+                        return
+                    yield 'data: {"type":"heartbeat"}\n\n'
+                    await asyncio.sleep(1.0)
+                continue
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
@@ -258,8 +345,13 @@ async def connector_registered_stream(request: Request):
 
             # Check if notifier is available before attempting to listen
             if not hasattr(request.app.state, 'notifiers') or request.app.state.notifiers is None:
-                yield 'data: {"type":"error","message":"Notifier unavailable"}\n\n'
-                return
+                # Keep the connection open; heartbeat until notifier becomes available
+                yield 'data: {"type":"waiting","message":"Notifier unavailable"}\n\n'
+                while (not hasattr(request.app.state, 'notifiers') or request.app.state.notifiers is None):
+                    if await request.is_disconnected():
+                        return
+                    yield 'data: {"type":"heartbeat"}\n\n'
+                    await asyncio.sleep(5.0)
 
             q: asyncio.Queue[bytes | str] = asyncio.Queue()
 
@@ -298,8 +390,8 @@ async def connector_registered_stream(request: Request):
                 with suppress(Exception):
                     await reader_task
         except Exception as e:
-            dsx_logging.error(f"SSE connector stream error: {e}")
-            yield f'data: {{"type":"error","message":"Connection lost: {str(e)}"}}\n\n'
+            dsx_logging.warning(f"SSE connector stream disconnected: {e.__class__.__name__}: {e}")
+            yield 'data: {"type":"heartbeat"}\n\n'
 
     return StreamingResponse(
         stream(),
@@ -310,7 +402,6 @@ async def connector_registered_stream(request: Request):
 app.include_router(api)
 
 app.include_router(sse_notifications)
-# app.include_router(scan_request_test.router, tags=["test"])
 app.include_router(scan_request.router, tags=["scan"])
 app.include_router(scan_results.router, tags=["results"])
 app.include_router(connectors.router, tags=["connectors"])

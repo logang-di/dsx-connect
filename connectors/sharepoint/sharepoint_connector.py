@@ -8,6 +8,7 @@ from shared.models.status_responses import StatusResponse, StatusResponseEnum, I
 from connectors.sharepoint.config import ConfigManager
 from connectors.sharepoint.version import CONNECTOR_VERSION
 from connectors.sharepoint.sharepoint_client import SharePointClient
+import asyncio
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
@@ -33,6 +34,48 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} configuration: {config}.")
     dsx_logging.info(f"{base.name} startup completed.")
 
+    # Derive SharePoint connection details from ASSET (URL) once at startup, and
+    # pre-compute the resolved asset base path inside the drive applying FILTER.
+    # This avoids re-parsing in handlers and keeps locations stable.
+    try:
+        asset = (config.asset or "").strip()
+        if asset.startswith("http://") or asset.startswith("https://"):
+            try:
+                host, site, drive_name, rel_path = SharePointClient.parse_sharepoint_web_url(asset)
+                # If env didn't set host/site, adopt from ASSET. Otherwise keep env but warn on mismatch.
+                if not config.sp_hostname:
+                    config.sp_hostname = host
+                elif config.sp_hostname != host:
+                    dsx_logging.warning(f"ASSET host '{host}' differs from configured '{config.sp_hostname}'; using configured.")
+
+                if not config.sp_site_path:
+                    config.sp_site_path = site
+                elif config.sp_site_path != site:
+                    dsx_logging.warning(f"ASSET site '{site}' differs from configured '{config.sp_site_path}'; using configured.")
+
+                # Drive name if provided; otherwise let client pick default
+                if drive_name and not config.sp_drive_name:
+                    config.sp_drive_name = drive_name
+
+                base_path = rel_path or ""
+            except Exception as e:
+                dsx_logging.warning(f"Failed to parse DSXCONNECTOR_ASSET URL; using raw asset/filter: {e}")
+                base_path = asset
+        else:
+            base_path = asset
+
+        # Apply filter as subpath
+        flt = (config.filter or "").strip("/")
+        if flt:
+            base_path = f"{base_path.strip('/')}/{flt}" if base_path else flt
+        config.resolved_asset_base = base_path.strip('/')
+        if config.resolved_asset_base:
+            dsx_logging.info(f"Resolved SharePoint asset base: '{config.resolved_asset_base}'")
+        else:
+            dsx_logging.info("Resolved SharePoint asset base: root of drive")
+    except Exception as e:
+        dsx_logging.warning(f"Failed to derive resolved asset base: {e}")
+
     # Attempt to resolve site/drive on startup so readiness can pass
     try:
         await sp_client._ensure_site_and_drive()
@@ -55,6 +98,27 @@ async def shutdown_event():
         None
     """
     dsx_logging.info(f"Shutting down connector {connector.connector_id}")
+    try:
+        await sp_client.aclose()
+    except Exception:
+        pass
+
+
+@connector.config
+async def config_handler(base: ConnectorInstanceModel):
+    """Expose connector runtime config for the UI, including resolved asset base."""
+    try:
+        payload = base.model_dump()
+    except Exception:
+        from fastapi.encoders import jsonable_encoder
+        payload = jsonable_encoder(base)
+    extra = {
+        "asset": config.asset,
+        "filter": config.filter,
+        "resolved_asset_base": config.resolved_asset_base,
+    }
+    payload.update({k: v for k, v in extra.items() if v is not None})
+    return payload
 
 
 @connector.full_scan
@@ -93,21 +157,35 @@ async def full_scan_handler() -> StatusResponse:
     """
     # Iterate files and enqueue scan requests
     try:
+        base_path = config.resolved_asset_base or (config.asset or "")
+        concurrency = max(1, int(getattr(config, 'scan_concurrency', 10) or 10))
+        sem = asyncio.Semaphore(concurrency)
+        tasks: list[asyncio.Task] = []
+
+        async def enqueue(item_id: str, metainfo: str):
+            async with sem:
+                dsx_logging.debug(f"Enqueuing scan request for item {item_id}")
+                await connector.scan_file_request(ScanRequestModel(location=item_id, metainfo=metainfo))
+
         if config.recursive:
-            async for item in sp_client.iter_files_recursive(config.asset or ""):
+            async for item in sp_client.iter_files_recursive(base_path):
                 if item.get("folder"):
                     continue
                 item_id = item.get("id")
-                name = item.get("name")
-                await connector.scan_file_request(ScanRequestModel(location=item_id, metainfo=name))
+                metainfo = item.get("path") or item.get("name") or ""
+                tasks.append(asyncio.create_task(enqueue(item_id, metainfo)))
         else:
-            items = await sp_client.list_files(config.asset or "")
+            items = await sp_client.list_files(base_path)
             for item in items:
                 if item.get("folder"):
                     continue
                 item_id = item.get("id")
-                name = item.get("name")
-                await connector.scan_file_request(ScanRequestModel(location=item_id, metainfo=name))
+                name = item.get("name") or ""
+                rel = (base_path.strip('/') + "/" + name).strip('/') if base_path else name
+                tasks.append(asyncio.create_task(enqueue(item_id, rel)))
+
+        if tasks:
+            await asyncio.gather(*tasks)
         return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
@@ -249,17 +327,43 @@ async def webhook_handler(event: dict):
             or an error if processing fails.
     """
     dsx_logging.info("Processing webhook event")
-    # Example: Extract a file ID from the event and trigger a scan
-    file_id = event.get("file_id", "unknown")
-    await connector.scan_file_request(ScanRequestModel(
-        location=f"custom://{file_id}",
-        metainfo=event
-    ))
-    return StatusResponse(
-        status=StatusResponseEnum.SUCCESS,
-        message="Webhook processed",
-        description=""
-    )
+    ident = event.get("id") or event.get("item_id") or event.get("path") or event.get("webUrl")
+    if not ident:
+        return StatusResponse(status=StatusResponseEnum.ERROR, message="Missing item identifier in webhook event")
+
+    location_id: str
+    metainfo: str | dict
+
+    try:
+        # If a full URL was provided, try to derive a drive path for display
+        if isinstance(ident, str) and (ident.startswith("http://") or ident.startswith("https://")):
+            try:
+                _, _, _, rel = SharePointClient.parse_sharepoint_web_url(ident)
+                metainfo = rel or ident
+            except Exception:
+                metainfo = ident
+            # Try resolve to item id using path
+            try:
+                location_id = await sp_client.resolve_item_id(metainfo if isinstance(metainfo, str) else str(metainfo))
+            except Exception:
+                return StatusResponse(status=StatusResponseEnum.ERROR, message="Unable to resolve item id from URL")
+        elif isinstance(ident, str) and ("/" in ident or ":" in ident):
+            # Treat as drive path
+            metainfo = ident
+            location_id = await sp_client.resolve_item_id(ident)
+        else:
+            # Treat as item id; best-effort to compute a friendly path for display
+            location_id = str(ident)
+            try:
+                path = await sp_client.get_item_path(location_id)
+                metainfo = path or event.get("name") or location_id
+            except Exception:
+                metainfo = event.get("name") or location_id
+
+        await connector.scan_file_request(ScanRequestModel(location=location_id, metainfo=metainfo))
+        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Webhook processed")
+    except Exception as e:
+        return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Webhook error: {e}")
 
 
 if __name__ == "__main__":

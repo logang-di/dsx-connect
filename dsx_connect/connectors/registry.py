@@ -188,6 +188,10 @@ class ConnectorsRegistry:
             await self._pubsub.subscribe(Channel.REGISTRY_CONNECTORS)
             dsx_logging.info(f"ConnectorsRegistry subscribed to {Channel.REGISTRY_CONNECTORS}")
 
+            # throttle noisy error logs when Redis is flapping
+            import time
+            next_log_ts = 0.0
+
             while True:
                 try:
                     msg = await self._pubsub.get_message(timeout=5.0, ignore_subscribe_messages=True)
@@ -219,7 +223,10 @@ class ConnectorsRegistry:
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    dsx_logging.debug(f"PubSub poll error: {e}", exc_info=True)
+                    now = time.time()
+                    if now >= next_log_ts:
+                        dsx_logging.warning(f"Registry pubsub disconnected: {e.__class__.__name__}: {e}")
+                        next_log_ts = now + 30.0
                     await asyncio.sleep(1.0)
 
         finally:
@@ -411,4 +418,3 @@ class ConnectorsRegistry:
                 # keep running
 
             await asyncio.sleep(self._sweep_period)
-

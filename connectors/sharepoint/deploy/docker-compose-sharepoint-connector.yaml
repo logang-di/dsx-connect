@@ -1,6 +1,6 @@
 services:
   sharepoint_connector: # if deploying two of more of this service within a single docker, this name must be unique for each instance
-    image: sharepoint-connector:__VERSION__
+    image: dsxconnect/sharepoint-connector:__VERSION__
     # Uncomment if you want to use docker compose to build the image
     #build:
     #  context: .
@@ -30,15 +30,12 @@ services:
 
       # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
       # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
-      DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
+      #DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
 
       # SharePoint auth and target
       DSXCONNECTOR_SP_TENANT_ID: "${SP_TENANT_ID}"
       DSXCONNECTOR_SP_CLIENT_ID: "${SP_CLIENT_ID}"
       DSXCONNECTOR_SP_CLIENT_SECRET: "${SP_CLIENT_SECRET}"
-      DSXCONNECTOR_SP_HOSTNAME: "${SP_HOSTNAME}"
-      DSXCONNECTOR_SP_SITE_PATH: "${SP_SITE_PATH}"
-      DSXCONNECTOR_SP_DRIVE_NAME: "${SP_DRIVE_NAME}" # optional
 
       # TLS toggles for Graph
       DSXCONNECTOR_SP_VERIFY_TLS: "${SP_VERIFY_TLS:-true}"

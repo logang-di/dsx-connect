@@ -1,16 +1,14 @@
-enabled: true
-
 image:
-  repository: logangilbert/dpa-rocky9
-  tag: "4.0.0.2007"
+  repository: dsxconnect/dpa-rocky9
+  tag: "4.1.0.2131"
   pullPolicy: IfNotPresent
-
-env:
-  APPLIANCE_URL: selab-dpa.customers.deepinstinctweb.com
-  TOKEN: 7a7d5bc6-0c2b-4a05-a996-fdcd05893e46
-  SCANNER_ID: "43"
-  FLAVOR: "rest,config"
-  NO_SSL: "true"
 
 service:
   port: 5000
+
+env:
+  APPLIANCE_URL: "selab-dpa.customers.deepinstinctweb.com"
+  TOKEN: "7b2b872c-632f-4220-ac42-7b2c5a76850a"
+  SCANNER_ID: "81"
+  FLAVOR: "rest,config"
+  NO_SSL: "true"

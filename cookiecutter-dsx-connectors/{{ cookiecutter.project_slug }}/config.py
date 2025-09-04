@@ -19,7 +19,7 @@ class {{ cookiecutter.__package_config_class_name }}(BaseConnectorConfig):
     You can also read in an optional .env file, which will be ignored is not available
     """
     name: str = '{{ cookiecutter.__release_name }}'
-    connector_url: HttpUrl = Field(default="http://0.0.0.0:{{ cookiecutter.connector_port }}",
+    connector_url: HttpUrl = Field(default="http://localhost:{{ cookiecutter.connector_port }}",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
     dsx_connect_url: HttpUrl = Field(default="{{ cookiecutter.__dsx_connect_url }}",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")

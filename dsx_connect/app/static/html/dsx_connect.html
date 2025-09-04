@@ -182,6 +182,9 @@
             white-space: nowrap;
             vertical-align: top;
         }
+        .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; border: 1px solid transparent; }
+        .pill-base { background: #eef2ff; color: #3730a3; border-color: #c7d2fe; }
+        .kv { color: #374151; }
         .verdict-icon {
             font-size: 1.2rem;
         }
@@ -229,11 +232,12 @@
         <div class="status" id="statusIndicator" style="font-size: 0.9rem; color: white;">Validating DSXA connectivity...</div>
     </div>
 
-    <!-- Right side: Link and gear -->
+    <!-- Right side: API link, stats toggle, and settings gear -->
     <div style="position: relative; display: flex; align-items: center; gap: 1rem; margin-left: auto;">
         <a href="/docs" target="_blank" style="color: white; text-decoration: underline; font-size: 0.95rem;">
             API <i class="fas fa-up-right-from-square" style="font-size: 0.75rem; margin-left: 4px;"></i>
         </a>
+        <i class="fas fa-chart-line" id="statsIcon" title="Scan Stats" style="position: relative; font-size: 1.4rem; cursor: pointer; z-index: 2000;"></i>
         <i class="fas fa-cog gear-icon" id="gearIcon" style="position: relative; font-size: 1.5rem; cursor: pointer; z-index: 2000;"></i>
     </div>
 </div>
@@ -274,6 +278,20 @@
     </div>
 </div>
 
+<!-- Stats Modal -->
+<div id="statsModal" class="config-modal">
+    <div class="config-modal-content">
+        <div class="config-modal-header">
+            <h3 id="statsModalTitle">Scan Statistics</h3>
+            <span class="config-modal-close" id="statsModalClose">&times;</span>
+        </div>
+        <div class="config-modal-body">
+            <div id="statsModalContent">Loading scan statistics...</div>
+        </div>
+    </div>
+    
+</div>
+
 <script>
     // ---- API base: service-slug FIRST (matches APIRouter(prefix=route_path(API_PREFIX_V1))) ----
     // Server prefix is now: /dsx-connect/api/v1
@@ -297,11 +315,16 @@
         scan: {
             request: () => api('scan/request'),
             status:  (id) => api(`scan/request/${encodeURIComponent(id)}`),
+            stats:   () => api('scan/stats'),
         },
     };
 
     // ===== GLOBAL VARIABLES =====
     const gearIcon = document.getElementById('gearIcon');
+    const statsIcon = document.getElementById('statsIcon');
+    const statsModal = document.getElementById('statsModal');
+    const statsModalClose = document.getElementById('statsModalClose');
+    const statsModalContent = document.getElementById('statsModalContent');
     const configSidebar = document.getElementById('configSidebar');
     const seenConnectors = new Set();
     const connectorLastSeen = new Map(); // Track when we last saw each connector
@@ -342,6 +365,7 @@
         if (lower.startsWith('google')) return '<i class="fab fa-google" style="margin-right: 6px;"></i>';
         if (lower.startsWith('azure')) return '<i class="fab fa-microsoft" style="margin-right: 6px;"></i>';
         if (lower.startsWith('aws')) return '<i class="fab fa-aws" style="margin-right: 6px;"></i>';
+        if (lower.includes('sharepoint')) return '<i class="fas fa-share-nodes" style="margin-right: 6px;"></i>';
         if (lower.startsWith('filesystem')) return '<i class="fas fa-folder" style="margin-right: 6px;"></i>';
         return '';
     }
@@ -488,6 +512,24 @@
             });
     }
 
+    // Small helper utilities
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+    async function fetchWithRetry(url, opts = {}, maxAttempts = 5, delayMs = 300) {
+        let lastErr;
+        for (let i = 0; i < maxAttempts; i++) {
+            try {
+                const res = await fetch(url, opts);
+                if (res.ok) return res;
+                lastErr = new Error(`HTTP ${res.status}`);
+            } catch (e) {
+                lastErr = e;
+            }
+            await sleep(delayMs);
+            delayMs = Math.min(Math.floor(delayMs * 1.6), 2000);
+        }
+        throw lastErr;
+    }
+
     function fetchConfig() {
         fetch(api('config'))
             .then(res => res.json())
@@ -499,6 +541,75 @@
             });
     }
 
+    // Format: "<bytes> (<GB> GB)"
+    function bytesWithGBStr(v) {
+        if (v == null || typeof v !== 'number' || v < 0) return '';
+        const gb = v / (1024 * 1024 * 1024);
+        return `${v.toLocaleString()} (${gb.toFixed(2)} GB)`;
+    }
+    // Format: "<bytes> (<MB> MB)"
+    function bytesWithMBStr(v) {
+        if (v == null || typeof v !== 'number' || v < 0) return '';
+        const mb = v / (1024 * 1024);
+        return `${v.toLocaleString()} (${mb.toFixed(2)} MB)`;
+    }
+    // Format times on one line: "<µs> µs (<ms> ms, <s> s)"
+    function formatTimeAllUnits(us) {
+        if (us == null || typeof us !== 'number' || us < 0) return '';
+        const ms = us / 1000;
+        const s  = ms / 1000;
+        const usStr = us.toLocaleString();
+        return `${usStr} µs (${ms.toFixed(2)} ms, ${s.toFixed(3)} s)`;
+    }
+
+    async function fetchScanStats() {
+        try {
+            const res = await fetch(r.scan.stats());
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return await res.json();
+        } catch (e) {
+            throw e;
+        }
+    }
+
+    function renderStats(stats) {
+        if (!stats || typeof stats !== 'object') {
+            return '<p>No statistics available.</p>';
+        }
+
+        const rows = [
+            ['Files Scanned (total)', stats.files_scanned],
+            ['\u2514\u2500 Benign', stats.benign_count],
+            ['\u2514\u2500 Malicious', stats.malicious_count],
+            ['\u2514\u2500 Unknown', stats.unknown_count],
+            ['\u2514\u2500 Unsupported', stats.unsupported_count],
+            ['\u2514\u2500 Not Scanned', stats.not_scanned_count],
+            ['<span style="margin-left: 16px;">\u2514\u2500 Encrypted</span>', stats.encrypted_count],
+            ['Total Scan Time', formatTimeAllUnits(stats.total_scan_time_in_microseconds)],
+            ['Total Bytes Scanned', bytesWithGBStr(stats.total_file_size)],
+            ['Average File Size (bytes)', bytesWithMBStr(stats.avg_file_size)],
+            ['Average Scan Time', formatTimeAllUnits(stats.avg_scan_time_in_microseconds)],
+            ['Median File Size (bytes)', bytesWithMBStr(stats.median_file_size_in_bytes)],
+            ['Median Scan Time', formatTimeAllUnits(stats.median_scan_time_in_microseconds)],
+            ['Longest Scan File', stats.longest_scan_time_file],
+            ['Longest Scan File Size (bytes)', bytesWithGBStr(stats.longest_scan_time_file_size_in_bytes)],
+            ['Longest Scan Time', formatTimeAllUnits(stats.longest_scan_time_in_microseconds)],
+        ];
+
+        const table = `
+            <table style="width:100%; border-collapse: collapse;">
+                <tbody>
+                    ${rows.map(([k,v]) => `
+                        <tr>
+                            <td style=\"padding:8px; border-bottom: 1px solid #eee; color:#555; width: 45%;\">${k}</td>
+                            <td style=\"padding:8px; border-bottom: 1px solid #eee; color:#111;\">${v ?? ''}</td>
+                        </tr>`).join('')}
+                </tbody>
+            </table>
+        `;
+        return table;
+    }
+
     async function fetchConnectors() {
         try {
             const listRes = await fetch(r.connectors.list());
@@ -507,9 +618,11 @@
 
             const results = await Promise.all((connectors || []).map(async (conn) => {
                 try {
-                    const rz = await fetch(r.connectors.readyz(conn.uuid));
+                    const rz = await fetchWithRetry(r.connectors.readyz(conn.uuid));
                     const body = await rz.json().catch(() => ({}));
-                    return { conn, ready: rz.ok, statusBody: body };
+                    let cfg = {};
+                    try { const c = await fetchWithRetry(r.connectors.config(conn.uuid)); cfg = await c.json(); } catch {}
+                    return { conn, ready: true, statusBody: { ...body, ...cfg } };
                 } catch {
                     return { conn, ready: false, statusBody: {} };
                 }
@@ -592,14 +705,81 @@
             <div class="connector-uuid" style="font-size: 0.8rem; color: #666; margin-bottom: 0.5rem;">
                 UUID: ${conn.uuid.substring(0, 8)}... • Connected: ${lastSeenTime}
             </div>
-            ${cfg && (cfg.asset || cfg.filter) ? `
-                <div class="asset-line" title="${cfg.asset || ''}">Asset: ${cfg.asset || 'n/a'}</div>
-                <div class="filter-line" title="${cfg.filter || ''}">Filter: ${cfg.filter || 'n/a'}</div>
+            ${cfg && (cfg.asset || cfg.filter || cfg.resolved_asset_base) ? `
+                <div class="asset-line" title="${cfg.asset || ''}"><span class="kv">Asset:</span> ${cfg.asset || 'n/a'}</div>
+                <div class="filter-line" title="${cfg.filter || ''}"><span class="kv">Filter:</span> ${cfg.filter || 'n/a'}</div>
+<!--                ${cfg.resolved_asset_base ? `<div class="filter-line" title="${cfg.resolved_asset_base}"><span class="kv">Base:</span> <span class="pill pill-base">${cfg.resolved_asset_base}</span></div>` : ''}-->
             ` : ''}
             <button onclick="invokeFullScan(${idx}, '${scanUrl}', '${conn.name.replace(/'/g, "\\'")}')">Full Scan</button>
             <span class="scan-note" id="scan-note-${idx}"></span>
         `;
         return card;
+    }
+
+    // ===== STATS MODAL TOGGLE =====
+    async function openStatsModal() {
+        statsModal.style.display = 'block';
+        statsModalContent.innerHTML = 'Loading scan statistics...';
+        try {
+            const stats = await fetchScanStats();
+            statsModalContent.innerHTML = renderStats(stats);
+        } catch (e) {
+            statsModalContent.innerHTML = `<div style="color:#b91c1c;">Failed to load stats: ${e?.message || e}</div>`;
+        }
+    }
+
+    function closeStatsModal() {
+        statsModal.style.display = 'none';
+    }
+
+    statsIcon.addEventListener('click', openStatsModal);
+    statsModalClose.addEventListener('click', closeStatsModal);
+    window.addEventListener('click', (event) => {
+        if (event.target === statsModal) {
+            closeStatsModal();
+        }
+    });
+
+    async function updateConnectorCard(message) {
+        // message has: type, uuid, name, url
+        const uuid = message.uuid;
+        const container = document.getElementById('connectorsGrid');
+        const cards = container.querySelectorAll('.connector-card');
+        let target = null;
+        cards.forEach(card => { if (card.dataset.connectorUuid === uuid) target = card; });
+        // Build a minimal conn object
+        const conn = { uuid: uuid, name: message.name || 'connector', url: message.url || '' };
+        // Brief delay to let the connector finish standing up its API
+        await sleep(200);
+        // Fetch readiness + config with retries to avoid race right after registration
+        let ready = false, cfg = {};
+        try { const rz = await fetchWithRetry(r.connectors.readyz(uuid)); ready = rz.ok; } catch {}
+        try { const c = await fetchWithRetry(r.connectors.config(uuid)); cfg = await c.json(); } catch {}
+        const idx = 0;
+        const newCard = renderConnectorCard(conn, cfg, idx, ready);
+        if (target) {
+            container.replaceChild(newCard, target);
+        } else {
+            if (container.textContent.includes('No connectors registered')) {
+                container.innerHTML = '';
+            }
+            container.prepend(newCard);
+        }
+        // If still not ready or config missing, schedule one background refresh
+        if (!ready || !(cfg && (cfg.asset || cfg.filter || cfg.resolved_asset_base))) {
+            setTimeout(async () => {
+                try {
+                    const rz = await fetchWithRetry(r.connectors.readyz(uuid));
+                    const c = await fetchWithRetry(r.connectors.config(uuid));
+                    const freshCfg = await c.json();
+                    const refreshed = renderConnectorCard(conn, freshCfg, idx, rz.ok);
+                    const cardsNow = container.querySelectorAll('.connector-card');
+                    let targetNow = null;
+                    cardsNow.forEach(card => { if (card.dataset.connectorUuid === uuid) targetNow = card; });
+                    if (targetNow) container.replaceChild(refreshed, targetNow);
+                } catch {}
+            }, 1200);
+        }
     }
 
     function handleConnectorUnregister(uuid, reason = 'unknown') {
@@ -727,6 +907,10 @@
                 border-radius: 0 0 4px 4px;
                 border-top: 1px solid #eee;
             ">
+                <div style="margin-bottom: 6px; color: #111;">
+                    <strong>Path:</strong>
+                    <span style="white-space: pre-wrap;">${data.scan_request?.metainfo || '-'}</span>
+                </div>
                 <pre style="margin: 0; white-space: pre-wrap; color: #444;">${JSON.stringify(data.verdict, null, 2)}</pre>
             </td>
         `;
@@ -886,9 +1070,8 @@
                 if (message.type === 'registered' || message.type === 'refreshed') {
                     if (!seenConnectors.has(message.uuid)) {
                         seenConnectors.add(message.uuid);
-                        await handleNewConnector(message);
                     }
-                    // For refresh events, we could update the card but it's not necessary
+                    await updateConnectorCard(message);
                 }
             },
             (error) => {

@@ -48,9 +48,25 @@ This package contains an easy to use docker-compose.yaml file for configuration 
 
 Dev builds: you can optionally auto-generate the dev certs during export by setting `GEN_DEV_CERTS=1` when running the invoke tasks (e.g., `GEN_DEV_CERTS=1 invoke release`).
 
-#### Config via docker-compose
+#### Using your own TLS certificates (production)
+- Option A: Volume‑mount certs (no image rebuild)
+  ```yaml
+  services:
+    sharepoint_connector:
+      volumes:
+        - ./certs:/app/certs:ro
+      environment:
+        DSXCONNECTOR_USE_TLS: "true"
+        DSXCONNECTOR_TLS_CERTFILE: "/app/certs/server.crt"
+        DSXCONNECTOR_TLS_KEYFILE: "/app/certs/server.key"
+  ```
+  Ensure files are readable by the container user (e.g., 0644), or rebuild the image to set ownership.
+- Option B: Bake certs into the image and set 0644/0600 permissions.
+- For staging/production, replace certs via bind mounts or bake your own into the image.
 
-##### Connector service configuration
+### Config via docker-compose
+
+#### Connector service configuration
 This connector's configuration has defaults defined in the config.py file in this same directory, a Pydantic
 BaseSettings class.  Pydantic is used because it provides data validation and type safety, and a class structure for easy
 and IDE friendly development.  Pydantic also has convenient built-in functions so that users
@@ -75,7 +91,7 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
         - DSXCONNECTOR_ASSET=lg-test-01 # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
         - DSXCONNECTOR_FILTER=  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
         - DSXCONNECTOR_RECURSIVE=True
-        - TEST_MODE=False
+
 
         <connector specific configuration>
 ```
