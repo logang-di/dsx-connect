@@ -1,4 +1,4 @@
-FROM python:3.12-alpine3.20
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -9,10 +9,10 @@ COPY dsx_connect/ dsx_connect/
 COPY shared/ shared/
 COPY certs/ certs/
 
-# Create data directory and set ownership
-RUN mkdir -p /app/data && \
-    adduser -D -h /home/dsxconnectuser dsxconnectuser && \
-    chown -R dsxconnectuser:dsxconnectuser /app
+# Create non-root user and data directory; set ownership
+RUN useradd -m -r -s /bin/bash dsxconnectuser \
+    && mkdir -p /app/data \
+    && chown -R dsxconnectuser:dsxconnectuser /app
 
 ENV PYTHONPATH=/app
 

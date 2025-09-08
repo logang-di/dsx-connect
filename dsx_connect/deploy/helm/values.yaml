@@ -100,3 +100,21 @@ syslog:
     tag: latest
   service:
     port: 514 # Default syslog port
+
+ingress:
+  enabled: false
+  host: "dsx-connect.127.0.0.1.nip.io"
+  ingressClassName: ""
+  # For TLS, the secret must be created separately (e.g., kubectl create secret tls my-ingress-tls --cert=... --key=...)
+  # and its name should be specified in the dsx-connect-api.tls.secretName if it's the same secret.
+  # If you have a separate secret for Ingress, specify it here:
+  # tlsSecretName: ""
+
+ingress:
+  enabled: false
+  host: "dsx-connect.127.0.0.1.nip.io"
+  ingressClassName: ""
+  # For TLS, the secret must be created separately (e.g., kubectl create secret tls my-ingress-tls --cert=... --key=...)
+  # and its name should be specified in the dsx-connect-api.tls.secretName if it's the same secret.
+  # If you have a separate secret for Ingress, specify it here:
+  # tlsSecretName: ""

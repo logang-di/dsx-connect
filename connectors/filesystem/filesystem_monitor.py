@@ -1,17 +1,16 @@
 import threading
 from abc import ABC, abstractmethod
 
-from pydantic import BaseModel
-from watchdog.events import FileSystemEventHandler
-from watchdog.observers import Observer
 import pathlib
 from shared.dsx_logging import dsx_logging
-
-
-class ScanFolderModel(BaseModel):
-    folder: pathlib.Path
-    recursive: bool = True
-    scan_existing: bool = True
+from shared.file_ops import path_matches_filter
+try:
+    from watchfiles import watch, Change  # type: ignore
+    _HAVE_WATCHFILES = True
+except Exception:
+    watch = None  # type: ignore
+    Change = None  # type: ignore
+    _HAVE_WATCHFILES = False
 
 
 class FilesystemMonitorCallback(ABC):
@@ -20,113 +19,119 @@ class FilesystemMonitorCallback(ABC):
         pass
 
 
-class FilesystemMonitor(FileSystemEventHandler):
+class FilesystemMonitor:
 
-    def __init__(self, monitor_folder: ScanFolderModel, callback: FilesystemMonitorCallback):
-        self._observer = None
-        self._monitor_folder = monitor_folder
-        self._scheduled_observers = []
+    def __init__(self, folder: pathlib.Path, filter: str, callback: FilesystemMonitorCallback):
+        self._folder = folder
+        self._filter = filter or ""
         self._callback = callback
-        self._initialized = False
         self._shutdown_event = threading.Event()
-
-
-    @property
-    def monitor_folder(self) -> ScanFolderModel:
-        return self._monitor_folder
+        self._thread: threading.Thread | None = None
 
     def start(self):
-        # event_handlers = [MyHandler(path, dpa_client) for path in scan_list]
-        # observers = [Observer() for _ in scan_list]
-        # for observer, event_handler, path in zip(observers, event_handlers, scan_list):
-        # scan anything that already exists in that folder that
+        if not _HAVE_WATCHFILES:
+            dsx_logging.warning("watchfiles not installed; FilesystemMonitor.start will be a no-op.")
+            return
+        if self._thread and self._thread.is_alive():
+            dsx_logging.debug("FilesystemMonitor already running")
+            return
         if self._shutdown_event.is_set():
-            dsx_logging.warning("Cannot start FilesystemMonitor - already shut down")
-            return
+            self._shutdown_event.clear()
 
-        self._observer = Observer()
+        def _run():
+            dsx_logging.debug(
+                f"Starting watchfiles on {self._folder} with filter='{self._filter}'")
+            try:
+                # Build a watchfiles filter that screens non-matching files early
+                def _watch_filter(change, path_str: str) -> bool:  # type: ignore[override]
+                    try:
+                        pth = pathlib.Path(path_str)
+                        # Only consider regular files
+                        if not pth.exists() or not pth.is_file():
+                            return False
+                        return path_matches_filter(self._folder, pth, self._filter)
+                    except Exception:
+                        return False
 
-        # in the even that we've got watchers still scheduled (if this app died), unschedule them
-        if not self._initialized:
-            self._observer.unschedule_all()
-            self._initialized = True
+                for changes in watch(
+                    self._folder,
+                    recursive=True,
+                    debounce=500,
+                    watch_filter=_watch_filter,
+                    stop_event=self._shutdown_event,
+                ):
+                    if self._shutdown_event.is_set():
+                        break
+                    for change, path_str in changes:
+                        # Only handle file creations/modifications
+                        if change not in (Change.added, Change.modified):
+                            continue
+                        p = pathlib.Path(path_str)
+                        if not p.exists() or not p.is_file():
+                            continue
+                        # Apply rsync-like filter as an extra guard
+                        if not path_matches_filter(self._folder, p, self._filter):
+                            dsx_logging.debug(f"File {p} ignored by filter '{self._filter}'")
+                            continue
+                        # Try to ensure file is readable (handles in-progress writes)
+                        try:
+                            with p.open('rb') as f:
+                                _ = f.read(1)
+                        except FileNotFoundError as e:
+                            dsx_logging.warning(f'File {p} not found during event handling: {e}')
+                            continue
+                        except Exception as e:
+                            dsx_logging.debug(f'File {p} not ready to open: {e}')
+                            continue
 
-        if self.monitor_folder.folder in self._scheduled_observers:
-            dsx_logging.debug(f'{self.monitor_folder.folder} already being observed')
-            return
+                        dsx_logging.debug(f'New or modified file detected: {p}')
+                        if not self._shutdown_event.is_set():
+                            try:
+                                self._callback.file_modified_callback(file_path=p)
+                            except Exception as e:
+                                dsx_logging.error(f"Error in file callback: {e}")
+            except Exception as e:
+                dsx_logging.error(f"watchfiles loop error: {e}")
 
-        self._observer.schedule(self, self.monitor_folder.folder, recursive=self._monitor_folder.recursive)
-        self._scheduled_observers.append(self.monitor_folder.folder)
-        self._observer.start()
+        self._thread = threading.Thread(target=_run, name="filesystem-monitor", daemon=True)
+        self._thread.start()
 
     def stop(self):
         self._shutdown_event.set()
-        if self._observer:
-            try:
-                # First, unschedule all watches to stop new events
-                self._observer.unschedule_all()
-                dsx_logging.debug("Unscheduled all file watches")
-
-                # Stop the observer
-                self._observer.stop()
-                dsx_logging.debug("Observer stop() called")
-
-                # Wait for the observer thread to finish with a timeout
-                self._observer.join(timeout=10.0)  # 10 second timeout
-
-                if self._observer.is_alive():
-                    dsx_logging.warning("Observer thread did not shut down cleanly within timeout")
-                else:
-                    dsx_logging.debug("Observer thread shut down cleanly")
-
-            except Exception as e:
-                dsx_logging.error(f"Error during FilesystemMonitor shutdown: {e}")
-            finally:
-                self._observer = None
-                self._scheduled_observers.clear()
-
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=10.0)
+            if self._thread.is_alive():
+                dsx_logging.warning("Filesystem monitor thread did not shut down cleanly within timeout")
+        self._thread = None
         dsx_logging.info("FilesystemMonitor stopped")
 
-
+    # Backward-compatible helper for tests and direct triggering
     def on_modified(self, event):
         if self._shutdown_event.is_set():
             dsx_logging.debug("Ignoring file event - monitor is shutting down")
             return
-
-        if event.is_directory:
+        if getattr(event, 'is_directory', False):
             return
-
-        filename = pathlib.Path(event.src_path)
-        content = b''
-        if filename.exists() and filename.is_file():  # yes, I know we are checking for directory above, but just
-            # double-checking that the file is there and is a file.
-            # self._lock.acquire()
-            try:
-                with filename.open('rb') as file:
-                    # TODO - we dont need the entire content... just enough to see that we can
-                    content = file.read(1)
-            # this may seem overly cautious, but the nature of watchdog.on_modified, is that a file
-            # being currently written or deleted may trigger an on_modified, and by the time we start
-            # reading the file, it could be in a different state.
-            # Unfortunately, I have not been successful using watchdog.on_close across platforms
-            # (well documented online the issues with multiplatform monitoring)
-            except FileNotFoundError as e:
-                dsx_logging.warning(f'File {event.src_path} not found: {e}')
-                return
-            except Exception as e:  # file probably isn't quite ready to be read yet, on Windows in particular this
-                # happens because the file hasn't been completely closed yet
-                dsx_logging.debug(f'File {event.src_path} not ready to open: {e}')
-                return
-            finally:
-                pass
-                # self._lock.release()
-
-        dsx_logging.info(f'New or modified file detected: {event.src_path}')
-
-        # Check again before callback in case shutdown happened during file operations
+        filename = pathlib.Path(getattr(event, 'src_path', ''))
+        if not filename:
+            return
+        try:
+            if filename.exists() and filename.is_file():
+                # Apply filter before attempting to open
+                if not path_matches_filter(self._folder, filename, self._filter):
+                    dsx_logging.debug(f"File {filename} ignored by filter '{self._filter}'")
+                    return
+                with filename.open('rb') as f:
+                    _ = f.read(1)
+        except FileNotFoundError as e:
+            dsx_logging.warning(f'File {filename} not found: {e}')
+            return
+        except Exception as e:
+            dsx_logging.debug(f'File {filename} not ready to open: {e}')
+            return
+        dsx_logging.debug(f'New or modified file detected: {filename}')
         if not self._shutdown_event.is_set():
             try:
                 self._callback.file_modified_callback(file_path=filename)
             except Exception as e:
                 dsx_logging.error(f"Error in file callback: {e}")
-

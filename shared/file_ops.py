@@ -495,6 +495,95 @@ def get_filepaths(path: str | Path, filter_str: str = "") -> List[Path]:
     return list(iter_files(root, filter_str))
 
 
+# ==============================
+# Single-path filter evaluation
+# ==============================
+
+def path_matches_filter(base_dir: Path | str, file_path: Path | str, filter_str: str = "") -> bool:
+    """
+    Check if a single file path under base_dir should be included according to
+    the rsync-like include/exclude rules used by get_filepaths().
+
+    - base_dir: The root DSXCONNECTOR_ASSET directory.
+    - file_path: Absolute or relative path to the file to test.
+    - filter_str: DSXCONNECTOR_FILTER string.
+
+    Behavior matches traversal semantics:
+      - "" includes everything recursively (subject to excludes).
+      - "*" includes only top-level files (direct children of base_dir).
+      - Bare token like "sub1" means recurse under base_dir/sub1.
+      - "sub1/*" includes only direct children of that subtree.
+      - Glob/path patterns (supports **).
+      - Excludes apply to any matching path; bare dir excludes apply to any
+        ancestor directory with that name.
+    """
+    base = Path(base_dir).expanduser()
+    fp = Path(file_path).expanduser()
+
+    # Ensure the path is inside base
+    try:
+        rel = fp.resolve().relative_to(base.resolve()).as_posix()
+    except Exception:
+        return False
+
+    includes, excludes, include_all, top_level_only = parse_filter_spec(filter_str)
+    bare_ex_dirs, glob_ex_paths = _split_excludes(excludes)
+
+    # Apply excludes first
+    if _is_excluded_rel(rel, glob_ex_paths):
+        return False
+
+    # Bare directory excludes apply if any ancestor directory name matches
+    rel_pp = PurePosixPath(rel)
+    rel_parts = rel_pp.parts[:-1]  # directories only
+    if bare_ex_dirs and any(part in bare_ex_dirs for part in rel_parts):
+        return False
+
+    # Include-all cases
+    if include_all:
+        if top_level_only:
+            # Only files directly under base
+            return len(rel_pp.parts) == 1
+        return True
+
+    # Otherwise, must match at least one include token
+    def matches_include(tok: str) -> bool:
+        # Top-level only
+        if tok == "*":
+            return len(rel_pp.parts) == 1
+
+        # Direct-children shorthand 'sub1/*' without glob in parent
+        if tok.endswith("/*") and not _has_glob(tok[:-2]):
+            parent = tok[:-2].strip("/")
+            # Parent must match directories exactly and file must be one level below
+            if not parent:
+                return len(rel_pp.parts) == 1
+            # Expect rel to be 'parent/filename' (exactly two parts if parent has no path)
+            parent_parts = PurePosixPath(parent).parts
+            return rel_parts == tuple(parent_parts)
+
+        # Bare subtree name (no globs or slashes): any file under that subtree
+        if not _has_glob(tok) and "/" not in tok:
+            # Accept if rel is in that subtree (e.g., tok == 'sub1' and rel startswith 'sub1/')
+            return rel == tok or rel.startswith(tok + "/")
+
+        # General case: treat tok as a glob/path pattern relative to base
+        try:
+            # Primary check: pattern against relative path
+            if rel_pp.match(tok):
+                return True
+            # Allow common '**/*.ext' style to match top-level files too
+            if tok.startswith("**/"):
+                tail = tok[3:]
+                if PurePosixPath(rel_pp.name).match(tail):
+                    return True
+            return False
+        except Exception:
+            return False
+
+    return any(matches_include(t) for t in includes)
+
+
 # =======================
 # Async path enumeration
 # =======================

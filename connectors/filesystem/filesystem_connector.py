@@ -11,7 +11,7 @@ from shared.models.connector_models import ScanRequestModel, ItemActionEnum, Con
     ConnectorStatusEnum
 from shared.dsx_logging import dsx_logging
 from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
-from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback, ScanFolderModel
+from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback
 from shared.async_ops import run_async
 from connectors.filesystem.config import ConfigManager
 from connectors.filesystem.version import CONNECTOR_VERSION
@@ -19,6 +19,18 @@ from connectors.filesystem.version import CONNECTOR_VERSION
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
 connector = DSXConnector(config)
+
+
+def _normalize_path(p: str | pathlib.Path) -> pathlib.Path:
+    if isinstance(p, pathlib.Path):
+        path = p
+    else:
+        path = pathlib.Path(os.path.expandvars(p))
+    path = path.expanduser()
+    try:
+        return path.resolve()
+    except Exception:
+        return path
 
 
 # given that this could potentially be a lengthy file iteration, make the iteration asynchronous...
@@ -39,12 +51,27 @@ async def start_monitor():
 
         monitor_callback = MonitorCallback()
 
+        # Expand '~' and env vars, resolve to absolute path, and validate directory exists before starting watch
+        watch_path = pathlib.Path(os.path.expandvars(config.asset)).expanduser()
+        try:
+            # resolve to absolute path (directory is expected to exist)
+            watch_path = watch_path.resolve()
+        except Exception:
+            # if resolve fails, continue with expanded path and rely on exists()/is_dir()
+            pass
+        if not watch_path.exists() or not watch_path.is_dir():
+            dsx_logging.error(
+                f"Filesystem monitor path does not exist or is not a directory: {watch_path}. "
+                f"Update DSXCONNECTOR_ASSET or create the folder."
+            )
+            return
+
         connector.filesystem_monitor = FilesystemMonitor(
-            monitor_folder=ScanFolderModel(folder=pathlib.Path(config.asset), recursive=config.recursive,
-                                           scan_existing=False),
+            folder=watch_path,
+            filter=config.filter,
             callback=monitor_callback)
         connector.filesystem_monitor.start()
-        dsx_logging.info(f"Monitor set on {config.asset} for new or modified files")
+        dsx_logging.info(f"Monitor set on {watch_path} for new or modified files with filter: {config.filter}")
     else:
         dsx_logging.info(f"Monitor set to false, {config.asset} will not be monitored for new or modified files")
 
@@ -70,7 +97,6 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
         dsx_logging.info(f"Monitor set to false, {config.asset} will not be monitored for new or modified files")
     else:
         await start_monitor()
-        dsx_logging.info(f"Monitor set on {config.asset} for new or modified files")
 
     base.status = ConnectorStatusEnum.READY
     base.meta_info = f"Filesystem location: {config.asset}"
@@ -97,10 +123,48 @@ async def full_scan_handler() -> StatusResponse:
     return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
 
 
+@connector.webhook_event
+async def webhook_handler(event: dict | ScanRequestModel) -> StatusResponse:
+    """
+    Handle inbound webhook-style events for the filesystem connector.
+
+    Accepts either a dict payload with at least a 'location' field, or a
+    ScanRequestModel (used internally by the monitor callback).
+    """
+    try:
+        if isinstance(event, ScanRequestModel):
+            req = event
+        else:
+            location = event.get("location") or event.get("path") or event.get("file_path")
+            if not location:
+                return StatusResponse(
+                    status=StatusResponseEnum.ERROR,
+                    message="Invalid filesystem event format",
+                    description="Missing 'location' (or 'path'/'file_path') in event payload",
+                )
+            metainfo = event.get("metainfo") or pathlib.Path(str(location)).name
+            req = ScanRequestModel(location=str(location), metainfo=str(metainfo))
+
+        dsx_logging.info(f"Received filesystem event for {req.location}")
+        response = await connector.scan_file_request(req)
+        return StatusResponse(
+            status=response.status,
+            message="Filesystem webhook processed",
+            description=f"Scan request sent for {req.location}",
+        )
+    except Exception as e:
+        dsx_logging.error(f"Unexpected error in webhook handler: {e}", exc_info=True)
+        return StatusResponse(
+            status=StatusResponseEnum.ERROR,
+            message="Internal error during webhook handling",
+            description=str(e),
+        )
+
+
 @connector.item_action
 async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
     file_path = scan_event_queue_info.location
-    path_obj = pathlib.Path(file_path)
+    path_obj = _normalize_path(file_path)
 
     if not path_obj.is_file():
         return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action,
@@ -152,10 +216,10 @@ def stream_file(file_like, chunk_size: int = 1024 * 1024):
 
 @connector.read_file
 async def read_file_handler(scan_request_info: ScanRequestModel) -> StreamingResponse | StatusResponse:
-    file_path = pathlib.Path(scan_request_info.location)
+    file_path = _normalize_path(scan_request_info.location)
 
     # Check if the file exists
-    if not os.path.isfile(file_path):
+    if not file_path.is_file():
         return StatusResponse(status=StatusResponseEnum.ERROR,
                               message=f"File {file_path} not found")
 

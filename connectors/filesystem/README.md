@@ -16,6 +16,18 @@ and the following API endpoints as applicable:
 - **repo_check:** Request that the connector checks its connectivity to its repository
 - **webhook_event:** Process external webhook events.
 
+### Monitoring (watchfiles)
+- The filesystem connector uses `watchfiles` for directory monitoring (migrated from `watchdog`).
+- Benefits: cross‑platform reliability, active maintenance, built‑in debounce, simpler async use.
+- Behavior: recursive monitoring with ~500ms debounce; verifies file readability to avoid partial writes.
+- Enable via `DSXCONNECTOR_MONITOR=true` (see `.dev.env`).
+
+Tests for monitoring
+- Unit (deterministic): `pytest -q connectors/filesystem/tests/test_filesystem_monitor.py`
+  - Simulates a modify event and asserts the webhook → scan path executes (no OS watcher needed).
+- Optional E2E watcher: `FS_MONITOR_E2E=true pytest -q connectors/filesystem/tests/test_filesystem_monitor_integration.py`
+  - Requires `watchfiles` installed locally; starts the real watcher, drops a file, and expects a scan request.
+
 ## Running/Testing in an IDE/Debugger
 All connectors can be run from the command-line or via an IDE/Debugger.  In this directory, there is both a start.py
 file and `{{ cookiecutter.project_slug }}_connector.py` script either of which can be used to start the connector.
@@ -88,4 +100,3 @@ Other invoke options:
 * build - (runs bump, clean, prepare) and builds a Docker image tagged as {{ cookiecutter.__release_name }}:<version> from the prepared dist folder if it doesn’t already exist.
 * push - (runs build) tags the Docker image with the repository username ({{ cookiecutter.docker_repo }}/<name>:<version>) and pushes it to Docker Hub.
 * release - executes the full release cycle by running the following tasks in order: bump, clean, prepare, build, and push.
-
