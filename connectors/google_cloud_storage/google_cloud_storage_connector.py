@@ -8,6 +8,7 @@ from shared.models.status_responses import StatusResponse, StatusResponseEnum, I
 from connectors.google_cloud_storage.config import ConfigManager
 from connectors.google_cloud_storage.version import CONNECTOR_VERSION
 from shared.streaming import stream_blob
+from shared.file_ops import relpath_matches_filter
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
@@ -35,7 +36,7 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
-    base.meta_info = f"GCS Bucket: {config.asset}, prefix: {config.filter}"
+    base.meta_info = f"GCS Bucket: {config.asset}, filter: {config.filter or '(none)'}"
     return base
 
 
@@ -87,8 +88,10 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
-    for blob in gcs_client.keys(config.asset, prefix=config.filter, recursive=config.recursive):
+    for blob in gcs_client.keys(config.asset, filter_str=config.filter):
         key = blob['Key']
+        if config.filter and not relpath_matches_filter(key, config.filter):
+            continue
         full_path = f"{config.asset}/{key}"
         await connector.scan_file_request(
             ScanRequestModel(location=key, metainfo=full_path)
@@ -210,17 +213,19 @@ async def webhook_handler(event: dict):
             or an error if processing fails.
     """
     dsx_logging.info("Processing webhook event")
-    # Example: Extract a file ID from the event and trigger a scan
+    # Prefer conventional GCS notification schema when present
+    key = event.get("name") or event.get("object") or event.get("location")
+    if key:
+        k = str(key)
+        if config.filter and not relpath_matches_filter(k, config.filter):
+            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Webhook processed", description=f"Ignored by filter: {k}")
+        await connector.scan_file_request(ScanRequestModel(location=k, metainfo=k))
+        return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Webhook processed", description=f"Scan requested for {k}")
+
+    # Fallback: example payload with file_id
     file_id = event.get("file_id", "unknown")
-    await connector.scan_file_request(ScanRequestModel(
-        location=f"custom://{file_id}",
-        metainfo=event
-    ))
-    return StatusResponse(
-        status=StatusResponseEnum.SUCCESS,
-        message="Webhook processed",
-        description=""
-    )
+    await connector.scan_file_request(ScanRequestModel(location=f"custom://{file_id}", metainfo=event))
+    return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Webhook processed", description="")
 
 
 

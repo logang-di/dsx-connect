@@ -584,6 +584,93 @@ def path_matches_filter(base_dir: Path | str, file_path: Path | str, filter_str:
     return any(matches_include(t) for t in includes)
 
 
+def relpath_matches_filter(rel_posix: str, filter_str: str = "") -> bool:
+    """
+    Check if a repository-relative path (POSIX style, e.g., cloud object key) matches
+    the rsync-like include/exclude rules. This avoids needing a real filesystem base.
+
+    - rel_posix: path relative to a virtual base (e.g., 'sub1/file.txt'). Use forward slashes.
+    - filter_str: DSXCONNECTOR_FILTER string.
+    """
+    # Normalize to posix path semantics
+    rel = rel_posix.strip("/")
+    pp = PurePosixPath(rel)
+
+    includes, excludes, include_all, top_level_only = parse_filter_spec(filter_str)
+    bare_ex_dirs, glob_ex_paths = _split_excludes(excludes)
+
+    # Exclude checks
+    if _is_excluded_rel(rel, glob_ex_paths):
+        return False
+    if bare_ex_dirs and any(part in bare_ex_dirs for part in pp.parts[:-1]):
+        return False
+
+    # Include-all cases
+    if include_all:
+        if top_level_only:
+            return len(pp.parts) == 1
+        return True
+
+    def matches_include(tok: str) -> bool:
+        if tok == "*":
+            return len(pp.parts) == 1
+        if tok.endswith("/*") and not _has_glob(tok[:-2]):
+            parent = tok[:-2].strip("/")
+            if not parent:
+                return len(pp.parts) == 1
+            return pp.parts[:-1] == PurePosixPath(parent).parts
+        if not _has_glob(tok) and "/" not in tok:
+            return rel == tok or rel.startswith(tok + "/")
+        # General glob/path pattern
+        if pp.match(tok):
+            return True
+        if tok.startswith("**/"):
+            tail = tok[3:]
+            if PurePosixPath(pp.name).match(tail):
+                return True
+        return False
+
+    return any(matches_include(t) for t in includes)
+
+
+def compute_prefix_hints(filter_str: str) -> List[str]:
+    """
+    Derive conservative provider-side prefix hints from the rsync-like filter.
+
+    Returns a list of path prefixes (with trailing '/') that are safe to use as
+    name_starts_with/prefix for cloud listings. Only produced when:
+      - No excludes are present, and
+      - Includes are bare paths or directory patterns (e.g., 'sub1', 'sub1/*', 'sub1/**').
+
+    If any include uses glob characters beyond the trailing /* or /** pattern, or
+    if excludes are present, returns an empty list to avoid under-fetching.
+    """
+    includes, excludes, include_all, top_level_only = parse_filter_spec(filter_str or "")
+    if include_all or excludes:
+        return []
+
+    hints: list[str] = []
+    for inc in includes:
+        if inc in ("", "*"):
+            return []
+        if inc.endswith("/*") and not _has_glob(inc[:-2]):
+            hints.append(inc[:-2].rstrip("/") + "/")
+        elif inc.endswith("/**") and not _has_glob(inc[:-3]):
+            hints.append(inc[:-3].rstrip("/") + "/")
+        elif not _has_glob(inc):
+            hints.append(inc.rstrip("/") + "/")
+        else:
+            return []
+    # Deduplicate while preserving order
+    seen = set()
+    out: list[str] = []
+    for h in hints:
+        if h not in seen:
+            seen.add(h)
+            out.append(h)
+    return out
+
+
 # =======================
 # Async path enumeration
 # =======================

@@ -38,7 +38,6 @@ class GoogleCloudStorageConnectorConfig(BaseConnectorConfig):
 
     asset: str = "lg-test-01"
     filter: str = ""
-    recursive: bool = True
 
 
     class Config:

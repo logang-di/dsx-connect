@@ -10,6 +10,7 @@ from azure.storage.blob import BlobServiceClient
 from azure.core.exceptions import ResourceNotFoundError
 
 from shared import file_ops
+from shared.file_ops import relpath_matches_filter, compute_prefix_hints
 from shared.dsx_logging import dsx_logging
 import tenacity
 import base64
@@ -126,13 +127,40 @@ class AzureBlobClient:
 
 
 
-    def keys(self, container: str, prefix: str = '', recursive: bool = True):
+    def keys(self, container: str, filter_str: str = ""):
+        """
+        Yield blob keys from a container applying DSXCONNECTOR_FILTER rules.
+
+        Uses provider-side prefix narrowing when safe by deriving conservative
+        prefixes from the filter (no excludes and only bare path includes), and
+        always applies relpath_matches_filter client-side for correctness.
+        """
         try:
             container_client = self.service_client.get_container_client(container)
-            blob_list = container_client.list_blobs(name_starts_with=prefix)
-            for blob in blob_list:
-                if recursive or '/' not in blob.name[len(prefix):].strip('/'):
-                    yield {'Key': blob.name, 'Size': blob.size}
+
+            # Compute conservative name_starts_with hints when possible
+            hints: list[str] = compute_prefix_hints(filter_str or "")
+
+            seen: set[str] = set()
+
+            def _emit(blob):
+                key = blob.name
+                if key in seen:
+                    return
+                if filter_str and not relpath_matches_filter(key, filter_str):
+                    return
+                seen.add(key)
+                yield {'Key': key, 'Size': getattr(blob, 'size', None)}
+
+            if hints:
+                for prefix in sorted(set(hints)):
+                    for blob in container_client.list_blobs(name_starts_with=prefix):
+                        for item in _emit(blob):
+                            yield item
+            else:
+                for blob in container_client.list_blobs():
+                    for item in _emit(blob):
+                        yield item
         except Exception as e:
             dsx_logging.error(f"Error listing blobs: {e}")
             raise

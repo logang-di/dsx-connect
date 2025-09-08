@@ -8,6 +8,7 @@ from shared.models.status_responses import StatusResponse, StatusResponseEnum, I
 from connectors.aws_s3.config import ConfigManager
 from connectors.aws_s3.version import CONNECTOR_VERSION
 from shared.streaming import stream_blob
+from shared.file_ops import relpath_matches_filter
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
@@ -35,7 +36,7 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
-    base.meta_info = f"S3 Bucket: {config.asset}, prefix: {config.filter}"
+    base.meta_info = f"S3 Bucket: {config.asset}, filter: {config.filter or '(none)'}"
     return base
 
 
@@ -87,8 +88,10 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
-    for key in aws_s3_client.keys(config.asset, prefix=config.filter, recursive=config.recursive):
+    for key in aws_s3_client.keys(config.asset, filter_str=config.filter):
         file_name = key['Key']
+        if config.filter and not relpath_matches_filter(file_name, config.filter):
+            continue
         full_path = f"{config.asset}/{file_name}"
         status_response = await connector.scan_file_request(
             ScanRequestModel(location=str(f"{file_name}"), metainfo=full_path))
@@ -269,6 +272,10 @@ async def webhook_handler(event: dict):
 
         location = f"{key}"
         metainfo = str({"bucket": bucket, "key": key})
+
+        # Apply connector filter
+        if config.filter and not relpath_matches_filter(key, config.filter):
+            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="S3 webhook processed", description=f"Ignored by filter: {key}")
 
         dsx_logging.info(f"Received S3 event for {location}")
         response = await connector.scan_file_request(

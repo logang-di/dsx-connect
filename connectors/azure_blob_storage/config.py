@@ -35,8 +35,7 @@ class AzureBlobStorageConnectorConfig(BaseConnectorConfig):
 
     # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
     asset: str = "lg-test-01"
-    filter: str = "sub1"
-    recursive: bool = True
+    filter: str = ""
 
     class Config:
         env_prefix = "DSXCONNECTOR_"

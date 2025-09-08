@@ -167,22 +167,18 @@ async def full_scan_handler() -> StatusResponse:
                 dsx_logging.debug(f"Enqueuing scan request for item {item_id}")
                 await connector.scan_file_request(ScanRequestModel(location=item_id, metainfo=metainfo))
 
-        if config.recursive:
-            async for item in sp_client.iter_files_recursive(base_path):
-                if item.get("folder"):
-                    continue
-                item_id = item.get("id")
-                metainfo = item.get("path") or item.get("name") or ""
-                tasks.append(asyncio.create_task(enqueue(item_id, metainfo)))
-        else:
-            items = await sp_client.list_files(base_path)
-            for item in items:
-                if item.get("folder"):
-                    continue
-                item_id = item.get("id")
-                name = item.get("name") or ""
-                rel = (base_path.strip('/') + "/" + name).strip('/') if base_path else name
-                tasks.append(asyncio.create_task(enqueue(item_id, rel)))
+        async for item in sp_client.iter_files_recursive(base_path):
+            if item.get("folder"):
+                continue
+            # Determine a repository-relative path to apply the filter
+            item_path = item.get("path") or item.get("name") or ""
+            rel = item_path.strip('/')
+            from shared.file_ops import relpath_matches_filter
+            if config.filter and not relpath_matches_filter(rel, config.filter):
+                continue
+            item_id = item.get("id")
+            metainfo = item_path
+            tasks.append(asyncio.create_task(enqueue(item_id, metainfo)))
 
         if tasks:
             await asyncio.gather(*tasks)

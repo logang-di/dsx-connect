@@ -85,7 +85,6 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
         - LOG_LEVEL=debug
         - DSXCONNECTOR_ITEM_ACTION=nothing
         - DSXCONNECTOR_ITEM_ACTION_MOVE_DIR=/app/quarantine # this directory should have been created in the Dockerfile
-        - DSXCONNECTOR_RECURSIVE=true
 
 ```
 

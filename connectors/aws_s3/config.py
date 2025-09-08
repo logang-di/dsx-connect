@@ -33,7 +33,6 @@ class AWSS3ConnectorConfig(BaseConnectorConfig):
     # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
     asset: str = "lg-test-02"
     filter: str = ""
-    recursive: bool = True # deprecated
 
     ### Connector specific configuration
     s3_endpoint_url: str | None = None

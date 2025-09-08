@@ -9,6 +9,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from shared import file_ops
+from shared.file_ops import relpath_matches_filter, compute_prefix_hints
 from shared.dsx_logging import dsx_logging
 import tenacity
 
@@ -100,22 +101,40 @@ class AWSS3Client:
         response = self.s3_client.head_object(Bucket=bucket, Key=key)
         return response['ContentLength']
 
-    def keys(self, bucket: str, prefix: str = '', delimiter: str = '/', start_after: str = '',
-             recursive: bool = False, include_folders: bool = False):
+    def keys(self, bucket: str, filter_str: str = ""):
+        """
+        Yield S3 object keys applying DSXCONNECTOR_FILTER.
+
+        Uses safe prefix narrowing when possible and always verifies with
+        relpath_matches_filter client-side to ensure correctness.
+        """
         paginator = self.s3_client.get_paginator('list_objects_v2')
-        for page in paginator.paginate(
-            Bucket=bucket,
-            Prefix=prefix,
-            Delimiter='' if recursive else delimiter,
-            StartAfter=start_after
-        ):
-            for obj in page.get('Contents', []):
-                if not include_folders and obj['Key'].endswith('/'):
-                    continue
-                yield obj
-            if include_folders and 'CommonPrefixes' in page:
-                for prefix_obj in page['CommonPrefixes']:
-                    yield {'Key': prefix_obj['Prefix']}
+        hints = compute_prefix_hints(filter_str or "")
+
+        seen: set[str] = set()
+
+        def _emit(obj):
+            key = obj.get('Key') or obj.get('Prefix')
+            if not key or key in seen:
+                return
+            if key.endswith('/'):
+                return
+            if filter_str and not relpath_matches_filter(key, filter_str):
+                return
+            seen.add(key)
+            yield obj if 'Size' in obj else {'Key': key}
+
+        if hints:
+            for prefix in sorted(set(hints)):
+                for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+                    for obj in page.get('Contents', []):
+                        for item in _emit(obj):
+                            yield item
+        else:
+            for page in paginator.paginate(Bucket=bucket):
+                for obj in page.get('Contents', []):
+                    for item in _emit(obj):
+                        yield item
 
     def move_object(self, src_bucket: str, src_key: str, dest_bucket: str, dest_key: str) -> bool:
         """
@@ -174,8 +193,8 @@ class AWSS3Client:
             dsx_logging.error(f"Error uploading file {filepath} to {bucket}: {e}")
             raise
 
-    def upload_folder(self, folder: pathlib.Path, bucket: str, recursive: bool = True):
-        file_paths = file_ops.get_filepaths(folder, recursive=recursive)
+    def upload_folder(self, folder: pathlib.Path, bucket: str):
+        file_paths = file_ops.get_filepaths(folder)
         for path in file_paths:
             if path.is_file():
                 self.upload_file(path, path.name, bucket)

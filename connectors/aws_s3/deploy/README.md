@@ -60,8 +60,35 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
         - DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO=dsxconnect-quarantine # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
           # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector
         - DSXCONNECTOR_ASSET=lg-test-01 # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
-        - DSXCONNECTOR_FILTER=  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
-        - DSXCONNECTOR_RECURSIVE=True
+        - DSXCONNECTOR_FILTER=  # rsync-like include/exclude patterns; leave empty to scan all
+
+### DSXCONNECTOR_FILTER (rsync-like)
+
+File/object filter patterns based on rsync include and exclude patterns. Leave empty ("") to scan everything under DSXCONNECTOR_ASSET.
+
+General concepts:
+- a '?' matches any single character except a slash (/).
+- a '*' matches zero or more non-slash characters.
+- a '**' matches zero or more characters, including slashes.
+- '-' or '--exclude' means: exclude the following match
+- no prefix, or '+' or '--include' means: include the following match
+- For a comprehensive guide on rsync filters: rsync filter rules
+
+Examples (all filters branch off of DSXCONNECTOR_ASSET):
+
+| DSXCONNECTOR_FILTER                                     | Description                                                                                                                             |
+|---------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| ""                                                      | All files in tree and subtrees (no filter)                                                                                              |
+| "*"                                                     | Only top-level files (no recursion)                                                                                                     |
+| "sub1"                                                  | Files within subtree 'sub1' and recurse into its subtrees                                                                               |
+| "sub1/*"                                                | Files within subtree 'sub1', not including subtrees.                                                                                    |
+| "sub1/sub2"                                             | Files within subtree 'sub1/sub2', recurse into subtrees.                                                                                |
+| "*.zip,*.docx"                                          | All files with .zip and .docx extensions anywhere in the tree                                                                           |
+| "-tmp --exclude cache"                                  | Exclude noisy directories (tmp, cache) but include everything else                                                                      |
+| "sub1 -tmp --exclude sub2"                              | Combine includes and excludes - scan under 'sub1' subtree, but skip 'tmp' or 'sub2' subtrees                                           |
+| "test/2025*/*"                                          | All files in subtrees matching 'test/2025*/*'. Does not recurse.                                                                        |
+| "test/2025*/** -sub2"                                   | All files in subtrees matching 'test/2025*/*' and recursively down. Skips any subtree 'sub2'.                                          |
+| "'scan here' -'not here' --exclude 'not here either'"   | Quoted tokens (spaces in dir names)                                                                                                     |
         
 
         <connector specific configuration>

@@ -71,8 +71,8 @@ Leave `config.py` alone — it contains sane defaults. During development, overr
     - `DSXCONNECTOR_CONNECTOR_URL=https://azure-blob-storage-connector:8599`
     - `DSXCONNECTOR_DSX_CONNECT_URL=https://dsx-connect-api:8586`
     - `DSXCONNECTOR_VERIFY_TLS=false`
-    - `DSXCONNECTOR_ASSET=lg-test-01`
-    - `DSXCONNECTOR_FILTER=sub1`
+    - `DSXCONNECTOR_ASSET=container-name`
+    - `DSXCONNECTOR_FILTER=`
   - Or set `DSXCONNECTOR_ENV_FILE=/path/to/custom.env` to use a different file.
 
 - Environment variables (shell/Compose/CI)
@@ -107,3 +107,34 @@ Other invoke options:
 * build - (runs bump, clean, prepare) and builds a Docker image tagged as azure-blob-storage-connector:<version> from the prepared dist folder if it doesn’t already exist.
 * push - (runs build) tags the Docker image with the repository username (logangilbert/<name>:<version>) and pushes it to Docker Hub.
 * release - executes the full release cycle by running the following tasks in order: bump, clean, prepare, build, and push.
+
+## Filtering (DSXCONNECTOR_FILTER)
+
+The Azure Blob connector supports rsync-like include/exclude patterns to control which blobs are scanned. Leave empty ("") to scan all blobs under DSXCONNECTOR_ASSET (the container).
+
+General concepts:
+- a '?' matches any single character except a slash (/).
+- a '*' matches zero or more non-slash characters.
+- a '**' matches zero or more characters, including slashes.
+- '-' or '--exclude' means: exclude the following match
+- no prefix, or '+' or '--include' means: include the following match
+- For a comprehensive guide on rsync filters: rsync filter rules
+
+Examples (all filters branch off of DSXCONNECTOR_ASSET):
+
+| DSXCONNECTOR_FILTER                                     | Description                                                                                                                             |
+|---------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| ""                                                      | All files in tree and subtrees (no filter)                                                                                              |
+| "*"                                                     | Only top-level files (no recursion)                                                                                                     |
+| "sub1"                                                  | Files within subtree 'sub1' and recurse into its subtrees                                                                               |
+| "sub1/*"                                                | Files within subtree 'sub1', not including subtrees.                                                                                    |
+| "sub1/sub2"                                             | Files within subtree 'sub1/sub2', recurse into subtrees.                                                                                |
+| "*.zip,*.docx"                                          | All files with .zip and .docx extensions anywhere in the tree                                                                           |
+| "-tmp --exclude cache"                                  | Exclude noisy directories (tmp, cache) but include everything else                                                                      |
+| "sub1 -tmp --exclude sub2"                              | Combine includes and excludes - scan under 'sub1' subtree, but skip 'tmp' or 'sub2' subtrees                                           |
+| "test/2025*/*"                                          | All files in subtrees matching 'test/2025*/*'. Does not recurse.                                                                        |
+| "test/2025*/** -sub2"                                   | All files in subtrees matching 'test/2025*/*' and recursively down. Skips any subtree 'sub2'.                                          |
+| "'scan here' -'not here' --exclude 'not here either'"   | Quoted tokens (spaces in dir names)                                                                                                     |
+
+Implementation notes:
+- The connector uses provider-side prefix narrowing when safe, and always verifies with the same rsync-like rules for correctness.

@@ -8,6 +8,7 @@ from shared.models.status_responses import StatusResponse, StatusResponseEnum, I
 from connectors.azure_blob_storage.config import ConfigManager
 from connectors.azure_blob_storage.version import CONNECTOR_VERSION
 from shared.streaming import stream_blob
+from shared.file_ops import relpath_matches_filter
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
@@ -37,7 +38,7 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} configuration: {config}.")
     dsx_logging.info(f"{base.name} startup completed.")
 
-    base.meta_info = f"ABS container: {config.asset}, prefix: {config.filter}"
+    base.meta_info = f"ABS container: {config.asset}, filter: {config.filter or '(none)'}"
     return base
 
 
@@ -89,8 +90,12 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
-    for blob in abs_client.keys(config.asset, prefix=config.filter, recursive=config.recursive):
+    # Enumerate all keys in the container (optionally optimized later) and apply rsync-like filter
+    for blob in abs_client.keys(config.asset, filter_str=config.filter):
         key = blob['Key']
+        # Final guard to ensure exact parity with rsync rules
+        if config.filter and not relpath_matches_filter(key, config.filter):
+            continue
         full_path = f"{config.asset}/{key}"
         await connector.scan_file_request(ScanRequestModel(location=key, metainfo=full_path))
         dsx_logging.debug(f"Sent scan request for {full_path}")
@@ -226,12 +231,19 @@ async def webhook_handler(event: dict):
             or an error if processing fails.
     """
     dsx_logging.info("Processing webhook event")
-    # Example: Extract a file ID from the event and trigger a scan
+    # Prefer conventional location key when available; otherwise fall back to example behavior
+    location = event.get("location") or event.get("blob") or event.get("key")
+    if location:
+        key = str(location)
+        if relpath_matches_filter(key, config.filter):
+            await connector.scan_file_request(ScanRequestModel(location=key, metainfo=key))
+            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Webhook processed", description=f"Scan requested for {key}")
+        else:
+            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Webhook processed", description=f"Ignored by filter: {key}")
+
+    # Fallback: legacy example payload
     file_id = event.get("file_id", "unknown")
-    await connector.scan_file_request(ScanRequestModel(
-        location=f"custom://{file_id}",
-        metainfo=event
-    ))
+    await connector.scan_file_request(ScanRequestModel(location=f"custom://{file_id}", metainfo=event))
     return StatusResponse(
         status=StatusResponseEnum.SUCCESS,
         message="Webhook processed",

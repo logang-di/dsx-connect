@@ -90,3 +90,30 @@ Other invoke options:
 * push - (runs build) tags the Docker image with the repository username ({{ cookiecutter.docker_repo }}/<name>:<version>) and pushes it to Docker Hub.
 * release - executes the full release cycle by running the following tasks in order: bump, clean, prepare, build, and push.
 
+## Filtering (DSXCONNECTOR_FILTER)
+
+Use rsync-like include/exclude patterns to control which repository items are scanned. Leave empty ("") to scan all under DSXCONNECTOR_ASSET.
+
+General concepts:
+- a '?' matches any single character except a slash (/).
+- a '*' matches zero or more non-slash characters.
+- a '**' matches zero or more characters, including slashes.
+- '-' or '--exclude' means: exclude the following match
+- no prefix, or '+' or '--include' means: include the following match
+- For a comprehensive guide on rsync filters: rsync filter rules
+
+Examples (all filters branch off of DSXCONNECTOR_ASSET):
+
+| DSXCONNECTOR_FILTER                                     | Description                                                                                                                             |
+|---------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| ""                                                      | All files in tree and subtrees (no filter)                                                                                              |
+| "*"                                                     | Only top-level files (no recursion)                                                                                                     |
+| "sub1"                                                  | Files within subtree 'sub1' and recurse into its subtrees                                                                               |
+| "sub1/*"                                                | Files within subtree 'sub1', not including subtrees.                                                                                    |
+| "sub1/sub2"                                             | Files within subtree 'sub1/sub2', recurse into subtrees.                                                                                |
+| "*.zip,*.docx"                                          | All files with .zip and .docx extensions anywhere in the tree                                                                           |
+| "-tmp --exclude cache"                                  | Exclude noisy directories (tmp, cache) but include everything else                                                                      |
+| "sub1 -tmp --exclude sub2"                              | Combine includes and excludes - scan under 'sub1' subtree, but skip 'tmp' or 'sub2' subtrees                                           |
+| "test/2025*/*"                                          | All files in subtrees matching 'test/2025*/*'. Does not recurse.                                                                        |
+| "test/2025*/** -sub2"                                   | All files in subtrees matching 'test/2025*/*' and recursively down. Skips any subtree 'sub2'.                                          |
+| "'scan here' -'not here' --exclude 'not here either'"   | Quoted tokens (spaces in dir names)                                                                                                     |

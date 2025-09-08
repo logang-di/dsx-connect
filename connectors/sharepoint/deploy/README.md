@@ -87,7 +87,6 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
           # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector
         - DSXCONNECTOR_ASSET=lg-test-01 # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
         - DSXCONNECTOR_FILTER=  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
-        - DSXCONNECTOR_RECURSIVE=True
 
 
         <connector specific configuration>

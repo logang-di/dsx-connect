@@ -33,7 +33,6 @@ class SharepointConnectorConfig(BaseConnectorConfig):
     # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
     asset: str = ""
     filter: str = ""
-    recursive: bool = True  # deprecated
     # Concurrency for enqueueing scan requests during full scan
     scan_concurrency: int = Field(default=10, description="Max concurrent scan_file_request enqueues during full scan")
     # Internal: resolved base path within the drive (derived at startup from asset/filter/URL)

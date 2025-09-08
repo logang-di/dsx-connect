@@ -87,8 +87,28 @@ building a Docker image.  All the steps needed to prepare a new release for depl
   - Examples:
     - Library root: `https://<host>/sites/<SiteName>/Shared%20Documents`
     - Folder: `https://<host>/sites/<SiteName>/Shared%20Documents/dsx-connect/scantest`
-- `DSXCONNECTOR_FILTER` (optional): additional subpath appended inside the above asset.
-  - Example: `DSXCONNECTOR_FILTER=customerA/inbox`
+- `DSXCONNECTOR_FILTER` (optional, rsync-like): include/exclude patterns to control which files are scanned under the above asset.
+  - General concepts:
+    - a '?' matches any single character except a slash (/).
+    - a '*' matches zero or more non-slash characters.
+    - a '**' matches zero or more characters, including slashes.
+    - '-' or '--exclude' means: exclude the following match
+    - no prefix, or '+' or '--include' means: include the following match
+    - For a comprehensive guide on rsync filters: rsync filter rules
+  - Examples (all filters branch off of DSXCONNECTOR_ASSET):
+    | DSXCONNECTOR_FILTER                                   | Description                                                                                                                             |
+    |-------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+    | ""                                                    | All files in tree and subtrees (no filter)                                                                                              |
+    | "*"                                                   | Only top-level files (no recursion)                                                                                                     |
+    | "sub1"                                                | Files within subtree 'sub1' and recurse into its subtrees                                                                               |
+    | "sub1/*"                                              | Files within subtree 'sub1', not including subtrees.                                                                                    |
+    | "sub1/sub2"                                           | Files within subtree 'sub1/sub2', recurse into subtrees.                                                                                |
+    | "*.zip,*.docx"                                        | All files with .zip and .docx extensions anywhere in the tree                                                                           |
+    | "-tmp --exclude cache"                                | Exclude noisy directories (tmp, cache) but include everything else                                                                      |
+    | "sub1 -tmp --exclude sub2"                            | Combine includes and excludes - scan under 'sub1' subtree, but skip 'tmp' or 'sub2' subtrees                                           |
+    | "test/2025*/*"                                        | All files in subtrees matching 'test/2025*/*'. Does not recurse.                                                                        |
+    | "test/2025*/** -sub2"                                 | All files in subtrees matching 'test/2025*/*' and recursively down. Skips any subtree 'sub2'.                                          |
+    | "'scan here' -'not here' --exclude 'not here either'" | Quoted tokens (spaces in dir names)                                                                                                     |
 
 Behavior
 - On startup, the connector parses `DSXCONNECTOR_ASSET` once and derives:
@@ -113,7 +133,7 @@ Notes
 
 This connector implements handlers via `DSXConnector`:
 
-- `full_scan`: Enumerates files in the configured SharePoint drive (recursive when `recursive=True`), enqueuing scan requests (location=item-id).
+- `full_scan`: Enumerates files in the configured SharePoint drive and applies DSXCONNECTOR_FILTER before enqueuing scan requests (location=item-id).
 - `read_file`: Streams file content via Microsoft Graph `/drives/{drive}/items/{id}/content`.
 - `item_action`: Supports `DELETE` (removes item by id). Other actions return NOT_IMPLEMENTED.
 - `repo_check`: Validates connectivity by resolving site/drive and listing root.
