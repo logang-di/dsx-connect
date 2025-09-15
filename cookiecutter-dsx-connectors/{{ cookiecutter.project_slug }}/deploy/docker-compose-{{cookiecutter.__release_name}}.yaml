@@ -4,7 +4,7 @@ services:
     # Uncomment if you want to use docker compose to build the image
     #build:
     #  context: .
-    #  dockerfile: Dockerfile
+    #  dockerfile: docker/Dockerfile
 
     # ports: # uncomment this if you need to expose this service on an external port
     #  - "{{ cookiecutter.connector_port }}:{{ cookiecutter.connector_port }}"

@@ -1,6 +1,8 @@
 # dsx_connect/taskworkers/workers/scan_result.py
 from __future__ import annotations
 from typing import Any, Dict
+import time
+import redis as _redis
 from celery import signals
 from functools import cached_property
 
@@ -87,6 +89,7 @@ class ScanResultWorker(BaseWorker):
             verdict=verdict,
             item_action=item_action_status,
             scan_request_task_id=scan_request_task_id,   # ← add this
+            scan_job_id=getattr(scan_request, "scan_job_id", None),
             # status=ScanResultStatusEnum.SUCCESS,  # only if this member exists; else omit
         )
 
@@ -94,6 +97,75 @@ class ScanResultWorker(BaseWorker):
         _send_syslog(scan_result, original_task_id=scan_request_task_id, current_task_id=self.context.task_id)
 
         # 4) optional extras (best-effort; never raise to retry)
+        # 4a) Update job counters in Redis (best-effort)
+        try:
+            from dsx_connect.config import get_config
+            cfg = get_config()
+            job_id = getattr(scan_result, "scan_job_id", None) or getattr(getattr(scan_result, "scan_request", None), "scan_job_id", None)
+            if job_id:
+                key = f"dsxconnect:job:{job_id}"
+                r = getattr(self.__class__, "_redis", None)
+                if r is None:
+                    self.__class__._redis = _redis.from_url(str(cfg.redis_url), decode_responses=True)
+                    r = self.__class__._redis
+                now = str(int(time.time()))
+                r.hsetnx(key, "job_id", job_id)
+                r.hsetnx(key, "status", "running")
+                r.hincrby(key, "processed_count", 1)
+                # verdict breakdown
+                try:
+                    v = getattr(getattr(scan_result, "verdict", None), "verdict", None)
+                    v_key = None
+                    if v is not None:
+                        # v may be Enum-like with .value
+                        vv = getattr(v, "value", v)
+                        if isinstance(vv, str):
+                            t = vv.lower().replace(" ", "_")
+                            if t in {"benign","malicious","unknown","unsupported","not_scanned","encrypted"}:
+                                v_key = t
+                    if v_key:
+                        r.hincrby(key, f"verdict_{v_key}", 1)
+                except Exception:
+                    pass
+                r.hset(key, "last_update", now)
+                r.expire(key, 7 * 24 * 3600)
+        except Exception:
+            pass
+
+        # 4b) If we can determine total and counts match, mark finished
+        try:
+            job_id = getattr(scan_result, "scan_job_id", None) or getattr(getattr(scan_result, "scan_request", None), "scan_job_id", None)
+            if job_id:
+                r = getattr(self.__class__, "_redis", None)
+                if r is not None:
+                    data = r.hgetall(f"dsxconnect:job:{job_id}") or {}
+                    try:
+                        enq_total = int(data.get("enqueued_total", -1)) if data.get("enqueued_total") is not None else -1
+                        expected = int(data.get("expected_total", -1)) if data.get("expected_total") is not None else -1
+                        total = enq_total if enq_total > 0 else (expected if expected > 0 else -1)
+                        processed = int(data.get("processed_count", 0))
+                        if total > 0 and processed >= total and not data.get("finished_at"):
+                            now = str(int(time.time()))
+                            r.hset(f"dsxconnect:job:{job_id}", mapping={"status": "completed", "finished_at": now, "last_update": now})
+                            try:
+                                dsx_logging.info(f"job.complete job={job_id} processed={processed} total={total} finished_at={now}")
+                            except Exception:
+                                pass
+                        elif data.get("enqueue_done") == "1":
+                            # Older behavior: if enqueue_done is set and processed matches enqueued_total, mark done
+                            if enq_total > 0 and processed >= enq_total and not data.get("finished_at"):
+                                now = str(int(time.time()))
+                                r.hset(f"dsxconnect:job:{job_id}", mapping={"status": "completed", "finished_at": now, "last_update": now})
+                                try:
+                                    dsx_logging.info(f"job.complete job={job_id} processed={processed} enqueued_total={enq_total} finished_at={now}")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        # 4c) Store to DB / stats / notifications
         self._best_effort_extras(scan_result)
 
         dsx_logging.info(f"[scan_result:{self.context.task_id}] completed for {scan_request.location}")

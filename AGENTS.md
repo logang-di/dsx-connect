@@ -1,89 +1,77 @@
-# Codex Project Guide — DSX-connect
+# Repository Guidelines
 
-## What this repo is
-Python 3.12 FastAPI + Celery workers + Redis + Connectors. Services: `dsx-connect-api`, Celery task workers (`scan`, `verdict`, `results`), DSXA scanner (external), and connector microservices (`aws_s3`, `azure_blob_storage`, `google_cloud_storage`, `filesystem`, `sharepoint`).
+## Project Structure & Modules
+- `dsx_connect/`: Core FastAPI app, Celery workers, config, and release tasks.
+- `connectors/<name>/`: Connector services (e.g., `aws_s3`, `filesystem`) with their own `CONNECTOR_VERSION` and deploy assets.
+- `shared/`: Common utilities used by core and connectors.
+- `scripts/`: Stack orchestration helpers (`stack-up.sh`, `stack-down.sh`, `stack-status.sh`).
+- `tests/`: Pytest suite; collects `test_*.py` and skips vendor/`dist`.
+- `dist/`: Bundled Docker Compose exports and release artifacts.
 
-## How to run (local, dev)
-- Python env: `.venv/bin/activate && pip install -U pip && pip install -e ".[dev]"`.
-- Compose (if present): `docker compose -f docker-compose-dsx-connect-all-services.yaml up -d`.
-- Compose (if present): `docker compose -f docker-compose-<<connector name>>-connector.yaml up -d`.
-- Or run services directly:
-    - API: `uvicorn dsx_connect.app:app --reload --port 8000`.
-    - Workers: `celery -A dsx_connect.taskworkers.app worker -Q scan,verdict,results -l INFO`.
-- Quick health: `curl http://localhost:8000/dsx-connect/api/v1/test/dsxa-connection` and `redis-cli ping`.
+## Build, Test, Run
+- Python 3.12. Create a venv and install: `python -m venv .venv && source .venv/bin/activate && pip install -r dsx_connect/requirements.txt`.
+- Lint: `ruff check .` (target `py312` via `ruff.toml`).
+- Test: `pytest -q` (configured by `pytest.ini`).
+- Run API (dev): `uvicorn dsx_connect.app.dsx_connect_api:app --host 0.0.0.0 --port 8586`.
+- Run workers (dev): `celery -A dsx_connect.taskworkers.celery_app worker -l INFO`.
+- Bundles and releases (Invoke at repo root): `inv bundle`, `inv bundle-usetls`, `inv release-core`, `inv release-connectors --only=aws_s3,filesystem`, `inv release-all`, `inv helm-release`.
+- Local stack from a bundle: `make up|down|status` (uses `scripts/stack-*.sh`; auto-detects latest `dist/dsx-connect-*`). Connector compose files follow `docker-compose-<connector>-connector.yaml` inside bundle subfolders.
 
-## Stack scripts (bundle orchestration)
+## Coding Style & Naming
+- 4-space indent, f-strings, add type hints where practical.
+- Names: `snake_case` (functions/modules), `PascalCase` (classes), `UPPER_CASE` (constants).
+- Versions: core `DSX_CONNECT_VERSION` in `dsx_connect/version.py`; connector `CONNECTOR_VERSION` in `connectors/<name>/version.py`.
 
-After running a full release that generates a bundled export under `dist/dsx-connect-<version>`, you can bring up/down the entire stack (DSXA, dsx-connect API + workers, and all connectors) and check status using helper scripts:
+## Testing Guidelines
+- Framework: Pytest; files `test_*.py`. Exclusions for vendor, `dist`, venvs are set in `pytest.ini`.
+- Add focused tests for new modules and bug fixes; keep tests fast.
 
-- Bring up everything:
-  - `scripts/stack-up.sh` (auto-detects latest `dist/dsx-connect-*`)
-  - or `scripts/stack-up.sh dist/dsx-connect-0.1.48`
-  - filter connectors at runtime:
-    - `scripts/stack-up.sh dist/dsx-connect-0.1.48 --only=filesystem,aws-s3`
-    - `scripts/stack-up.sh dist/dsx-connect-0.1.48 --skip=sharepoint`
-    - or with env vars: `CONNECTORS_ONLY=filesystem,aws-s3 scripts/stack-up.sh <bundle>`
+## Commit & Pull Requests
+- Commits: Imperative subject, optional scope (e.g., `core:`, `connector:aws_s3`).
+- PRs: Clear description, linked issues, repro steps, and any screenshots/logs. Ensure `ruff` and `pytest` pass.
 
-- Bring down everything:
-  - `scripts/stack-down.sh`
-  - or `scripts/stack-down.sh dist/dsx-connect-0.1.48`
-  - supports the same `--only/--skip` filters and `CONNECTORS_ONLY/CONNECTORS_SKIP` env vars
+## Security & Configuration
+- Do not commit secrets. Use env files (e.g., `dsx_connect/.dev.env`) or compose/Helm values.
+- TLS: Prefer `inv bundle-usetls` for local HTTPS; status script supports `DSXCONNECT_USE_TLS` and CA bundles.
+- Production TLS: terminate at the load balancer; use `inv bundle-usetls` only for local self-signed development.
 
-- Check status (TLS-aware):
-  - `scripts/stack-status.sh`
+## Next Steps
+- Improve “full scan” UX: estimate counts up front, persist job progress, and support pause/cancel via Celery revoke + job state checks.
 
-Make targets (shortcuts)
-- `make up`           → runs `scripts/stack-up.sh` (optional `BUNDLE=dist/dsx-connect-<ver>`) 
--    - filters: `CONNECTORS_ONLY=a,b make up BUNDLE=...` or `make up BUNDLE=... --only=a,b`
-- `make down`         → runs `scripts/stack-down.sh` (optional `BUNDLE=...`)
--    - filters: `CONNECTORS_SKIP=sharepoint make down BUNDLE=...` or `make down BUNDLE=... --skip=sharepoint`
-- `make status`       → runs `scripts/stack-status.sh`
+## Current Status (UI + Workers)
+- Event-driven progress: The UI no longer polls for job summaries. Progress and completion come from the scan-results SSE stream only.
+- Buttons lifecycle: Cards flip to Pause/Cancel when a job starts, and revert to Full Scan on completion/cancel. A counts-based fallback flips immediately when processed >= total even before a final status frame.
+- Final summary: On completion, the note shows “Scan complete: <processed> / <duration>”.
+- Job id UX: Each running card shows a small job id pill next to the buttons with a copy-to-clipboard button. The pill survives button re-renders and hides on completion.
+- Rehydrate on refresh: On load, the UI verifies any “active” jobs once via GET `/dsx-connect/api/v1/scan/jobs/{job_id}`. Completed/stale jobs are cleared so buttons return to Full Scan. No background polling is used.
+- Version badge: The header shows `vX.Y.Z` (hidden in dev/unknown). `/meta` endpoint added; UI falls back to `/version` if `/meta` is unavailable.
 
-Environment toggles for TLS used by status (and compatible with curl)
-- `DSXCONNECT_USE_TLS`: set `true` to probe dsx-connect via `https` (default `false`).
-- `DSXCONNECT_CA_BUNDLE`: path to a CA cert to verify dsx-connect (e.g., `shared/deploy/certs/dev.localhost.crt`). If not set and TLS is on, the script defaults to `-k` unless `CURL_INSECURE=false`.
-- `CONNECTOR_USE_TLS`: set `true` to probe connectors via `https` (defaults to `DSXCONNECT_USE_TLS`).
-- `CONNECTOR_CA_BUNDLE`: path to a CA cert to verify connectors.
-- `CURL_INSECURE`: when `true` (default under TLS), uses `-k` to allow self-signed; set `false` to require a CA bundle.
-- Optional host/port overrides: `API_HOST` (default `localhost`), `API_PORT` (default `8586`), `CONN_HOST` (default `localhost`).
+### Completion and totals (2025-09-12)
+- SSE payload now carries `enqueued_total`, `enqueued_count`, and `enqueue_done` in the `job` summary.
+- Server sets `status=completed` in the SSE event when any reliable total is known and `processed_count >= total`.
+- UI displays total as `total` (expected_total), else `enqueued_total`, else `enqueued_count`, and flips to Full Scan when processed reaches that value.
+- Connectors POST `/scan/jobs/{job_id}/enqueue_done` with `enqueued_total` at the end of enqueue, enabling accurate completion without polling.
 
-Examples
-- Probe everything with self-signed certs, skipping verification:
-  - `DSXCONNECT_USE_TLS=true CONNECTOR_USE_TLS=true scripts/stack-status.sh`
-- Probe with verification:
-  - `CURL_INSECURE=false DSXCONNECT_USE_TLS=true DSXCONNECT_CA_BUNDLE=shared/deploy/certs/dev.localhost.crt \
-     CONNECTOR_USE_TLS=true CONNECTOR_CA_BUNDLE=shared/deploy/certs/dev.localhost.crt \
-     scripts/stack-status.sh`
+## Backend updates required
+- Connectors: On full-scan completion of enqueue, connectors now POST `/dsx-connect/api/v1/scan/jobs/{job_id}/enqueue_done` with `{ enqueued_total }` to enable accurate completion.
+- Workers: The scan-result worker marks a job `completed` when `processed_count >= (enqueued_total or expected_total)` and stamps `finished_at` (no polling assumptions). Restart Celery workers after pulling these changes.
 
-## Env & secrets (never hardcode)
-`APP_ENV` (dev|stag|prod); `REDIS_URL` (e.g., redis://localhost:6379/0); `DSXA_SCANNER_URL` (e.g., http://0.0.0.0:8080/scan/binary/v2); `DSX_API_KEY`; optional TLS toggles `USE_TLS=true|false`. If not set, ask for them; prefer `.env` and compose/Helm values.
+### Observability / debugging
+- Notify worker logs: `notify.scan_result job=<id> status=<s> processed=<n> total=<n|None> duration=<sec>`
+- Completion logs: `job.complete job=<id> processed=<n> total=<n> finished_at=<ts>`
+- Connector logs enqueue done: `enqueue_done posted job=<id> enqueued_total=<n> status=<code>`
+- API can log SSE frames with `DSX_LOG_SSE_EVENTS=1`.
+- Raw job state: `GET /dsx-connect/api/v1/scan/jobs/{job_id}/raw` returns the Redis hash and TTL.
 
-## Tests & quality gates
-- Unit: `pytest -q`.
-- Lint/type: `ruff check . && ruff format --check . || true` and `mypy` if config exists.
-- Minimal e2e smoke: start Redis + API, then post a small sample to the scan endpoint and assert 200.
+## Manual steps to validate
+- Restart services:
+  - API: `uvicorn dsx_connect.app.dsx_connect_api:app --host 0.0.0.0 --port 8586`
+  - Workers: `celery -A dsx_connect.taskworkers.celery_app worker -l INFO`
+  - Connectors (to enable `enqueue_done` signaling)
+- Hard refresh the UI.
+- Trigger Full Scan and observe: Pause/Cancel appears, progress updates via events, and buttons revert to Full Scan with a final summary on completion.
 
-## Build & ship
-- Uses invoke to prepare scripts and build images (see `tasks.py`).
-- If Dockerfile exists, use `docker build -t dsx-connect:latest .` and `docker push dsx-connect:latest`.
-- If Helm charts exist under `charts/`, use `helm lint charts/dsx-connect && helm template ...` (prefer dry-runs).
-
-TLS bundles
-- Plain HTTP bundle: `inv bundle`
-- TLS-enabled bundle: `inv bundle-tls` (alias) or `inv bundle-usetls`
-  - Switches connector/API URLs to https and enables TLS env vars in compose files
-
-## Guardrails for Codex (important)
-- Don’t rename Celery queues, pub/sub channels, or API routes without updating all producers/consumers.
-- DB migrations: use **migrate-forward** and keep responses backward-compatible; never drop/rename fields in one step.
-- For risky changes, add a feature flag; keep deploy ≠ release (flags default OFF).
-- Always show diffs and ask before writing; run tests before proposing commits.
-
-## Project style
-- Python: prefer Ruff + Black defaults; docstrings for public functions; Conventional Commits (`feat:`, `fix:`, etc.).
-- PR checklist Codex should follow: tests added/updated, docs touched if behavior changed, changelog entry created.
-
-## High-leverage tasks Codex can do here
-- “Write unit tests for `shared.file_ops` and fix flaky behavior.”
-- “Add SSE broadcast to `/subscribe/connector-registered` with reconnection logic.”
-- “Create Helm values for enabling TLS (ingress + service) behind a toggle and validate with `helm lint`.”
+## Known/observed
+- If a reverse proxy strips `X-Job-Id`, the UI extracts `job_id` from the response description as a fallback.
+- If a connector is down (`readyz` 502), the card may not refresh immediately. Once the connector is reachable and scan events flow, the card reconciles state.
+- Pause/Resume: Endpoints are wired, but pause UX/state reconciliation remains WIP and will be revisited.

@@ -15,6 +15,8 @@ class StatusResponse(BaseModel):
     message: str
     description: str | None = None
     id: str | None = None
+    # Optional list of sample items (e.g., preview of files)
+    preview: list[str] | None = None
 
 
 class ItemActionStatusResponse(StatusResponse):

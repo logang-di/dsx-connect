@@ -89,6 +89,14 @@ class DSXConnectConfig(BaseSettings):
     scanner: ScannerConfig = ScannerConfig()
     workers: CeleryTaskConfig = CeleryTaskConfig()
 
+    # Feature flags
+    class FeatureFlags(BaseSettings):
+        model_config = SettingsConfigDict(env_nested_delimiter="__")
+        enable_estimate_preflight: bool = False
+        enable_approximate_estimates: bool = False
+
+    features: FeatureFlags = FeatureFlags()
+
     # App datastore / pubsub (not Celery)
     redis_url: AnyUrl = "redis://localhost:6379/3"
     syslog: SyslogConfig = SyslogConfig()
@@ -131,4 +139,3 @@ def app_env() -> str:
 
 # helper to grab the runtime environment
 APP_ENV: Final = app_env()
-

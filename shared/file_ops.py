@@ -657,9 +657,16 @@ def compute_prefix_hints(filter_str: str) -> List[str]:
             hints.append(inc[:-2].rstrip("/") + "/")
         elif inc.endswith("/**") and not _has_glob(inc[:-3]):
             hints.append(inc[:-3].rstrip("/") + "/")
+        elif inc.endswith("/**/*") and not _has_glob(inc[:-4]):
+            # Expanded rsync form; we've already covered the base subtree via the '/*' include
+            # or we can still add the same hint safely.
+            base = inc[:-4].rstrip("/")
+            if base and base + "/" not in hints:
+                hints.append(base + "/")
         elif not _has_glob(inc):
             hints.append(inc.rstrip("/") + "/")
         else:
+            # Any other glob/path complexity → skip hints entirely to avoid under-fetching
             return []
     # Deduplicate while preserving order
     seen = set()

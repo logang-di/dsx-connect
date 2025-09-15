@@ -22,4 +22,4 @@ RUN mkdir -p data && chown appuser:appuser data
 
 USER appuser
 
-# Command is set in docker-compose-sharepoint-connector.yaml
+# Command is set via compose or Helm

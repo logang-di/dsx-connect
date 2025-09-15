@@ -2,7 +2,7 @@
 from __future__ import annotations
 import base64, hashlib, hmac, os, time
 from fastapi import Request, HTTPException
-from dsx_connect.config import AuthConfig
+from dsx_connect.config import AuthConfig, APP_ENV
 
 _settings = AuthConfig()
 _HEADER = "Authorization"
@@ -25,6 +25,9 @@ async def verify_hmac_request(request: Request, secret_lookup) -> str:
     Verify DSX-HMAC header using provided secret_lookup(key_id)->secret.
     Returns the key_id on success; raises 401 on failure.
     """
+    # In dev mode, skip HMAC enforcement entirely
+    if APP_ENV == "dev":
+        return "dev"
     auth = request.headers.get(_HEADER)
     if not auth or not auth.startswith("DSX-HMAC "):
         raise HTTPException(status_code=401, detail="Missing HMAC header")

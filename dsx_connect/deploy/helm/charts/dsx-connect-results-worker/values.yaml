@@ -2,7 +2,7 @@ enabled: true
 
 image:
   repository: dsxconnect/dsx-connect
-  tag: "__VERSION__"
+  tag: ""
   pullPolicy: IfNotPresent
 
 env:

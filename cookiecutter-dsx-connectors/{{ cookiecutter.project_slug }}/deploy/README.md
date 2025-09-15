@@ -85,6 +85,8 @@ specifying DSXCONNECTOR_<NAME_OF_SETTING>=<value> (note all CAPS)
         - LOG_LEVEL=debug
         - DSXCONNECTOR_CONNECTOR_URL=http://{{ cookiecutter.__release_name }}:{{ cookiecutter.connector_port }} # this should match the aliases below
         - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_api...
+        - DSXCONNECTOR_DISPLAY_NAME={{ cookiecutter.project_name }} # optional, friendly name shown on the dsx-connect UI card
+        - DSXCONNECTOR_DISPLAY_ICON= # optional; data URI (preferred), raw <svg...>, or emoji (e.g., "🗂️")
         - DSXCONNECTOR_ITEM_ACTION=nothing # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)
         - DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO=dsxconnect-quarantine # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
           # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector

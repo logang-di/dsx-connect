@@ -1,26 +1,49 @@
 replicaCount: 1
 
 image:
-    repository: your-repo/google-cloud-storage-connector
-    tag: latest
-    pullPolicy: IfNotPresent
+  repository: dsxconnect/google-cloud-storage-connector
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart AppVersion.
+  tag: ""
+  # Note: When installing this chart from an OCI registry with --version=X.Y.Z,
+  # the default image tag will be that chart's appVersion.
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
 
 service:
-    type: ClusterIP
-    port: 8595
+  type: ClusterIP
+  port: 80
+
+tls:
+  enabled: false
+  port: 443
+  secretName: ""
+  mountPath: "/app/certs"
+
+gcp:
+  # Optional: mount a GCP service account JSON Secret and set GOOGLE_APPLICATION_CREDENTIALS
+  credentialsSecretName: ""
+  mountPath: "/app/creds"
+  filename: "service-account.json"
 
 env:
-    - name: PYTHONUNBUFFERED
-      value: "1"
-    - name: LOG_LEVEL
-      value: "debug"
-    - name: DSXCONNECTOR_CONNECTOR_URL
-      value: "http://google-cloud-storage-connector:8595"
-    - name: DSXCONNECTOR_DSX_CONNECT_URL
-      value: "http://dsx-connect-api:8586"
-    - name: DSXCONNECTOR_LOCATION
-      value: "/app/scan_folder"
-    - name: DSXCONNECTOR_ITEM_ACTION
-      value: "nothing"
+  LOG_LEVEL: "debug"
+  # Optional friendly display name shown in the dsx-connect UI card
+  # DSXCONNECTOR_DISPLAY_NAME: "Google Cloud Storage Connector"
+  DSXCONNECTOR_TLS_CERTFILE: "/app/certs/tls.crt"
+  DSXCONNECTOR_TLS_KEYFILE: "/app/certs/tls.key"
+  # DSXCONNECTOR_VERIFY_TLS: "true"
+  # DSXCONNECTOR_CA_BUNDLE: "/app/certs/ca.pem"
+  # DSXCONNECTOR_DSX_CONNECT_URL: "https://my-dsx-connect.example.com"
+  DSXCONNECTOR_ITEM_ACTION: "nothing"
+  DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "dsxconnect-quarantine"
+  DSXCONNECTOR_ASSET: ""          # bucket name
+  DSXCONNECTOR_FILTER: ""
 
-command: ["python", "connectors/google_cloud_storage/google_cloud_storage_connector.py"]
+command:
+  - "python"
+  - "connectors/google_cloud_storage/start.py"
+  - "--workers"
+  - "1"

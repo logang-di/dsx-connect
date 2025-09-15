@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from dsx_connect.models.scan_result import ScanResultModel
 
@@ -42,3 +43,18 @@ class ScanResultsBaseDB(ABC):
         """Check if the retain limit is exceeded and delete the oldest record if necessary."""
         if self._retain > 0 and len(self) > self._retain:
             self.delete_oldest()
+
+    # -------- Optional helpers (with sensible fallbacks) --------------------
+    def recent(self, limit: int = 200, job_id: Optional[str] = None) -> list[ScanResultModel]:
+        """Return up to `limit` most recent results, optionally filtered by job.
+
+        Default fallback reads all and slices; concrete DBs should override for efficiency.
+        """
+        items = self.read_all()
+        if job_id:
+            items = [r for r in items if getattr(r, "scan_job_id", None) == job_id or (
+                getattr(r, "scan_request", None) and getattr(getattr(r, "scan_request"), "scan_job_id", None) == job_id
+            )]
+        # Assume monotonically increasing ID reflects insertion order
+        items.sort(key=lambda r: getattr(r, "id", -1), reverse=True)
+        return items[: max(1, int(limit))]

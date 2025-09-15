@@ -23,7 +23,7 @@ spec:
       {{- end }}
       containers:
         - name: dsx-connect-api
-          image: "{{ default .Values.image.repository $.Values.global.image.repository }}:{{ default .Values.image.tag $.Values.global.image.tag }}"
+          image: "{{ default .Values.image.repository $.Values.global.image.repository }}:{{ coalesce .Values.image.tag $.Values.global.image.tag .Chart.AppVersion }}"
           imagePullPolicy: {{ default .Values.image.pullPolicy $.Values.global.image.pullPolicy }}
           command: ["uvicorn"]
           args: [

@@ -3,7 +3,11 @@ from contextlib import contextmanager, asynccontextmanager
 import json, threading, asyncio
 from typing import Optional, Mapping, Any, Literal, Tuple, Union
 
-import httpx
+# Allow tests to monkeypatch `httpx` and survive reloads
+try:  # pragma: no cover - conditional import to support monkeypatch+reload in tests
+    httpx  # type: ignore[name-defined]
+except NameError:  # pragma: no cover
+    import httpx
 
 from dsx_connect.config import APP_ENV, get_auth_config   # <- use DSX app env, not AuthConfig.app_env
 from dsx_connect.security.hmac import make_hmac_header
@@ -12,8 +16,8 @@ from shared.routes import service_url
 HttpMethod = Literal["GET","POST","PUT","PATCH","DELETE"]
 
 # Pools
-_sync_pool: dict[str, httpx.Client] = {}
-_async_pool: dict[str, httpx.AsyncClient] = {}
+_sync_pool: dict[str, Any] = {}
+_async_pool: dict[str, Any] = {}
 _sync_lock = threading.Lock()
 _async_lock = asyncio.Lock()
 
@@ -64,24 +68,34 @@ async def get_async_connector_client(conn):
     class AClient:
         async def request(self, method: HttpMethod, path: str,
                           json_body: Optional[Mapping[str, Any]] = None,
-                          headers: Optional[dict[str, str]] = None) -> httpx.Response:
-            full_url = service_url(url, path)
+                          headers: Optional[dict[str, str]] = None,
+                          params: Optional[Mapping[str, Any]] = None) -> Any:
+            base_url = service_url(url, path)
+            # Build query string if provided for signing and request
+            if params:
+                from urllib.parse import urlencode
+                qs = urlencode(params, doseq=True)
+                full_url = f"{base_url}?{qs}"
+            else:
+                full_url = base_url
             body = b"" if json_body is None else json.dumps(json_body, separators=(",", ":")).encode()
             hdrs = _signed_headers(full_url, method, body, key_id, secret, DEV)
-            if headers: hdrs.update(headers)
+            if headers:
+                hdrs.update(headers)
+            # Since full_url already contains params (if any), do not also pass params to httpx
             return await http.request(method, full_url, content=(body or None), headers=hdrs)
 
-        async def get(self, path, headers=None):
-            return await self.request("GET", path, None, headers)
+        async def get(self, path, headers=None, params: Optional[Mapping[str, Any]] = None):
+            return await self.request("GET", path, None, headers, params)
 
-        async def post(self, path, json_body=None, headers=None):
-            return await self.request("POST", path, json_body, headers)
+        async def post(self, path, json_body=None, headers=None, params: Optional[Mapping[str, Any]] = None):
+            return await self.request("POST", path, json_body, headers, params)
 
-        async def put(self, path, json_body=None, headers=None):
-            return await self.request("PUT", path, json_body, headers)
+        async def put(self, path, json_body=None, headers=None, params: Optional[Mapping[str, Any]] = None):
+            return await self.request("PUT", path, json_body, headers, params)
 
-        async def delete(self, path, headers=None):
-            return await self.request("DELETE", path, None, headers)
+        async def delete(self, path, headers=None, params: Optional[Mapping[str, Any]] = None):
+            return await self.request("DELETE", path, None, headers, params)
 
         async def get_json(self, path):
             """Get JSON response. Raises httpx exceptions transparently."""
@@ -110,17 +124,29 @@ def get_connector_client(conn):
     class SClient:
         def request(self, method: HttpMethod, path: str,
                     json_body: Optional[Mapping[str, Any]] = None,
-                    headers: Optional[dict[str, str]] = None) -> httpx.Response:
-            full_url = service_url(url, path)
+                    headers: Optional[dict[str, str]] = None,
+                    params: Optional[Mapping[str, Any]] = None) -> Any:
+            base_url = service_url(url, path)
+            if params:
+                from urllib.parse import urlencode
+                qs = urlencode(params, doseq=True)
+                full_url = f"{base_url}?{qs}"
+            else:
+                full_url = base_url
             body = b"" if json_body is None else json.dumps(json_body, separators=(",", ":")).encode()
             hdrs = _signed_headers(full_url, method, body, key_id, secret, DEV)
-            if headers: hdrs.update(headers)
+            if headers:
+                hdrs.update(headers)
             return http.request(method, full_url, content=(body or None), headers=hdrs)
 
-        def get(self, path, headers=None):                 return self.request("GET", path, None, headers)
-        def post(self, path, json_body=None, headers=None): return self.request("POST", path, json_body, headers)
-        def put(self, path, json_body=None, headers=None):  return self.request("PUT", path, json_body, headers)
-        def delete(self, path, headers=None):               return self.request("DELETE", path, None, headers)
+        def get(self, path, headers=None, params: Optional[Mapping[str, Any]] = None):
+            return self.request("GET", path, None, headers, params)
+        def post(self, path, json_body=None, headers=None, params: Optional[Mapping[str, Any]] = None):
+            return self.request("POST", path, json_body, headers, params)
+        def put(self, path, json_body=None, headers=None, params: Optional[Mapping[str, Any]] = None):
+            return self.request("PUT", path, json_body, headers, params)
+        def delete(self, path, headers=None, params: Optional[Mapping[str, Any]] = None):
+            return self.request("DELETE", path, None, headers, params)
 
         def get_json(self, path):            r = self.get(path); r.raise_for_status(); return r.json()
         def post_json(self, path, json_body=None): r = self.post(path, json_body); r.raise_for_status(); return r.json()

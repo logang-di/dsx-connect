@@ -1,0 +1,57 @@
+x-common-paths: &common-paths
+  #SCAN_FOLDER_PATH: &scan-folder "/path/to/local/folder"
+  SCAN_FOLDER_PATH: &scan-folder "/Users/logangilbert/OneDrive - Deepinstinct"
+  QUARANTINE_FOLDER_PATH: &quarantine-folder "/path/to/local/folder/dsxconnect-quarantine"
+
+services:
+  filesystem_connector:
+    image: dsxconnect/filesystem-connector:__VERSION__
+    # Uncomment if you want to use docker compose to build the image
+    #build:
+    #  context: .
+    #  dockerfile: docker/Dockerfile
+    ports:
+      - "8590:8590"
+    volumes:
+      - type: bind
+        source: *scan-folder # modify to the directory to be scanned and monitored
+        target: /app/scan_folder
+      - type: bind
+        source: *quarantine-folder # modify to the directory where files will be moved
+        target: /app/quarantine
+    environment:
+      PYTHONUNBUFFERED: 1
+      LOG_LEVEL: debug
+      # TLS for connector server
+      # DSXCONNECTOR_USE_TLS: "false"
+      # DSXCONNECTOR_TLS_CERTFILE: "/app/certs/server.crt"
+      # DSXCONNECTOR_TLS_KEYFILE: "/app/certs/server.key"
+      # Outbound TLS verification to dsx-connect
+      # DSXCONNECTOR_VERIFY_TLS: "true"
+      # DSXCONNECTOR_CA_BUNDLE: "/app/certs/ca.pem"
+      DSXCONNECTOR_CONNECTOR_URL: "http://filesystem-connector:8590" # see aliases below
+      DSXCONNECTOR_DSX_CONNECT_URL: "http://dsx-connect-api:8586" # note, this works if running on the same internal network on Docker as the dsx_connect_core...
+      DSXCONNECTOR_ASSET: "/app/scan_folder"
+      DSXCONNECTOR_FILTER: "dps -demovideo"
+      DSXCONNECTOR_ITEM_ACTION: "nothing" # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)
+      DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "/app/quarantine" # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
+        # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector. this directory should have been created in the Dockerfile
+      DSXCONNECTOR_SCAN_BY_PATH: "False"
+
+      DSXCONNECTOR_ASSET_DISPLAY_NAME: *scan-folder
+      # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
+      # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
+      DSXCONNECT_BOOTSTRAP_API_KEY: ""
+    networks:
+      dsx-network:
+        aliases:
+          - filesystem-connector  # this is how dsx-connect will communicate with this on the network
+    command:
+      [ "python", "connectors/filesystem/start.py", "--workers", "1" ]
+
+# The following assumes an already created docker network like this:
+# docker network create dsx-connect-network --driver bridge
+networks:
+  dsx-network:
+    external: true
+    name: dsx-connect-network  # change this to an existing docker network

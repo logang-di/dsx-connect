@@ -16,6 +16,7 @@ class ScanResultStatusEnum(str, Enum):
 class ScanResultModel(BaseModel):
     id: int = -1
     scan_request_task_id: str
+    scan_job_id: str | None = None
     metadata_tag: str | None = None
     scan_request: ScanRequestModel | None = None
     verdict: DPAVerdictModel2 | None = None

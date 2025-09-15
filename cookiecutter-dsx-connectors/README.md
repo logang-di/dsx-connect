@@ -31,6 +31,12 @@ Note that project_name now defaults to "GCP Buckets Connector" and project_slug 
 - **connector_port** - the default port used by this connector
 - **docker_repo** - remote docker hub repo to use when creating releases.  
 
+## Post‑generation tips
+- Prefer friendly names: Set `DSXCONNECTOR_DISPLAY_NAME` (optional) to show a human‑friendly card title in the dsx-connect UI without changing the connector slug or routes.
+- Custom icon: Set `DSXCONNECTOR_DISPLAY_ICON` to a data URI (recommended), raw `<svg ...>` markup, or an emoji (e.g., `🗂️`). The UI will safely render data URIs or encode raw SVG. If unset, a built‑in icon is used based on the connector slug.
+- Shared framework: Templates rely on `connectors.framework.dsx_connector` and shared models under `shared/`; ensure your repo layout mirrors dsx-connect.
+- TLS: Base config already includes TLS flags; see connector deploy README for `DSXCONNECTOR_USE_TLS`, `DSXCONNECTOR_VERIFY_TLS`, and `DSXCONNECTOR_CA_BUNDLE` usage.
+
 # Using
 Once the template code is generated move the directory and files created under "some_output_folder" to the 
 "connectors" module in this project.

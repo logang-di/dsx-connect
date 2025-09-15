@@ -3,7 +3,7 @@ import re
 import shutil
 from pathlib import Path
 
-from invoke import Context
+from invoke import Context, task
 import os
 
 
@@ -88,8 +88,40 @@ def prepare_common_files(c: Context, project_slug: str, connector_name: str, ver
     c.run(f"mkdir -p {export_folder}/certs && rsync -av {project_root_dir}/shared/deploy/certs/ {export_folder}/certs/ 2>/dev/null || true")
     c.run(f"mkdir -p {export_folder}/certs && rsync -av {project_root_dir}/connectors/framework/deploy/certs/ {export_folder}/certs/ 2>/dev/null || true")
 
-    # move Dockerfile, docker-compose files and requirements.txt to topmost directory
+    # Move deployment assets (compose, Docker build files, helm snippets) to export root
+    # This preserves subfolders like deploy/docker and deploy/helm
     c.run(f"rsync -av {project_root_dir}/connectors/{project_slug}/deploy/ {export_folder}")
+
+    # Backward/forward compatibility for Docker builds:
+    # - If a connector uses deploy/docker/ for Dockerfile and requirements.txt,
+    #   copy requirements.txt to export root so legacy Dockerfiles (COPY requirements.txt .)
+    #   continue to work without editing every Dockerfile.
+    try:
+        req_src = Path(export_folder) / "docker" / "requirements.txt"
+        req_dst = Path(export_folder) / "requirements.txt"
+        if req_src.exists() and not req_dst.exists():
+            shutil.copy2(req_src, req_dst)
+    except Exception:
+        pass
+
+    # Ensure docker-compose YAMLs are available at export root as well
+    try:
+        docker_dir = Path(export_folder) / "docker"
+        # Copy the canonical compose first if present
+        primary = docker_dir / f"docker-compose-{connector_name}.yaml"
+        to_copy: list[Path] = []
+        if primary.exists():
+            to_copy.append(primary)
+        # Then copy any other docker-compose-*.yaml (e.g., -nfs variants)
+        for f in docker_dir.glob("docker-compose-*.yaml"):
+            if f not in to_copy:
+                to_copy.append(f)
+        for f in to_copy:
+            dst = Path(export_folder) / f.name
+            if not dst.exists():
+                shutil.copy2(f, dst)
+    except Exception:
+        pass
 
     # copy start file to topmost directory
     c.run(f"rsync -av {project_root_dir}/connectors/{project_slug}/start.py {export_folder}/")
@@ -125,9 +157,15 @@ def build_image(c: Context, name: str, version: str, export_folder: str):
     image_tag = f"{name}:{version}"
     if c.run(f"docker images -q {image_tag}", hide=True).stdout.strip():
         print(f"Image {image_tag} already exists. Skipping build.")
-    else:
-        print(f"Building docker image {image_tag}…")
-        c.run(f"docker build -t {image_tag} {export_folder}")
+        return
+
+    # Prefer a Dockerfile under export/docker/, else fall back to export/Dockerfile
+    dockerfile_path = Path(export_folder) / "docker" / "Dockerfile"
+    if not dockerfile_path.exists():
+        dockerfile_path = Path(export_folder) / "Dockerfile"
+
+    print(f"Building docker image {image_tag} using {dockerfile_path} …")
+    c.run(f"docker build -t {image_tag} -f {dockerfile_path} {export_folder}")
 
 
 def push_image(c: Context, repo: str, name: str, version: str):
@@ -135,3 +173,136 @@ def push_image(c: Context, repo: str, name: str, version: str):
     print(f"Pushing {versioned}…")
     c.run(f"docker tag {name}:{version} {versioned}")
     c.run(f"docker push {versioned}")
+
+
+# -------------------- Version helpers --------------------
+_CONNECTOR_VERSION_RE = re.compile(r"CONNECTOR_VERSION\s*=\s*[\"'](\d+\.\d+\.\d+)[\"']")
+
+
+def read_connector_version(version_file: str) -> str:
+    path = Path(version_file)
+    if not path.exists():
+        raise FileNotFoundError(f"Version file not found: {version_file}")
+    m = _CONNECTOR_VERSION_RE.search(path.read_text())
+    if not m:
+        raise ValueError(f"CONNECTOR_VERSION not found in {version_file}")
+    return m.group(1)
+
+
+def connector_image_name_from_slug(project_slug: str) -> str:
+    return project_slug.replace("_", "-") + "-connector"
+
+
+# -------------------- No-bump image release (for CI tags) --------------------
+def release_connector_no_bump(c: Context, project_slug: str, repo_uname: str = "dsxconnect"):
+    """
+    Build and push a connector image without bumping CONNECTOR_VERSION.
+    Assumes repo structure: connectors/<slug> with version.py and deploy/docker files.
+    """
+    root = Path(__file__).resolve().parents[3]  # repo root
+    conn_dir = root / "connectors" / project_slug
+    if not conn_dir.exists():
+        raise FileNotFoundError(f"Connector dir not found: {conn_dir}")
+    version = read_connector_version(str(conn_dir / "version.py"))
+    name = connector_image_name_from_slug(project_slug)
+    build_dir = root / "dist"
+    export_folder = build_dir / f"{name}-{version}"
+
+    print(f"[release:nobump] {project_slug} v{version}")
+    clean_export(str(export_folder))
+    prepare_shared_files(c, project_root=str(root), export_folder=str(export_folder))
+    prepare_common_files(
+        c,
+        project_slug=project_slug,
+        connector_name=name,
+        version=version,
+        project_root_dir=str(root),
+        export_folder=str(export_folder),
+    )
+    zip_export(c, export_folder=str(export_folder), build_dir=str(build_dir))
+    build_image(c, name=name, version=version, export_folder=str(export_folder))
+    push_image(c, repo=repo_uname, name=name, version=version)
+
+
+# -------------------- Helm packaging for connectors --------------------
+def helm_package_connector(c: Context, project_slug: str, out_dir: str = "dist/charts",
+                           version: str | None = None, app_version: str | None = None):
+    """Package a connector Helm chart under connectors/<slug>/deploy/helm.
+
+    - version/app_version default to CONNECTOR_VERSION.
+    - Writes .tgz to out_dir.
+    """
+    root = Path(__file__).resolve().parents[3]
+    chart_dir = root / "connectors" / project_slug / "deploy" / "helm"
+    if not chart_dir.exists():
+        raise FileNotFoundError(f"Chart dir not found: {chart_dir}")
+    if version is None:
+        version = read_connector_version(str(root / "connectors" / project_slug / "version.py"))
+    if app_version is None:
+        app_version = version
+    out_path = Path(out_dir)
+    if not out_path.is_absolute():
+        out_path = root / out_dir
+    out_path.mkdir(parents=True, exist_ok=True)
+    # Ensure lock is in sync first, then lint with a friendly guard message
+    c.run(f"helm dependency build {chart_dir}")
+    lint_res = c.run(f"helm lint {chart_dir}", warn=True, hide=True)
+    if lint_res.exited != 0:
+        out = (lint_res.stdout or "") + (lint_res.stderr or "")
+        if "Chart.lock is out of sync with the dependencies file" in out:
+            print(f"[helm] Dependencies out of sync for {project_slug}. Run: helm dependency update connectors/{project_slug}/deploy/helm")
+        if lint_res.stdout:
+            print(lint_res.stdout)
+        if lint_res.stderr:
+            print(lint_res.stderr)
+        raise SystemExit(lint_res.exited)
+    c.run(
+        f"helm package {chart_dir} --version {version} --app-version {app_version} --destination {out_path}"
+    )
+    print(f"[helm] Packaged {project_slug} chart to {out_path}")
+
+
+def helm_push_oci_connector(c: Context, project_slug: str, repo: str, charts_dir: str = "dist/charts",
+                            version: str | None = None):
+    """Push a connector chart .tgz to an OCI registry (e.g., oci://registry-1.docker.io/dsxconnect)."""
+    root = Path(__file__).resolve().parents[3]
+    if version is None:
+        version = read_connector_version(str(root / "connectors" / project_slug / "version.py"))
+    # The chart name comes from Chart.yaml 'name'. Read it to construct the packaged filename.
+    chart_name_text = (root / "connectors" / project_slug / "deploy" / "helm" / "Chart.yaml").read_text()
+    m = re.search(r"^name:\s*([\w.-]+)", chart_name_text, flags=re.MULTILINE)
+    if not m:
+        raise ValueError("Chart.yaml must have a 'name:' field")
+    chart_name = m.group(1)
+    charts_path = Path(charts_dir)
+    if not charts_path.is_absolute():
+        charts_path = root / charts_dir
+    tgz = charts_path / f"{chart_name}-{version}.tgz"
+    if not tgz.exists():
+        raise FileNotFoundError(f"Packaged chart not found: {tgz}. Run helm package first.")
+    res = c.run(f"helm push {tgz} {repo}", warn=True, hide=True)
+    if res.exited != 0:
+        out = (res.stdout or "") + (res.stderr or "")
+        print(out)
+        if "insufficient_scope" in out or "authorization failed" in out or "push access denied" in out:
+            print("[helm] Push denied. Ensure you are logged in and the repo exists.")
+            print("[helm] Try: helm registry login registry-1.docker.io -u <user> -p <token>")
+            print(f"[helm] Or set HELM_REPO to a repo you can push: HELM_REPO={repo}")
+        raise SystemExit(res.exited)
+    print(f"[helm] Pushed {tgz} to {repo}")
+
+
+# Optional: expose as invoke tasks (callable via -c path/to/module)
+@task
+def task_release_connector_nobump(c, name, repo_uname="dsxconnect"):
+    release_connector_no_bump(c, project_slug=name, repo_uname=repo_uname)
+
+
+@task
+def task_helm_package_connector(c, name, out_dir="dist/charts"):
+    helm_package_connector(c, project_slug=name, out_dir=out_dir)
+
+
+@task
+def task_helm_push_oci_connector(c, name, repo, charts_dir="dist/charts"):
+    helm_push_oci_connector(c, project_slug=name, repo=repo, charts_dir=charts_dir)

@@ -1,10 +1,12 @@
 import asyncio
 import json
+import os
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from http.client import HTTPException
 
 from redis.asyncio import Redis
-from fastapi import FastAPI, Request, Path, APIRouter, Depends
+from fastapi import FastAPI, Request, Path, APIRouter, Depends, Query
 from fastapi.staticfiles import StaticFiles
 
 import uvicorn
@@ -199,6 +201,15 @@ app = FastAPI(title='dsx-connect API',
 
 app.mount("/static", StaticFiles(directory=static_path, html=True), name='static')
 
+# Add CSP for the main HTML page even when accessed via the static path
+@app.middleware("http")
+async def add_csp_header(request: Request, call_next):
+    response = await call_next(request)
+    # Apply CSP only to our HTML entrypoints
+    if request.url.path in ("/", "/static/html/dsx_connect.html"):
+        response.headers["Content-Security-Policy"] = "img-src 'self' data:; object-src 'none'"
+    return response
+
 api = APIRouter(prefix=route_path(API_PREFIX_V1), tags=["core"])
 
 
@@ -208,6 +219,18 @@ api = APIRouter(prefix=route_path(API_PREFIX_V1), tags=["core"])
          status_code=status.HTTP_200_OK)
 def get_config_all():
     return get_config()
+
+
+@api.get(route_path("meta"),
+         name=route_name(DSXConnectAPI.CONFIG, action=Action.LIST) + ":meta",
+         description="Version and build metadata",
+         status_code=status.HTTP_200_OK)
+def get_meta():
+    build_ts = os.getenv("DSX_BUILD_TIMESTAMP") or datetime.now(timezone.utc).isoformat()
+    return {
+        "version": getattr(version, "DSX_CONNECT_VERSION", "unknown"),
+        "build_timestamp": build_ts,
+    }
 
 
 @api.get(route_path(DSXConnectAPI.VERSION.value),
@@ -280,6 +303,7 @@ sse_notifications = APIRouter(prefix=route_path(API_PREFIX_V1), tags=["server si
     description="SSE stream of scan result notifications",
 )
 async def notifications_scan_result(request: Request):
+    LOG_SSE = os.getenv('DSX_LOG_SSE_EVENTS', '0') == '1'
     async def stream():
         # Initial connected and retry hints
         yield 'data: {"type":"connected"}\n\n'
@@ -312,6 +336,11 @@ async def notifications_scan_result(request: Request):
                             data = dumps(raw, separators=(",", ":"))
                     except Exception:
                         data = str(raw)
+                    if LOG_SSE:
+                        try:
+                            dsx_logging.info(f"sse.scan_result len={len(data)} data={data[:256]}")
+                        except Exception:
+                            pass
                     yield f"data: {data}\n\n"
                     hb += 1
                     if hb >= 10:
@@ -330,6 +359,104 @@ async def notifications_scan_result(request: Request):
 
     return StreamingResponse(stream(), media_type="text/event-stream",
                              headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+
+
+@sse_notifications.get(
+    route_path(DSXConnectAPI.NOTIFICATIONS_PREFIX, NotificationPath.JOB_SUMMARY, "{job_id}"),
+    name=route_name(DSXConnectAPI.NOTIFICATIONS_PREFIX, NotificationPath.JOB_SUMMARY, Action.LIST),
+    description="SSE stream emitting periodic job summaries (heartbeat-style)",
+)
+async def notifications_job_summary(
+    job_id: str = Path(..., description="Scan job identifier"),
+    request: Request = None,
+    interval: float = Query(5.0, ge=2.0, le=60.0, description="Summary interval in seconds (2-60)"),
+):
+    async def stream():
+        import time as _t
+        from json import dumps as _dumps
+        # Initial retry hint and connected frame
+        yield "retry: 5000\n"
+        yield f'data: {{"type":"connected","job_id":"{job_id}"}}\n\n'
+
+        period = float(interval) if interval and interval > 0 else 5.0
+        while True:
+            try:
+                if await request.is_disconnected():
+                    return
+                r = getattr(request.app.state, "redis", None)
+                if r is None:
+                    yield 'data: {"type":"heartbeat","status":"redis_unavailable"}\n\n'
+                    await asyncio.sleep(period)
+                    continue
+                key = f"dsxconnect:job:{job_id}"
+                data = await r.hgetall(key)
+                if not data:
+                    # Send sentinel once and slow down
+                    yield f'data: {{"type":"job_summary","job_id":"{job_id}","status":"not_found"}}\n\n'
+                    await asyncio.sleep(period)
+                    continue
+                # Derive duration and ETA similar to GET /scan/jobs/{job_id}
+                try:
+                    # Normalize ints
+                    def _toi(v, default=0):
+                        try:
+                            return int(v)
+                        except Exception:
+                            return default
+                    enq = _toi(data.get("enqueued_count"), 0)
+                    proc = _toi(data.get("processed_count"), 0)
+                    exp = _toi(data.get("expected_total"), -1)
+                    enq_total = _toi(data.get("enqueued_total"), -1)
+                    total = enq_total if enq_total >= 0 else (exp if exp >= 0 else None)
+                    started = _toi(data.get("started_at"), 0)
+                    finished = _toi(data.get("finished_at"), 0)
+                    now = int(_t.time())
+                    duration = ((finished or now) - started) if started else None
+                    eta = None
+                    if total and total > 0 and started and proc > 0 and (not finished) and proc < total:
+                        elapsed = max(1, (finished or now) - started)
+                        throughput = proc / elapsed
+                        if throughput > 0:
+                            remaining = max(0, total - proc)
+                            eta = int(remaining / throughput)
+                    # Friendly remaining time
+                    def _fmt_eta(sec: int | None) -> str | None:
+                        if sec is None or sec < 0:
+                            return None
+                        d, rem = divmod(sec, 86400)
+                        h, rem = divmod(rem, 3600)
+                        m, s = divmod(rem, 60)
+                        return f"{d}d {h:02d}:{m:02d}:{s:02d}" if d > 0 else f"{h:02d}:{m:02d}:{s:02d}"
+
+                    payload = {
+                        "type": "job_summary",
+                        "ts": now,
+                        "job": {
+                            "job_id": job_id,
+                            "status": data.get("status", "running"),
+                            "processed_count": proc,
+                            "total": total,
+                            "duration_secs": duration,
+                            "eta_secs": eta,
+                            "time_remaining": _fmt_eta(eta),
+                            "last_update": data.get("last_update"),
+                        },
+                    }
+                    yield f"data: {_dumps(payload, separators=(',', ':'))}\n\n"
+                except Exception:
+                    yield 'data: {"type":"heartbeat","status":"error"}\n\n'
+                await asyncio.sleep(period)
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                # Back off slightly on unexpected errors
+                await asyncio.sleep(period)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 @sse_notifications.get(route_path(DSXConnectAPI.NOTIFICATIONS_PREFIX.value,
                                   NotificationPath.CONNECTOR_REGISTERED.value),
@@ -411,7 +538,11 @@ app.include_router(dead_letter.router, tags=["dead-letter"])
 @app.get("/")
 def home(request: Request):
     home_path = pathlib.Path(static_path / 'html/dsx_connect.html')
-    return FileResponse(home_path)
+    # Add a narrow CSP to block external image fetches (including from inside SVGs)
+    csp = "img-src 'self' data:; object-src 'none'"
+    return FileResponse(home_path, headers={
+        "Content-Security-Policy": csp
+    })
 
 
 # Main entry point to start the FastAPI app

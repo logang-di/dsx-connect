@@ -28,12 +28,16 @@ class ConnectorStatusEnum(str, Enum):
 
 class ConnectorInstanceModel(BaseModel):
     name: str = 'connector'
+    display_name: str | None = None
+    display_icon: str | None = None
     uuid: UUID | None = None
     meta_info: str | None = None
     url: str = ''
     status: ConnectorStatusEnum = ConnectorStatusEnum.STARTING
     item_action_move_metainfo: str = ''
     asset: str = ''
+    # Optional human-friendly label for asset path
+    asset_display_name: str | None = None
     filter: str = ''
     last_repo_check_ts: Optional[float] = None
     last_repo_check_reason: Optional[str] = None   # e.g., "auth_failure", "bucket_not_found"
@@ -45,3 +49,7 @@ class ScanRequestModel(BaseModel):
     location: str
     metainfo: str
     connector_url: str = None
+    # Logical job identifier to associate related scan requests.
+    # For connector full scans, all enqueued items share a job id.
+    # For single events (e.g., webhook), a unique job id represents a job of one.
+    scan_job_id: str | None = None

@@ -10,8 +10,28 @@ This guide explains the core configuration concepts and details three deployment
 - Helm 3.2+
 - `kubectl` configured to point to your cluster.
 - `openssl` for generating a self-signed certificate if you plan to enable TLS for development.
+ - Azure Storage connection Secret — required for ALL install methods:
+   - Option A (from chart directory): `kubectl apply -f azure-secret.yaml` (edit connection string first)
+   - Option A (from monorepo): `kubectl apply -f connectors/azure_blob_storage/deploy/helm/azure-secret.yaml`
+   - Option B (inline): `kubectl create secret generic azure-storage-connection-string --from-literal=AZURE_STORAGE_CONNECTION_STRING='<conn-string>'`
 
 ---
+
+## Quick Config Reference
+
+- env.DSXCONNECTOR_ASSET: Azure Blob container (optionally with a virtual folder/prefix). Example: `my-container` or `my-container/prefix`.
+- env.DSXCONNECTOR_FILTER: Optional include/exclude rules under the asset root. Use for prefix scoping too (e.g., `prefix/**`). Follows rsync‑like rules. Examples: `"prefix/**"`, "**/*.zip,**/*.docx", or "-tmp --exclude cache".
+- env.DSXCONNECTOR_DISPLAY_NAME: Optional friendly name shown on the dsx-connect UI card (e.g., "Azure Blob Storage Connector").
+- env.DSXCONNECTOR_ITEM_ACTION: What to do with malicious files. One of: `nothing` (default), `delete`, `tag`, `move`, `move_tag`.
+- env.DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: Target when action is `move` or `move_tag` (e.g., `dsxconnect-quarantine`).
+
+These are the most commonly changed settings on first deploy.
+
+FILTER (rsync‑like) quick cheat:
+- `?` matches any single non-slash char; `*` matches 0+ non-slash; `**` matches 0+ including slashes.
+- `-`/`--exclude` exclude rule; `+`/`--include` include rule; comma‑separate or space‑separate tokens.
+ - See “Rsync‑Like Filter Rules” at the end of this document.
+
 
 ## Deployment Methods
 
@@ -21,63 +41,73 @@ This chart is flexible. The following methods show how to deploy it, from a simp
 
 This method is best for quick, temporary deployments, like for local testing. It uses the `--set` flag to provide configuration directly on the command line.
 
-**1. Create the Azure Secret:**
-   First, apply the `azure-secret.yaml` manifest after filling in your connection string.
-   ```bash
-   kubectl apply -f azure-secret.yaml
-   ```
+**1. Ensure the Azure Secret exists (see Prerequisites).**
 
-**2. Deploy the Connector:**
+**2. Deploy the Connector (Quick Start):**
 
-   *   **For a simple HTTP deployment:**
-       ```bash
-       # Replace 'my-container' with the name of your Azure blob container
-       helm install http-connector . --set env.DSXCONNECTOR_ASSET=my-container
-       ```
+- Release name must be unique. Suggested: `abs-<asset>-<env>` (e.g., `abs-invoices-dev`).
+- Specify the image version when installing from this chart path.
+  - From local path: add `--set-string image.tag=<version>`
+  - From OCI (Method 3): use `--version <version>` instead
 
-   *   **For a TLS-enabled deployment:**
-       First, create your TLS secret (`kubectl create secret tls my-tls --cert=... --key=...`). Then, add the TLS flags to the install command:
-       ```bash
-       helm install tls-connector . \
-         --set env.DSXCONNECTOR_ASSET=my-container \
-         --set tls.enabled=true \
-         --set tls.secretName=my-tls
-       ```
+```bash
+helm install abs-invoices-dev . \
+  --set env.DSXCONNECTOR_ASSET=my-container \
+  --set-string env.DSXCONNECTOR_FILTER="" \
+  --set-string image.tag=<version>
+```
 
 ### Method 2: Standard Deployment (Custom Values File)
 
-This is the most common and recommended method for managing deployments. It involves creating a dedicated values file for each instance of the connector.
+Using the values.yaml file for deployment configuration involves creating a dedicated values file for each instance of the connector.  Typically you shouldn't edit the values.yaml directly, but rather make a copy which represents each instance of the connector you
+want to deploy.
 
-**1. Create the Required Secrets:**
-   Apply both your Azure secret and, if enabling TLS, your TLS secret.
-   ```bash
-   kubectl apply -f azure-secret.yaml
-   kubectl create secret tls my-tls --cert=tls.crt --key=tls.key
-   ```
+For example, you can create a values file for each unique instance of the connector you want to deploy, such as `values-<env>-<asset>.yaml`,
+i.e. `values-dev-my-asset1.yaml` or `values-prod-my-asset2.yaml`.
 
-**2. Create a Custom Values File:**
-   Create a new file, for example `my-connector-values.yaml`, to hold your configuration.
+**1. Create a Custom Values File:**
+   Create a new file, for example `values-dev-my-asset1.yaml`, to hold your configuration.
 
    ```yaml
-   # my-connector-values.yaml
-
+   # values-dev-my-asset1.yaml
+...
    # Set the target asset for this connector instance
    env:
-     DSXCONNECTOR_ASSET: "my-production-container"
-
+     DSXCONNECTOR_ASSET: "my-asset"
+     DSXCONNECTOR_FILTER: "prefix/**"
+...
    # Enable TLS and specify the secret to use
    tls:
      enabled: true
      secretName: "my-tls"
    ```
 
-**3. Install the Chart:**
+**2. Install the Chart:**
    Install the chart, referencing your custom values file with the `-f` flag.
-   ```bash
-   helm install my-connector . -f my-connector-values.yaml
-   ```
+```bash
+helm install my-connector . -f values-dev-my-asset1.yaml
+```
 
-### Method 3: Production-Grade Deployment (GitOps & CI/CD)
+### Method 3: OCI Repository + Command-Line Overrides
+
+Install directly from the OCI registry and set runtime configuration on the CLI (handy for quick tests and ephemeral installs).
+
+```bash
+helm install azure-abs oci://registry-1.docker.io/dsxconnect/azure-blob-storage-connector \
+  --version <ver> \
+  --set env.DSXCONNECTOR_ASSET=my-container \
+  --set-string env.DSXCONNECTOR_FILTER="*.zip,*.docx" \
+  # optional TLS on the connector
+  --set tls.enabled=true \
+  --set tls.secretName=my-tls
+```
+
+Notes
+- OCI install is “prewired”: the chart `--version` selects a chart with an `appVersion` that becomes the default image tag. You can still override with `--set-string image.tag=...`.
+
+Secrets: Ensure the Azure Secret exists before installing.
+
+### Method 4: Production-Grade Deployment (GitOps & CI/CD)
 
 This is the definitive, scalable, and secure approach for managing production applications. It uses modern Continuous Delivery (CD) mechanisms.
 
@@ -143,28 +173,6 @@ It is important to understand that even with `verify=false`, the connection is s
 
 ## Verifying the Deployment
 
----
-
-## Advanced Deployment: Multi-Cluster Configuration
-
-By default, this chart is configured to connect to a `dsx-connect-api` service running in the same Kubernetes cluster. It dynamically constructs the URL based on the service name (`dsx-connect-api`) and whether TLS is enabled for the connector.
-
-In advanced scenarios, you may need to connect to a `dsx-connect` instance running in a different cluster or at an external URL. To do this, you can override the `DSXCONNECT_DSX_CONNECT_URL` environment variable.
-
-**Example `my-external-connector-values.yaml`:**
-```yaml
-env:
-  DSXCONNECTOR_ASSET: "my-container"
-  # Override the default URL to point to an external service
-  DSXCONNECT_DSX_CONNECT_URL: "https://my-dsx-connect.example.com:443"
-
-# You will likely also need to provide a CA bundle to trust the external endpoint
-# (See documentation on CA bundles)
-tls:
-  enabled: true
-  secretName: "my-tls-secret"
-```
-
 After deploying with any method, you can check the status of your release.
 
 1.  **Check the Helm Release:**
@@ -181,4 +189,39 @@ After deploying with any method, you can check the status of your release.
 
 For a full list of configurable parameters, see the `values.yaml` file.
 
-```
+
+
+## Image Version Overrides
+
+How image tags are chosen:
+
+- From local chart path (this repo): templates default to the chart `appVersion` unless you override `image.tag`.
+- From OCI registry (`helm install oci://… --version X.Y.Z`): Helm pulls the chart at that version; templates use that chart’s `appVersion` as the default image tag. You can still override with `--set-string image.tag=...` if needed.
+
+## Rsync‑Like Filter Rules
+
+The `DSXCONNECTOR_FILTER` follows rsync include/exclude semantics. Leave empty ("") to scan everything under `DSXCONNECTOR_ASSET`.
+
+- `?` matches any single character except a slash (/)
+- `*` matches zero or more non‑slash characters
+- `**` matches zero or more characters, including slashes
+- `-` / `--exclude` exclude the following match
+- `+` / `--include` include the following match
+- Tokens can be comma‑separated or space‑separated; quote tokens that contain spaces
+
+Examples (paths are relative to `DSXCONNECTOR_ASSET`):
+
+| DSXCONNECTOR_FILTER                                   | Description                                                                 |
+|-------------------------------------------------------|-----------------------------------------------------------------------------|
+| ""                                                    | All files recursively (no filter)                                           |
+| "*"                                                   | Only top‑level files (no recursion)                                         |
+| "prefix/**"                                           | Everything under `prefix/` (common for “prefix” scoping)                    |
+| "sub1"                                                | Files within subtree `sub1` (recurse into subtrees)                         |
+| "sub1/*"                                              | Files directly under `sub1` (no recursion)                                  |
+| "sub1/sub2"                                           | Files within subtree `sub1/sub2` (recurse)                                   |
+| "*.zip,*.docx"                                        | All files with .zip and .docx extensions                                    |
+| "-tmp --exclude cache"                                | Exclude `tmp` and `cache` directories                                       |
+| "sub1 -tmp --exclude sub2"                            | Include `sub1` subtree but exclude `tmp` and `sub2`                         |
+| "test/2025*/*"                                        | Files in subtrees matching `test/2025*/*` (no recursion)                    |
+| "test/2025*/** -sub2"                                 | Recurse under `test/2025*/**`, excluding any `sub2` subtree                 |
+| "'scan here' -'not here' --exclude 'not here either'" | Quoted tokens for names with spaces                                          |

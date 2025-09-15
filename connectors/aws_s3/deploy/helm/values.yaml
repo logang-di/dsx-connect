@@ -1,0 +1,53 @@
+replicaCount: 1
+
+image:
+  repository: dsxconnect/aws-s3-connector
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart AppVersion.
+  tag: ""
+  # Note: When installing this chart from an OCI registry with --version=X.Y.Z,
+  # the default image tag will be that chart's appVersion.
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+tls:
+  enabled: false
+  port: 443
+  # The name of the k8s secret that contains the TLS certificate and key
+  secretName: ""
+  mountPath: "/app/certs"
+
+env:
+  LOG_LEVEL: "debug"
+  # Optional friendly display name shown in the dsx-connect UI card
+  # DSXCONNECTOR_DISPLAY_NAME: "AWS S3 Connector"
+  DSXCONNECTOR_TLS_CERTFILE: "/app/certs/tls.crt"
+  DSXCONNECTOR_TLS_KEYFILE: "/app/certs/tls.key"
+  # Outbound TLS verification to dsx-connect
+  # DSXCONNECTOR_VERIFY_TLS: "true"
+  # DSXCONNECTOR_CA_BUNDLE: "/app/certs/ca.pem"
+  # DSXCONNECTOR_DSX_CONNECT_URL: "https://my-dsx-connect.example.com"
+  # Only override this if the connector is NOT deployed in the same cluster
+  # as dsx-connect API. By default, the chart computes:
+  #   - http://dsx-connect-api  (when DSXCONNECTOR_USE_TLS != true)
+  #   - https://dsx-connect-api (when DSXCONNECTOR_USE_TLS == true)
+  DSXCONNECTOR_ITEM_ACTION: "nothing"         # nothing, delete, tag, move, move_tag
+  DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "dsxconnect-quarantine"
+  DSXCONNECTOR_ASSET: ""                      # bucket name
+  DSXCONNECTOR_FILTER: ""                     # optional prefixes, etc.
+
+secrets:
+  # Name of the Secret containing AWS credentials
+  name: aws-credentials
+
+command:
+  - "python"
+  - "connectors/aws_s3/start.py"
+  - "--workers"
+  - "1"

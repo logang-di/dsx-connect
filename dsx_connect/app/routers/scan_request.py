@@ -1,4 +1,6 @@
 from typing import Optional, Literal, Any
+import time
+import uuid as _uuid
 
 from celery.result import AsyncResult
 from fastapi import APIRouter, Request, Response, Header, Path
@@ -36,12 +38,31 @@ async def post_scan_request(
         scan_request_info: ScanRequestModel,
         response: Response,
         request: Request,
-        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key")) -> StatusResponse:
+        idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+        job_name: Optional[str] = Header(default=None, alias="X-Job-Name")) -> StatusResponse:
     try:
         dsx_logging.debug(f"Queuing scan task {scan_request_info.location}")
 
         # (Optional) Idempotency: if provided, you can de-dupe here using Redis before send_task.
         # Skipping the storage logic for brevity; pattern shown for header plumb-through.
+
+        # Ensure a scan_job_id exists (connectors should set one; generate if missing)
+        if not getattr(scan_request_info, "scan_job_id", None):
+            scan_request_info.scan_job_id = str(_uuid.uuid4())
+
+        # If job paused/cancelled, reject new enqueues (best-effort)
+        try:
+            r = getattr(request.app.state, "redis", None)
+            if r is not None:
+                job_key = f"dsxconnect:job:{scan_request_info.scan_job_id}"
+                flags = await r.hmget(job_key, "paused", "cancel")
+                if flags and (flags[0] == "1" or flags[1] == "1"):
+                    response.status_code = 409
+                    return StatusResponse(status=StatusResponseEnum.ERROR,
+                                          message="Job paused/cancelled",
+                                          description=f"scan_job_id={scan_request_info.scan_job_id}")
+        except Exception:
+            pass
 
         result = celery_app.send_task(
             Tasks.REQUEST,
@@ -51,6 +72,37 @@ async def post_scan_request(
         # Location header: /api/v1/dsx-connect/scan-request/{task_id}
         task_id = result.id
         response.headers["Location"] = api_path(DSXConnectAPI.SCAN_PREFIX, ScanPath.REQUEST, task_id)
+
+        # Update per-job counters in Redis (best-effort)
+        try:
+            r = getattr(request.app.state, "redis", None)
+            if r is not None:
+                job_id = scan_request_info.scan_job_id
+                key = f"dsxconnect:job:{job_id}"
+                now = str(int(time.time()))
+                await r.hsetnx(key, "job_id", job_id)
+                await r.hsetnx(key, "status", "running")
+                await r.hsetnx(key, "started_at", now)
+                # Optional connector info
+                try:
+                    conn = getattr(scan_request_info, "connector", None)
+                    if conn is not None and getattr(conn, "uuid", None):
+                        await r.hsetnx(key, "connector_uuid", str(conn.uuid))
+                except Exception:
+                    pass
+                await r.hincrby(key, "enqueued_count", 1)
+                try:
+                    await r.rpush(f"{key}:tasks", task_id)
+                except Exception:
+                    pass
+                mapping = {"last_update": now}
+                if job_name:
+                    mapping["job_name"] = job_name
+                await r.hset(key, mapping=mapping)
+                # Optional TTL to avoid stale jobs piling up
+                await r.expire(key, 7 * 24 * 3600)
+        except Exception:
+            pass
 
         return StatusResponse(
             status=StatusResponseEnum.SUCCESS,

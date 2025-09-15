@@ -9,6 +9,7 @@ from connectors.sharepoint.config import ConfigManager
 from connectors.sharepoint.version import CONNECTOR_VERSION
 from connectors.sharepoint.sharepoint_client import SharePointClient
 import asyncio
+from shared.file_ops import relpath_matches_filter
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
@@ -122,7 +123,7 @@ async def config_handler(base: ConnectorInstanceModel):
 
 
 @connector.full_scan
-async def full_scan_handler() -> StatusResponse:
+async def full_scan_handler(limit: int | None = None) -> StatusResponse:
     """
     Full Scan handler for the DSX Connector.
 
@@ -173,18 +174,40 @@ async def full_scan_handler() -> StatusResponse:
             # Determine a repository-relative path to apply the filter
             item_path = item.get("path") or item.get("name") or ""
             rel = item_path.strip('/')
-            from shared.file_ops import relpath_matches_filter
             if config.filter and not relpath_matches_filter(rel, config.filter):
                 continue
             item_id = item.get("id")
             metainfo = item_path
             tasks.append(asyncio.create_task(enqueue(item_id, metainfo)))
+            if limit and len(tasks) >= limit:
+                break
 
         if tasks:
             await asyncio.gather(*tasks)
-        return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
+        count = len(tasks)
+        dsx_logging.info(f"Full scan enqueued {count} item(s) (asset_base='{config.resolved_asset_base or (config.asset or '')}', filter='{config.filter or ''}')")
+        return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.', description=f"enqueued={count}")
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
+
+
+@connector.preview
+async def preview_provider(limit: int) -> list[str]:
+    items: list[str] = []
+    try:
+        base_path = config.resolved_asset_base or (config.asset or "")
+        async for item in sp_client.iter_files_recursive(base_path):
+            if item.get("folder"):
+                continue
+            path = (item.get("path") or item.get("name") or "").strip('/')
+            if config.filter and not relpath_matches_filter(path, config.filter):
+                continue
+            items.append(path or item.get("id", ""))
+            if len(items) >= max(1, limit):
+                break
+    except Exception:
+        pass
+    return items
 
 
 @connector.item_action

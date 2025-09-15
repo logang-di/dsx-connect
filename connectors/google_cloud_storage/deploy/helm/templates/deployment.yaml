@@ -1,23 +1,107 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-    name: {{ include "google-cloud-storage-connector.fullname" . }}
+  name: {{ include "google-cloud-storage-connector.fullname" . }}
+  labels:
+    helm.sh/chart: {{ include "google-cloud-storage-connector.chart" . }}
+    app.kubernetes.io/name: {{ include "google-cloud-storage-connector.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- if .Chart.AppVersion }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    {{- end }}
 spec:
-    replicas: {{ .Values.replicaCount }}
-    selector:
-        matchLabels:
-            app: {{ include "google-cloud-storage-connector.name" . }}
-    template:
-        metadata:
-            labels:
-                app: {{ include "google-cloud-storage-connector.name" . }}
-        spec:
-            containers:
-                - name: connector
-                  image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-                  imagePullPolicy: {{ .Values.image.pullPolicy }}
-                  ports:
-                      - containerPort: {{ .Values.service.port }}
-                  env:
-            {{- toYaml .Values.env | nindent 12 }}
-                  command: {{ .Values.command }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "google-cloud-storage-connector.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "google-cloud-storage-connector.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      {{- if or .Values.tls.enabled .Values.gcp.credentialsSecretName }}
+      volumes:
+        {{- if .Values.tls.enabled }}
+        - name: tls-certs
+          secret:
+            secretName: {{ .Values.tls.secretName | quote }}
+        {{- end }}
+        {{- if .Values.gcp.credentialsSecretName }}
+        - name: gcp-creds
+          secret:
+            secretName: {{ .Values.gcp.credentialsSecretName | quote }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: {{ toJson .Values.command }}
+          args:
+            - "--port"
+            - "{{- if .Values.tls.enabled -}}{{ .Values.tls.port }}{{- else -}}{{ .Values.service.port }}{{- end -}}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            {{- if .Values.tls.enabled }}
+            - name: https
+              containerPort: {{ .Values.tls.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: DSXCONNECTOR_USE_TLS
+              value: {{ .Values.tls.enabled | quote }}
+            - name: DSXCONNECTOR_CONNECTOR_URL
+              value: "{{- if .Values.tls.enabled }}https://{{ else }}http://{{ end }}{{ include "google-cloud-storage-connector.fullname" . }}:{{- if .Values.tls.enabled }}{{ .Values.tls.port }}{{ else }}{{ .Values.service.port }}{{ end }}"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            {{ $useTlsStr := (toString (default "" .Values.env.DSXCONNECTOR_USE_TLS)) }}
+            {{ $isTls := eq (lower $useTlsStr) "true" }}
+            {{ $scheme := ternary "https" "http" $isTls }}
+            - name: DSXCONNECTOR_DSX_CONNECT_URL
+              value: {{ (get .Values.env "DSXCONNECTOR_DSX_CONNECT_URL" | default (printf "%s://dsx-connect-api" $scheme)) | quote }}
+            {{- range $key, $val := .Values.env }}
+            {{- if and (ne $key "DSXCONNECTOR_DSX_CONNECT_URL") (ne $key "PYTHONUNBUFFERED") }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.gcp.credentialsSecretName }}
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: {{ printf "%s/%s" .Values.gcp.mountPath .Values.gcp.filename | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /{{ include "google-cloud-storage-connector.name" . }}/readyz
+              port: {{- if .Values.tls.enabled }} https {{ else }} http {{ end }}
+              scheme: {{- if .Values.tls.enabled }} HTTPS {{ else }} HTTP {{ end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /{{ include "google-cloud-storage-connector.name" . }}/healthz
+              port: {{- if .Values.tls.enabled }} https {{ else }} http {{ end }}
+              scheme: {{- if .Values.tls.enabled }} HTTPS {{ else }} HTTP {{ end }}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- if or .Values.tls.enabled .Values.gcp.credentialsSecretName }}
+          volumeMounts:
+            {{- if .Values.tls.enabled }}
+            - name: tls-certs
+              mountPath: {{ .Values.tls.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- if .Values.gcp.credentialsSecretName }}
+            - name: gcp-creds
+              mountPath: {{ .Values.gcp.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+          {{- end }}

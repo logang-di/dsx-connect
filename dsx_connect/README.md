@@ -1,5 +1,11 @@
 # dsx-connect Deployment
 
+Note for GCS connector development (IDE/debug):
+- Create `connectors/google_cloud_storage/.dev.env` with:
+  - `GOOGLE_APPLICATION_CREDENTIALS=/abs/path/to/your-service-account.json`
+  - `DSXCONNECTOR_ASSET=your-gcs-bucket`
+The connector's config loader reads this `.dev.env` and sets these env vars so the Google SDK can authenticate locally.
+
 ## Table of Contents
 - [Distribution Structure](#distribution-structure)
 - [dsx-connect Components](#dsx-connect-components)
@@ -11,12 +17,35 @@
 ## Distribution Structure
 This distribution (dsx-connect-<version>/) contains:
 
-dsx_connect/: Core application code (FastAPI app, Celery workers, etc.).
-utils/: Shared modules.
-Dockerfile, docker-compose.yaml: Docker deployment files.
-dsx-connect-start.py: Helper script to run the FastAPI app locally.
-requirements.txt: Python dependencies.
-README.md: This file.
+- dsx_connect/: Core application code (FastAPI app, Celery workers, etc.).
+- shared/: Shared modules used across core and connectors.
+- Dockerfile, docker-compose-*.yaml: Docker deployment files.
+- dsx_connect/dsx-connect-api-start.py, dsx_connect/dsx-connect-workers-start.py: Helper scripts to run API/workers.
+- requirements.txt: Python dependencies.
+- certs/: Dev TLS certs (optional; for local HTTPS testing only).
+- helm/: Raw Helm chart for dsx-connect (umbrella + subcharts).
+- charts/: Packaged Helm chart tarball(s) for dsx-connect (e.g., dsx-connect-<version>.tgz).
+- README.md: This file.
+
+### Install Helm Chart from the Bundle
+
+If you used `inv prepare` or `inv release`, a packaged chart is available under `charts/`.
+
+Example install (pinning image tag via values):
+
+```bash
+helm upgrade --install dsx dist/dsx-connect-<version>/charts/dsx-connect-<version>.tgz \
+  --set-string global.image.tag=<version> \
+  --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://my-dsxa.example.com/scan/binary/v2
+```
+
+Or from the raw chart directory in the bundle:
+
+```bash
+helm upgrade --install dsx dist/dsx-connect-<version>/helm \
+  --set-string global.image.tag=<version> \
+  --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://my-dsxa.example.com/scan/binary/v2
+```
 
 
 ## dsx-connect Components

@@ -55,7 +55,7 @@ async def shutdown_event():
 
 
 @connector.full_scan
-async def full_scan_handler() -> StatusResponse:
+async def full_scan_handler(limit: int | None = None) -> StatusResponse:
     """
     Full Scan handler for the DSX Connector.
 
@@ -88,6 +88,7 @@ async def full_scan_handler() -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
+    count = 0
     for key in aws_s3_client.keys(config.asset, filter_str=config.filter):
         file_name = key['Key']
         if config.filter and not relpath_matches_filter(file_name, config.filter):
@@ -96,8 +97,29 @@ async def full_scan_handler() -> StatusResponse:
         status_response = await connector.scan_file_request(
             ScanRequestModel(location=str(f"{file_name}"), metainfo=full_path))
         dsx_logging.debug(f'Sent scan request for {full_path}, result: {status_response}')
+        count += 1
+        if limit and count >= limit:
+            break
+    dsx_logging.info(f"Full scan enqueued {count} item(s) (asset={config.asset}, filter='{config.filter or ''}')")
+    return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.', description=f"enqueued={count}")
 
-    return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
+
+@connector.preview
+async def preview_provider(limit: int) -> list[str]:
+    items: list[str] = []
+    try:
+        for obj in aws_s3_client.keys(config.asset, filter_str=config.filter):
+            key = obj.get('Key')
+            if not key:
+                continue
+            if config.filter and not relpath_matches_filter(key, config.filter):
+                continue
+            items.append(f"{config.asset}/{key}")
+            if len(items) >= max(1, limit):
+                break
+    except Exception:
+        pass
+    return items
 
 
 @connector.item_action

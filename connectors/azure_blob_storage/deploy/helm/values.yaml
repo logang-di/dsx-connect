@@ -3,8 +3,10 @@ replicaCount: 1
 image:
   repository: dsxconnect/azure-blob-storage-connector
   pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
-  tag: "0.2.52"
+  # Overrides the image tag whose default is the chart AppVersion.
+  tag: ""
+  # Note: When installing this chart from an OCI registry with --version=X.Y.Z,
+  # the default image tag will be that chart's appVersion.
 
 imagePullSecrets: []
 nameOverride: ""
@@ -23,6 +25,8 @@ tls:
 
 env:
   LOG_LEVEL: "debug"
+  # Optional friendly display name shown in the dsx-connect UI card
+  # DSXCONNECTOR_DISPLAY_NAME: "Azure Blob Storage Connector"
   DSXCONNECTOR_TLS_CERTFILE: "/app/certs/tls.crt"
   DSXCONNECTOR_TLS_KEYFILE: "/app/certs/tls.key"
   # Outbound TLS verification to dsx-connect

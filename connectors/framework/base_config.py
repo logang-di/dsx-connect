@@ -32,6 +32,10 @@ class BaseConnectorConfig(BaseSettings):
     item_action_move_metainfo: str = "dsxconnect-quarantine"
     asset: str = ""
     filter: str = ""
+    # Optional, human-friendly name shown in UI cards
+    display_name: str = ""
+    # Optional, custom icon to show in UI; accepts data URI, raw SVG, or short emoji
+    display_icon: str = ""
 
     # TLS/SSL settings (server + outbound)
     use_tls: bool = Field(default=False, description="Serve connector over HTTPS using provided cert/key")

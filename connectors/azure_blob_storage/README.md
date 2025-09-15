@@ -32,7 +32,7 @@ INFO:     Waiting for application startup.
 2025-05-21 13:36:15,723 INFO     dsx_connector.py    : Connection to dsx-connect at http://0.0.0.0:8586 success.
 2025-05-21 13:36:15,723 INFO     azure_blob_storage_connector.py: Starting up connector google-cloud-storage-connector-9788
 2025-05-21 13:36:15,723 INFO     azure_blob_storage_connector.py: azure-blob-storage-connector-9788 version: 0.1.0.
-2025-05-21 13:36:15,724 INFO     azure_blob_storage_connector.py: azure-blob-storage-connector-9788 configuration: name='azure-blob-storage-connector' connector_url=HttpUrl('http://0.0.0.0:8595/') item_action=<ItemActionEnum.TAG: 'tag'> dsx_connect_url=HttpUrl('http://0.0.0.0:8586/') gcs_bucket='lg-test-01' gcs_prefix='' gcs_recursive=True item_action_move_prefix='dsxconnect-quarantine'.
+2025-05-21 13:36:15,724 INFO     azure_blob_storage_connector.py: azure-blob-storage-connector configuration loaded.
 2025-05-21 13:36:15,724 INFO     azure_blob_storage_connector.py: azure-blob-storage-connector:azure-blob-storage-connector-9788 startup completed.
 2025-05-21 13:36:15,733 INFO     dsx_connector.py    : Connection to dsx-connect at http://0.0.0.0:8586 success.
 INFO:     Application startup complete.

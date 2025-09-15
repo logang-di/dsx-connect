@@ -25,12 +25,22 @@ class ScanResultsSQLiteDB(ScanResultsBaseDB):
             CREATE TABLE IF NOT EXISTS scan_results (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 scan_request_task_id TEXT NOT NULL,
+                scan_job_id TEXT,
                 metadata_tag TEXT,
                 status TEXT NOT NULL,
                 dpa_verdict TEXT  -- Stored as JSON
             )
         ''')
         self.connection.commit()
+        # Best-effort migration for older databases missing scan_job_id
+        try:
+            self.cursor.execute("PRAGMA table_info(scan_results)")
+            cols = [row[1] for row in self.cursor.fetchall()]
+            if 'scan_job_id' not in cols:
+                self.cursor.execute('ALTER TABLE scan_results ADD COLUMN scan_job_id TEXT')
+                self.connection.commit()
+        except Exception:
+            pass
 
     def insert(self, model: ScanResultModel) -> int:
         if self._retain == 0:
@@ -38,12 +48,19 @@ class ScanResultsSQLiteDB(ScanResultsBaseDB):
 
         """Insert a ScanResultModel into the database and return the doc_id."""
         verdict_json = model.verdict.json() if model.verdict else None
+        # Pull scan_job_id from model (preferred) or nested scan_request if available
+        scan_job_id = getattr(model, 'scan_job_id', None)
+        if not scan_job_id:
+            try:
+                scan_job_id = getattr(model.scan_request, 'scan_job_id', None)
+            except Exception:
+                scan_job_id = None
         with self.lock:
             with self.connection:
                 self.cursor.execute('''
-                    INSERT INTO scan_results (scan_request_task_id, metadata_tag, status, dpa_verdict)
-                    VALUES (?, ?, ?, ?)
-                ''', (model.scan_request_task_id, model.metadata_tag, model.status, verdict_json))
+                    INSERT INTO scan_results (scan_request_task_id, scan_job_id, metadata_tag, status, dpa_verdict)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (model.scan_request_task_id, scan_job_id, model.metadata_tag, model.status, verdict_json))
 
 
                 self._check_retain_limit()
@@ -63,7 +80,7 @@ class ScanResultsSQLiteDB(ScanResultsBaseDB):
         with self.lock:
             self.cursor.execute('SELECT * FROM scan_results')
             rows = self.cursor.fetchall()
-        return [self._row_to_model(row) for row in rows]
+            return [self._row_to_model(row) for row in rows]
 
     def find(self, key: str, value) -> Optional[List[ScanResultModel]]:
         query = f"SELECT * FROM scan_results WHERE {key} = ?"
@@ -71,18 +88,31 @@ class ScanResultsSQLiteDB(ScanResultsBaseDB):
         rows = self.cursor.fetchall()
         return [self._row_to_model(row) for row in rows] if rows else None
 
+    def recent(self, limit: int = 200, job_id: Optional[str] = None) -> List[ScanResultModel]:
+        with self.lock:
+            if job_id:
+                self.cursor.execute(
+                    'SELECT * FROM scan_results WHERE scan_job_id = ? ORDER BY id DESC LIMIT ?',
+                    (job_id, int(limit)),
+                )
+            else:
+                self.cursor.execute('SELECT * FROM scan_results ORDER BY id DESC LIMIT ?', (int(limit),))
+            rows = self.cursor.fetchall()
+        return [self._row_to_model(row) for row in rows]
+
     def __len__(self):
         self.cursor.execute('SELECT COUNT(*) FROM scan_results')
         count = self.cursor.fetchone()[0]
         return count
 
     def _row_to_model(self, row):
-        dpa_verdict = json.loads(row[4]) if row[4] else None
+        dpa_verdict = json.loads(row[5]) if row[5] else None
         return ScanResultModel(
             id=row[0],
             scan_request_task_id=row[1],
-            metadata_tag=row[2],
-            status=row[3],
+            scan_job_id=row[2],
+            metadata_tag=row[3],
+            status=row[4],
             verdict=dpa_verdict
         )
 

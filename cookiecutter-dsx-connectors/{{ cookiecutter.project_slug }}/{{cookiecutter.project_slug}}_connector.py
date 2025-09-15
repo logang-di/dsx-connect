@@ -91,6 +91,17 @@ async def full_scan_handler() -> StatusResponse:
     )
 
 
+@connector.preview
+async def preview_provider(limit: int) -> list[str]:
+    """
+    Optional preview provider: return up to N sample item identifiers for the UI.
+    Replace the sample stub with a cheap repository listing (no side-effects).
+    """
+    # Example stub; replace with a repository-specific peek (e.g., list objects/prefix)
+    samples: list[str] = []
+    return samples[: max(0, int(limit))]
+
+
 @connector.item_action
 async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> ItemActionStatusResponse:
     """

@@ -66,6 +66,17 @@ class ScanResultsTinyDB(ScanResultsBaseDB):
 
         return [ScanResultModel(id=result.doc_id, **result) for result in results]
 
+    def recent(self, limit: int = 200, job_id: str | None = None) -> List[ScanResultModel]:
+        items = self.collection.all()
+        if job_id:
+            items = [it for it in items if (it.get('scan_job_id') == job_id) or (
+                isinstance(it.get('scan_request'), dict) and it['scan_request'].get('scan_job_id') == job_id
+            )]
+        # Sort by doc_id descending (newest first)
+        items.sort(key=lambda it: getattr(it, 'doc_id', None) or -1, reverse=True)
+        items = items[: max(1, int(limit))]
+        return [ScanResultModel(id=it.doc_id, **it) for it in items]
+
     def __len__(self) -> int:
         return len(self.collection)  # Use TinyDB's len() for efficient counting
 

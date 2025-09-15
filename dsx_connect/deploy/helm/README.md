@@ -1,6 +1,6 @@
-# DSX-Connect Helm Chart
+# DSX‑Connect Helm Chart
 
-This Helm chart provides a flexible and secure way to deploy the DSX-Connect Azure Blob Storage Connector to a Kubernetes cluster.
+This Helm chart deploys the DSX‑Connect stack (API + workers + Redis + optional Syslog), with an optional in‑cluster DSXA scanner for local testing.
 
 This guide explains the core configuration concepts and details three deployment methods, from a quick local test to a production-grade GitOps workflow.
 
@@ -15,13 +15,24 @@ This guide explains the core configuration concepts and details three deployment
 
 ## Core Configuration Concepts
 
-This umbrella chart deploys the entire DSX-Connect stack. Key configuration areas include:
+This umbrella chart deploys the DSX‑Connect stack. Key configuration areas (mirrors `values.yaml`):
 
-1.  **Global Environment Variables:** Common environment variables shared across most DSX-Connect components (e.g., Redis URLs, database settings, API key).
-2.  **API Server (dsx-connect-api):** Configuration for the main FastAPI server, including TLS settings.
-3.  **Worker Services:** Configuration for the individual Celery worker types (Scan Request, Verdict Action, Results, Notification).
-4.  **Redis:** Configuration for the Redis message broker.
-5.  **Syslog:** Configuration for the optional Syslog server.
+1.  **global.env:** Minimal shared env (e.g., `DSXCONNECT_APP_ENV`, `DSXCONNECTOR_API_KEY`, scanner URL override).
+2.  **global.image:** Optional image defaults inherited by subcharts.
+3.  **global.scanner:** Hints for in‑cluster DSXA discovery (service name/port/scheme) when enabled.
+4.  **dsx-connect-api:** API service and TLS settings; component‑specific env.
+5.  **Worker charts:** Scan Request, Verdict Action, Results, Notification (env + Celery concurrency).
+6.  **redis:** Message broker configuration (enabled by default).
+7.  **syslog:** Optional Syslog service for results.
+8.  **dsxa-scanner:** Optional single‑pod DSXA for local testing (disabled by default).
+
+## Quick Reference (most deployments)
+
+- `global.env.DSXCONNECTOR_API_KEY`: set a non‑default API key for connectors.
+- `global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL`: REQUIRED when `dsxa-scanner.enabled=false` (default); set external DSXA endpoint.
+- `dsx-connect-api.tls.enabled` + `dsx-connect-api.tls.secretName`: enable HTTPS for the API; certs mounted at `tls.mountPath`.
+- `global.image.tag`: pin a specific image version across all components.
+- `dsx-connect-*-worker.celery.concurrency`: adjust worker parallelism per queue.
 
 ---
 
@@ -40,12 +51,18 @@ This method is best for quick, temporary deployments, like for local testing. It
    ```
 
 **2. Deploy the Stack:**
+   *   **Simplest deployment: deploys DSXA scanner and dsx-connect on the same cluster:**
+        Development mode deployment with a local DSXA scanner.  You can change the values in `values-dev.yaml` to match your environment,
+        but, overriding values in the command line allows for flexible deployment.
+       ```bash 
+       helm upgrade --install dsx . -f values-dev.yaml --set dsxa-scanner.enabled=true --set-string global.image.tag=0.2.82
+       ```
 
    *   **For a simple HTTP deployment:**
+        In this case, using the values.yaml (the default), DSXA scanner is not deployed, so the scan binary URL must be set. 
        ```bash
-       helm install dsx-connect . \
-         --set dsx-connect-api.env.LOG_LEVEL=debug \
-         --set global.env.DSXCONNECT_APP_ENV=dev
+       helm install dsx-connect . --set-string global.image.tag=0.2.82 \
+         --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://my-dsxa:5000/scan/binary/v2
        ```
 
    *   **For a TLS-enabled deployment:**
@@ -53,9 +70,19 @@ This method is best for quick, temporary deployments, like for local testing. It
        helm install dsx-connect . \
          --set dsx-connect-api.tls.enabled=true \
          --set dsx-connect-api.tls.secretName=my-dsx-connect-api-tls \
-         --set dsx-connect-api.env.LOG_LEVEL=info \
-         --set global.env.DSXCONNECT_APP_ENV=prod
+         --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://my-dsxa.example.com/scan/binary/v2
        ```
+
+### Production Install (recommended flags)
+
+Use the production defaults in `values.yaml` and set the external DSXA URL explicitly. Also pin the image tag for reproducibility.
+
+```bash
+helm upgrade --install dsx dsx_connect/deploy/helm \
+  -f dsx_connect/deploy/helm/values.yaml \
+  --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://my-dsxa.example.com/scan/binary/v2 \
+  --set-string global.image.tag=0.2.66
+```
 
 ### Method 2: Standard Deployment (Custom Values File)
 
@@ -73,13 +100,16 @@ This is the most common and recommended method for managing deployments. It invo
    ```yaml
    # my-dsx-connect-values.yaml
 
-   # Global settings (optional, passed down if subcharts use .Values.global)
    global:
-     logLevel: info
      env:
        DSXCONNECT_APP_ENV: prod
        DSXCONNECTOR_API_KEY: "your-prod-api-key"
-       DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa-scanner:5000/scan/binary/v2"
+       # REQUIRED when dsxa-scanner.enabled=false (default): point to your external DSXA
+        DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://external-dsxa:5000/scan/binary/v2"
+     scanner:
+       # serviceName: "dsx-connect-dsxa-scanner"  # defaults to "<release>-dsxa-scanner"
+       # port: 5000
+       # scheme: http
 
    dsx-connect-api:
      tls:
@@ -116,6 +146,36 @@ This involves storing environment-specific values files (e.g., `values-prod.yaml
 
 ---
 
+## Packaging & Publishing (Helm)
+
+You have a few good options to distribute this umbrella chart so others can install it with a single Helm command.
+
+- Option A — OCI registry (recommended if you already push Docker images)
+  - Package: `inv helm-package` (outputs `dist/charts/dsx-connect-<ver>.tgz`)
+  - Login: `helm registry login registry-1.docker.io -u <user>`
+  - Push: `inv helm-push-oci --repo=oci://registry-1.docker.io/dsxconnect`
+  - Install: `helm install dsx-connect oci://registry-1.docker.io/dsxconnect/dsx-connect --version <ver> -f values.yaml`
+  - Pros: lives alongside container images, easy auth, immutable versions.
+
+### OCI Install (prewired image tag)
+
+When installing from OCI with `--version X.Y.Z`, the chart at that version is pulled and its `appVersion` is used as the default image tag. In other words, versions are prewired — the Helm chart version selects the matching image tag by default. You can still override via `--set-string global.image.tag=...` if needed.
+
+- Option B — Static Helm repo (e.g., GitHub Pages)
+  - Package: `inv helm-package`
+  - Index: `inv helm-repo-index --base-url=https://<org>.github.io/<repo>/charts`
+  - Publish: upload contents of `dist/charts/` (including `index.yaml`) to your site (e.g., `gh-pages/charts/`)
+  - Use: `helm repo add dsx https://<org>.github.io/<repo>/charts && helm install dsx-connect dsx/dsx-connect --version <ver>`
+  - Pros: public/simple distribution, no auth required.
+
+- Option C — Zip/attach chart in a release bundle
+  - Package: `inv helm-package`; attach tgz to a GitHub release or bundle artifact.
+  - Use: `helm install dsx-connect ./dsx-connect-<ver>.tgz`
+  - Pros: lightweight for ad‑hoc distribution, but no repo metadata.
+
+The Invoke tasks (`inv helm-package`, `inv helm-push-oci`, `inv helm-repo-index`) are provided to standardize the packaging flow. Choose the publishing method that best fits your environment and CI/CD.
+
+
 
 ## Advanced Configuration: Overriding Default Environment Variables
 
@@ -127,7 +187,7 @@ To override a default environment variable, specify it under the `env` section o
 
 *   **`DSXCONNECT_APP_ENV`**: `dev` (used for Celery queue naming)
 *   **`DSXCONNECTOR_API_KEY`**: `api-key-NOT-FOR-PRODUCTION`
-*   **`DSXCONNECT_SCANNER__SCAN_BINARY_URL`**: defaults to `http://<release>-dsxa-scanner:5000/scan/binary/v2` when the bundled DSXA subchart is enabled; otherwise set this to your external DSXA.
+*   **`DSXCONNECT_SCANNER__SCAN_BINARY_URL`**: REQUIRED when `dsxa-scanner.enabled=false` (the default). If you enable `dsxa-scanner`, templates compute `http(s)://<release>-dsxa-scanner:<port>/scan/binary/v2` using `global.scanner`.
 *   **`DSXCONNECT_WORKERS__BROKER`**: `redis://redis:6379/5`
 *   **`DSXCONNECT_WORKERS__BACKEND`**: `redis://redis:6379/6`
 *   **`DSXCONNECT_REDIS_URL`**: `redis://redis:6379/3`
@@ -203,27 +263,17 @@ global:
 
 All other settings have sensible defaults baked into the subcharts’ templates (Redis URLs, DB paths, etc.). You can still override per‑service `env` keys if needed, but typically the defaults are fine.
 
-If you enable the example DSXA subchart, dsx-connect automatically points to `http://<release>-dsxa-scanner:5000/scan/binary/v2` unless you override the scanner URL. If you previously set `DSXCONNECT_SCANNER__SCAN_BINARY_URL`, clear it (set empty) to use the auto value.
+### Scanner Discovery (External vs In‑Cluster)
 
-### DSXA Scanner URL and Overrides
+- Default (external DSXA): `dsxa-scanner.enabled=false` (values default). You must set `global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL` to your DSXA endpoint.
+- In‑cluster (local testing): enable `dsxa-scanner.enabled=true`. API and workers default to `http(s)://<release>-dsxa-scanner:<port>/scan/binary/v2`, guided by `global.scanner` hints (service name/port/scheme). You can still override the env if needed.
 
-By default, when `dsxa-scanner.enabled=true`, services compute the scanner URL from the Helm release name and sane defaults:
+Override examples:
 
-- Default service: `http://<release>-dsxa-scanner:5000/scan/binary/v2`
-- Config knobs (optional) under `global.scanner`:
-  - `global.scanner.serviceName`: override service DNS name
-  - `global.scanner.port`: override port (default `5000`)
-  - `global.scanner.scheme`: override scheme (`http`|`https`, default `http`)
-
-You can also override the URL directly via env if you are pointing to an external DSXA:
-
-- Set globally for all subcharts:
+- All components:
   - `--set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://external-dsxa:5000/scan/binary/v2`
-
-- Or only for the API (example):
+- Only API:
   - `--set-string dsx-connect-api.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://external-dsxa:5000/scan/binary/v2`
-
-If you previously had a hardcoded API value that pointed to `dsxa-scanner` without the release prefix, remove it to fall back to the computed in-cluster service name.
 
 ## Optional: Example DSXA Scanner
 
@@ -246,7 +296,12 @@ You can still override this env if you’re pointing at an external DSXA.
 
 ## Image Version Overrides
 
-The charts default image tag is a placeholder (e.g., `__VERSION__`). Override it at install/upgrade time — no need to edit `values.yaml`.
+How image tags are chosen:
+
+- From local chart path (this repo): templates default to the chart `appVersion` unless you override `global.image.tag` (or per‑subchart `image.tag`).
+- From OCI registry (helm install oci://… --version X.Y.Z): Helm pulls the chart at that version; templates use that chart’s `appVersion` as the default image tag. You can still override with `--set-string global.image.tag=...` if needed.
+
+Override examples (no need to edit `values.yaml`):
 
 - All components (via global image tag):
   - `helm upgrade --install dsx . -f values.yaml --set-string global.image.tag=0.2.66`
@@ -266,3 +321,34 @@ Tip: In CI, drive the tag with a variable, e.g.
 TAG="$(git describe --tags --always)"
 helm upgrade dsx . --reuse-values --set-string global.image.tag="$TAG"
 ```
+
+---
+
+## Appendix: GCP Connector Credentials and Docs
+
+If you plan to deploy the Google Cloud Storage connector, you need credentials unless using GKE Workload Identity.
+
+- Full guide: `connectors/google_cloud_storage/deploy/helm/README.md` (includes SA creation, roles, Secret mounting, and WI).
+
+Quick summary (Service Account key method):
+
+1) Create a GCP service account and grant minimum roles
+   - Read-only scanning: `roles/storage.objectViewer`
+   - Tag/Move/Delete (write ops): `roles/storage.objectAdmin` (or a tighter custom role with `storage.objects.update`, `storage.objects.create`, `storage.objects.delete`, `storage.objects.get`)
+
+2) Create a key and Kubernetes Secret
+   ```bash
+   gcloud iam service-accounts keys create sa.json \
+     --iam-account dsx-gcs-connector@${PROJECT_ID}.iam.gserviceaccount.com
+   kubectl create secret generic gcp-sa --from-file=service-account.json=./sa.json
+   ```
+
+3) Set connector chart values
+   ```yaml
+   gcp:
+     credentialsSecretName: gcp-sa
+   env:
+     DSXCONNECTOR_ASSET: your-bucket
+   ```
+
+For Workload Identity on GKE: omit `gcp.credentialsSecretName` and bind the Kubernetes ServiceAccount to the GCP SA with the required roles.

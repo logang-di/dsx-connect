@@ -69,6 +69,24 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.name | quote }}
                   key: AZURE_STORAGE_CONNECTION_STRING
+          readinessProbe:
+            httpGet:
+              path: /{{ include "azure-blob-storage-connector.name" . }}/readyz
+              port: {{- if .Values.tls.enabled }} https {{ else }} http {{ end }}
+              scheme: {{- if .Values.tls.enabled }} HTTPS {{ else }} HTTP {{ end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /{{ include "azure-blob-storage-connector.name" . }}/healthz
+              port: {{- if .Values.tls.enabled }} https {{ else }} http {{ end }}
+              scheme: {{- if .Values.tls.enabled }} HTTPS {{ else }} HTTP {{ end }}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
           {{- if .Values.tls.enabled }}
           volumeMounts:
             - name: tls-certs

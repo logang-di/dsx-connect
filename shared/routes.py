@@ -25,10 +25,12 @@ class ScanPath(str, Enum):
     REQUEST = "request"
     RESULTS = "results"
     STATS = "stats"
+    JOBS = "jobs"
 
 class NotificationPath(str, Enum):
     CONNECTOR_REGISTERED = "connector-registered"
     SCAN_RESULT = "scan-result"
+    JOB_SUMMARY = "job-summary"
 
 class ConnectorPath(str, Enum):
     LIST_CONNECTORS = "list"
@@ -38,6 +40,7 @@ class ConnectorPath(str, Enum):
     TRIGGER_CONFIG_CONNECTOR = "config/{connector_uuid}"
     TRIGGER_READYZ_CONNECTOR = "readyz/{connector_uuid}"
     TRIGGER_HEALTHZ_CONNECTOR = "healthz/{connector_uuid}"  # Add this line
+    TRIGGER_REPOCHECK_CONNECTOR = "repo_check/{connector_uuid}"
 
 
 class DeadLetterPath(str, Enum):
@@ -58,6 +61,7 @@ class ConnectorAPI(str, Enum):
     FULL_SCAN = "full_scan"
     WEBHOOK_EVENT = "webhook/event"
     REPO_CHECK = "repo_check"
+    ESTIMATE = "estimate"
     CONFIG = "config"
     READYZ = "readyz"
     HEALTHZ = "healthz"

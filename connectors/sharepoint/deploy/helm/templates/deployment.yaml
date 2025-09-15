@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sharepoint-connector.fullname" . }}
+  labels:
+    helm.sh/chart: {{ include "sharepoint-connector.chart" . }}
+    app.kubernetes.io/name: {{ include "sharepoint-connector.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    {{- if .Chart.AppVersion }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+    {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "sharepoint-connector.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "sharepoint-connector.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      {{- if .Values.tls.enabled }}
+      volumes:
+        - name: tls-certs
+          secret:
+            secretName: {{ .Values.tls.secretName | quote }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: {{ toJson .Values.command }}
+          args:
+            - "--port"
+            - "{{- if .Values.tls.enabled -}}{{ .Values.tls.port }}{{- else -}}{{ .Values.service.port }}{{- end -}}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+            {{- if .Values.tls.enabled }}
+            - name: https
+              containerPort: {{ .Values.tls.port }}
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: DSXCONNECTOR_USE_TLS
+              value: {{ .Values.tls.enabled | quote }}
+            - name: DSXCONNECTOR_CONNECTOR_URL
+              value: "{{- if .Values.tls.enabled }}https://{{ else }}http://{{ end }}{{ include "sharepoint-connector.fullname" . }}:{{- if .Values.tls.enabled }}{{ .Values.tls.port }}{{ else }}{{ .Values.service.port }}{{ end }}"
+            # Hardcoded internal defaults (not user-facing)
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            {{ $useTlsStr := (toString (default "" .Values.env.DSXCONNECTOR_USE_TLS)) }}
+            {{ $isTls := eq (lower $useTlsStr) "true" }}
+            {{ $scheme := ternary "https" "http" $isTls }}
+            - name: DSXCONNECTOR_DSX_CONNECT_URL
+              value: {{ (get .Values.env "DSXCONNECTOR_DSX_CONNECT_URL" | default (printf "%s://dsx-connect-api" $scheme)) | quote }}
+            {{- range $key, $val := .Values.env }}
+            {{- if and (ne $key "DSXCONNECTOR_DSX_CONNECT_URL") (ne $key "PYTHONUNBUFFERED") }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- end }}
+            # SharePoint app registration credentials from Secret
+            - name: DSXCONNECTOR_SP_TENANT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: DSXCONNECTOR_SP_TENANT_ID
+            - name: DSXCONNECTOR_SP_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: DSXCONNECTOR_SP_CLIENT_ID
+            - name: DSXCONNECTOR_SP_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.name | quote }}
+                  key: DSXCONNECTOR_SP_CLIENT_SECRET
+          readinessProbe:
+            httpGet:
+              path: /{{ include "sharepoint-connector.name" . }}/readyz
+              port: {{- if .Values.tls.enabled }} https {{ else }} http {{ end }}
+              scheme: {{- if .Values.tls.enabled }} HTTPS {{ else }} HTTP {{ end }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /{{ include "sharepoint-connector.name" . }}/healthz
+              port: {{- if .Values.tls.enabled }} https {{ else }} http {{ end }}
+              scheme: {{- if .Values.tls.enabled }} HTTPS {{ else }} HTTP {{ end }}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          {{- if .Values.tls.enabled }}
+          volumeMounts:
+            - name: tls-certs
+              mountPath: {{ .Values.tls.mountPath | quote }}
+              readOnly: true
+          {{- end }}

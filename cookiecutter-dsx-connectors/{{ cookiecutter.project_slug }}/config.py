@@ -1,7 +1,6 @@
 from pydantic import HttpUrl, Field
-from pydantic_settings import BaseSettings
-from dsx_connect.models.connector_models import ItemActionEnum
 from connectors.framework.base_config import BaseConnectorConfig
+from shared.models.connector_models import ItemActionEnum
 
 class {{ cookiecutter.__package_config_class_name }}(BaseConnectorConfig):
     """
@@ -22,9 +21,12 @@ class {{ cookiecutter.__package_config_class_name }}(BaseConnectorConfig):
     connector_url: HttpUrl = Field(default="http://localhost:{{ cookiecutter.connector_port }}",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
     dsx_connect_url: HttpUrl = Field(default="{{ cookiecutter.__dsx_connect_url }}",
-                                     description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
+                                     description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsx-connect entry point")
     item_action: ItemActionEnum = ItemActionEnum.NOTHING # action to take on files - NOTHING, DELETE, MOVE, TAG, MOVE_TAG
     item_action_move_metainfo: str = "dsxconnect-quarantine"
+
+    # Optional, human-friendly name shown on the dsx-connect UI card
+    display_name: str = ""
 
     # define the asset this connector can perform full scan on... may also be used to filter on access scanning (webhook events)
     asset: str = ""
@@ -56,4 +58,3 @@ class ConfigManager:
 
 
 config = ConfigManager.get_config()
-

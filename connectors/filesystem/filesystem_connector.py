@@ -109,18 +109,38 @@ async def shutdown_event():
 
 
 @connector.full_scan
-async def full_scan_handler() -> StatusResponse:
+async def full_scan_handler(limit: int | None = None) -> StatusResponse:
     dsx_logging.debug(
         f"Scanning files at: {config.asset}, filter='{config.filter}')"
     )
+    count = 0
     async for file_path in get_filepaths_async(
             pathlib.Path(config.asset),
             config.filter):
         status_response = await connector.scan_file_request(
             ScanRequestModel(location=str(file_path), metainfo=file_path.name))
         dsx_logging.debug(f'Sent scan request for {file_path}, result: {status_response}')
+        count += 1
+        if limit and count >= limit:
+            break
+    dsx_logging.info(f"Full scan enqueued {count} item(s) (asset={config.asset}, filter='{config.filter or ''}')")
+    return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.', description=f"enqueued={count}")
 
-    return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
+
+@connector.preview
+async def preview_provider(limit: int) -> list[str]:
+    items: list[str] = []
+    try:
+        base = pathlib.Path(config.asset)
+        i = 0
+        async for file_path in get_filepaths_async(base, config.filter):
+            items.append(str(file_path))
+            i += 1
+            if i >= max(1, limit):
+                break
+    except Exception:
+        pass
+    return items
 
 
 @connector.webhook_event

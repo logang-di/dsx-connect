@@ -16,6 +16,8 @@ and the following API endpoints as applicable:
 - **repo_check:** Request that the connector checks its connectivity to its repository
 - **webhook_event:** Process external webhook events.
 
+Tip: Set `DSXCONNECTOR_DISPLAY_NAME` to show a friendly name on the dsx-connect UI card without changing the connector slug or routes.
+
 ## Running/Testing in an IDE/Debugger
 All connectors can be run from the command-line or via an IDE/Debugger.  In this directory, there is both a start.py
 file and `{{ cookiecutter.project_slug }}_connector.py` script either of which can be use to start the connector.

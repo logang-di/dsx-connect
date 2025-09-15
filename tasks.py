@@ -14,12 +14,14 @@ CONNECTORS_CONFIG = [
     {"name": "azure_blob_storage", "enabled": True},
     {"name": "filesystem", "enabled": True},
     {"name": "google_cloud_storage", "enabled": True},
-    {"name": "sharepoint", "enabled": False},  # example future connector
+    {"name": "sharepoint", "enabled": True},
 ]
 # ---------- /Edit me ----------
 
 # Regex to extract X.Y.Z from a VERSION = "X.Y.Z" line
-VERSION_PATTERN = re.compile(r"VERSION\s*=\s*[\"'](\d+\.\d+\.\d+)[\"']")
+# Match common version constants in version.py files
+# e.g., VERSION = "1.2.3" or DSX_CONNECT_VERSION = "1.2.3" or CONNECTOR_VERSION = "1.2.3"
+VERSION_PATTERN = re.compile(r"(?:VERSION|DSX_CONNECT_VERSION|CONNECTOR_VERSION)\s*=\s*[\"'](\d+\.\d+\.\d+)[\"']")
 
 # Base directories
 PROJECT_ROOT = Path(__file__).parent.resolve()
@@ -35,6 +37,110 @@ def read_version_file(path: Path) -> str:
     if not match:
         raise ValueError(f"No VERSION found in {path}")
     return match.group(1)
+
+
+from connectors.framework.tasks.common import (
+    release_connector_no_bump as _release_connector_no_bump_impl,
+)
+
+# Default OCI Helm repo base (Docker Hub requires namespace-only base; chart name becomes the repo)
+DEFAULT_HELM_REPO = "oci://registry-1.docker.io/dsxconnect"
+
+
+@task
+def release_connector_nobump(c, name: str, repo_uname: str = "dsxconnect"):
+    """Build+push a connector image without bumping version (CI-friendly)."""
+    _release_connector_no_bump_impl(c, project_slug=name, repo_uname=repo_uname)
+
+
+@task
+def helm_release(
+    c,
+    repo: str = DEFAULT_HELM_REPO,
+    only: str = "",
+    skip: str = "",
+    include_core: bool = True,
+    parallel: bool = False,
+    max_workers: int = 4,
+    continue_on_error: bool = True,
+    dry_run: bool = False,
+):
+    """
+    Helm release for the project:
+    - Runs dsx_connect helm-release (unless --include-core=false).
+    - Runs each selected connector's helm-release.
+
+    Examples:
+      inv helm-release                      # core + all enabled connectors
+      inv helm-release --only=azure_blob_storage,filesystem
+      inv helm-release --skip=google_cloud_storage
+      inv helm-release --repo=oci://registry-1.docker.io/dsxconnect
+    """
+    import os as _os
+    if include_core:
+        print("=== Helm release: core (dsx_connect) ===")
+        repo = repo or _os.environ.get("HELM_REPO", DEFAULT_HELM_REPO)
+        core_cmd = f"invoke helm-release --repo={repo}"
+        code = _run(c, core_cmd, cwd=PROJECT_ROOT / "dsx_connect", dry_run=dry_run)
+        if code != 0:
+            raise Exit(code)
+
+    chosen = _configured_names(include_disabled=False)
+    if only:
+        wanted = {n.strip() for n in only.split(",") if n.strip()}
+        unknown = wanted - set(_configured_names(include_disabled=True))
+        if unknown:
+            raise Exit(f"Unknown connector(s) in --only: {', '.join(sorted(unknown))}", code=2)
+        chosen = [n for n in chosen if n in wanted]
+    if skip:
+        banned = {n.strip() for n in skip.split(",") if n.strip()}
+        unknown = banned - set(_configured_names(include_disabled=True))
+        if unknown:
+            raise Exit(f"Unknown connector(s) in --skip: {', '.join(sorted(unknown))}", code=2)
+        chosen = [n for n in chosen if n not in banned]
+
+    if not chosen:
+        print("[helm-release] No connectors selected.")
+        return
+
+    print("=== Helm release: connectors ===")
+    # Build work list, skipping connectors without a Helm chart directory
+    work: list[tuple[str, str]] = []
+    for n in chosen:
+        chart_dir = CONNECTORS_DIR / n / "deploy" / "helm"
+        if not chart_dir.exists():
+            print(f"[helm-release] Skipping {n}: no Helm chart dir at {chart_dir}")
+            continue
+        eff_repo = repo or _os.environ.get("HELM_REPO", DEFAULT_HELM_REPO)
+        cmd = f"invoke helm-release --repo={eff_repo}"
+        work.append((n, cmd))
+    errors: list[tuple[str, int]] = []
+
+    def _do(n: str, cmd: str) -> tuple[str, int]:
+        code = _run(c, cmd, cwd=CONNECTORS_DIR / n, dry_run=dry_run)
+        return (n, code)
+
+    if parallel:
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {ex.submit(_do, n, cmd): n for n, cmd in work}
+            for fut in as_completed(futures):
+                n, code = fut.result()
+                if code != 0:
+                    print(f"[helm-release] FAILED: {n} (exit {code})")
+                    errors.append((n, code))
+                    if not continue_on_error:
+                        raise Exit(code)
+    else:
+        for n, cmd in work:
+            _, code = _do(n, cmd)
+            if code != 0:
+                errors.append((n, code))
+                if not continue_on_error:
+                    raise Exit(code)
+
+    if errors:
+        bad = ", ".join([f"{n}:{code}" for n, code in errors])
+        raise Exit(f"Some helm releases failed: {bad}", code=1)
 
 
 @task
@@ -227,6 +333,8 @@ def release_all(
         parallel=parallel,
         dry_run=dry_run,
     )
+    # After image releases, perform Helm releases for core + selected connectors
+    helm_release(c, only=only, skip=skip, include_core=True, parallel=parallel, dry_run=dry_run)
 
 
 @task(pre=[generate_manifest])
@@ -241,11 +349,18 @@ def bundle(c):
         dsxa_compose_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "docker-compose-dsxa.yaml"
         readme_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "README.md"
         target_dir.mkdir(parents=True, exist_ok=True)
-        c.run(f"cp -f {core_compose_src_l} {target_dir}/docker-compose-dsx-connect-all-services.yaml")
-        c.run(f"cp -f {dsxa_compose_src_l} {target_dir}/docker-compose-dsxa.yaml")
-        c.run(f"cp -f {readme_src_l} {target_dir}/README.md")
+        # Create a docker/ folder and copy compose + README there
+        docker_dir = target_dir / "docker"
+        docker_dir.mkdir(parents=True, exist_ok=True)
+        c.run(f"cp -f {core_compose_src_l} {docker_dir}/docker-compose-dsx-connect-all-services.yaml")
+        c.run(f"cp -f {dsxa_compose_src_l} {docker_dir}/docker-compose-dsxa.yaml")
+        c.run(f"cp -f {readme_src_l} {docker_dir}/README.md")
         # Append bundle quickstart to README
         _append_bundle_readme(target_dir / "README.md")
+        # Copy core Helm chart (raw files) into the bundle
+        core_helm_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "helm"
+        if core_helm_src_l.exists():
+            c.run(f"mkdir -p {target_dir}/helm && rsync -av {core_helm_src_l}/ {target_dir}/helm/")
         # Copy helper scripts and Makefile from the core export if present
         core_scripts_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "scripts"
         core_makefile_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "Makefile"
@@ -263,16 +378,34 @@ def bundle(c):
                 if not version_file.exists():
                     continue
                 version = read_version_file(version_file)
-                compose_src = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}" / f"docker-compose-{connector_name}.yaml"
-                readme_src_conn = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}" / f"README.md"
-                if not compose_src.exists():
-                    print(f"Warning: compose file not found for {name}: {compose_src}")
+                export_dir = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}"
+                compose_primary = export_dir / f"docker-compose-{connector_name}.yaml"
+                readme_src_conn = export_dir / "README.md"
+                if not export_dir.exists():
+                    print(f"Warning: export dir not found for {name}: {export_dir}")
                     continue
                 dest_dir = target_dir / f"{connector_name}-{version}"
                 dest_dir.mkdir(parents=True, exist_ok=True)
-                c.run(f"cp -f {compose_src} {dest_dir}/{compose_src.name}")
+                # Create docker/ folder for each connector bundle
+                conn_docker_dir = dest_dir / "docker"
+                conn_docker_dir.mkdir(parents=True, exist_ok=True)
+                # Copy primary compose if present (into docker/ only)
+                if compose_primary.exists():
+                    c.run(f"cp -f {compose_primary} {conn_docker_dir}/{compose_primary.name}")
+                else:
+                    print(f"Warning: primary compose not found for {name}: {compose_primary}")
+                # Copy any additional compose variants (e.g., NFS examples) to docker/
+                for f in export_dir.glob("docker-compose-*.yaml"):
+                    if f.name == compose_primary.name:
+                        continue
+                    c.run(f"cp -f {f} {conn_docker_dir}/{f.name}")
+                # Copy connector README if present (to docker/ only)
                 if readme_src_conn.exists():
-                    c.run(f"cp -f {readme_src_conn} {dest_dir}/README.md")
+                    c.run(f"cp -f {readme_src_conn} {conn_docker_dir}/README.md")
+                # Copy connector Helm chart (raw files) into the bundle
+                conn_helm_src = export_dir / "helm"
+                if conn_helm_src.exists():
+                    c.run(f"mkdir -p {dest_dir}/helm && rsync -av {conn_helm_src}/ {dest_dir}/helm/")
 
     # Emit to versioned and latest bundle directories
     core_version = read_version_file(CORE_VERSION_FILE)
@@ -332,14 +465,17 @@ def bundle_usetls(c):
         PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}",
         PROJECT_ROOT / DEPLOYMENT_DIR / "dsx-connect-latest",
     ]:
-        core_compose = bundle_dir / "docker-compose-dsx-connect-all-services.yaml"
-        if core_compose.exists():
-            _enable_core_tls(core_compose)
+        # Prefer docker/ compose paths; also update root if present for back-compat
+        for core_compose in [bundle_dir / "docker" / "docker-compose-dsx-connect-all-services.yaml",
+                             bundle_dir / "docker-compose-dsx-connect-all-services.yaml"]:
+            if core_compose.exists():
+                _enable_core_tls(core_compose)
         # connectors under the bundle
         if bundle_dir.exists():
             for sub in bundle_dir.iterdir():
                 if sub.is_dir():
-                    for f in sub.glob("docker-compose-*-connector.yaml"):
+                    # Update any connector compose files (search recursively to include docker/)
+                    for f in sub.rglob("docker-compose-*-connector.yaml"):
                         _enable_connector_tls(f)
 
         # Ensure README has bundle quickstart
@@ -361,23 +497,16 @@ def _append_bundle_readme(path: Path):
     if "Bundle Quickstart" in content:
         return
     quickstart = f"""{section_title}
-Run the following from this bundle directory (or use Makefile targets):
+Run the following from this bundle directory.
 
-- Up: `./scripts/stack-up.sh`  (auto-detects this folder)
-- Status: `./scripts/stack-status.sh`
-- Down: `./scripts/stack-down.sh`
+- Up (dsx-connect):
+  - `docker compose -p $(basename $(pwd)) -f docker/docker-compose-dsx-connect-all-services.yaml up -d`
+- Up (with local DSXA too, if included):
+  - `docker compose -p $(basename $(pwd)) -f docker/docker-compose-dsxa.yaml -f docker/docker-compose-dsx-connect-all-services.yaml up -d`
+- Up (a connector):
+  - `docker compose -p $(basename $(pwd)) -f <connector-dir>/docker/docker-compose-<connector>.yaml up -d`
 
-Filters and project name
-- Only specific connectors: `./scripts/stack-up.sh --only=filesystem,aws-s3`
-- Skip connectors: `./scripts/stack-down.sh --skip=sharepoint`
-- Stable compose project name: `PROJECT_NAME=dsx-fullstack ./scripts/stack-up.sh`
-
-TLS toggles for status checks
-- Self-signed (skip verify): `DSXCONNECT_USE_TLS=true CONNECTOR_USE_TLS=true ./scripts/stack-status.sh`
-- Verify with a CA: `CURL_INSECURE=false DSXCONNECT_USE_TLS=true DSXCONNECT_CA_BUNDLE=certs/dev.localhost.crt CONNECTOR_USE_TLS=true CONNECTOR_CA_BUNDLE=certs/dev.localhost.crt ./scripts/stack-status.sh`
-
-Makefile shortcuts
-- `make up` / `make status` / `make down`  (optional `BUNDLE=...` if running outside)
-- Filters via env: `CONNECTORS_ONLY=filesystem,aws-s3 make up`
+Stop everything:
+- `docker compose -p $(basename $(pwd)) down`
 """
     path.write_text(content + quickstart)

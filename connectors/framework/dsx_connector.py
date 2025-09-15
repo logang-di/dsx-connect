@@ -1,7 +1,10 @@
 import asyncio
 import inspect
+import contextvars
+import uuid
 
 from random import random
+from typing import Any
 from contextlib import asynccontextmanager
 from fastapi.encoders import jsonable_encoder
 from fastapi import FastAPI, APIRouter, Request, BackgroundTasks, Depends, HTTPException, Security
@@ -21,6 +24,10 @@ from shared.models.connector_api_key import APIKeySettings
 from connectors.framework.connector_id import get_or_create_connector_uuid
 import httpx
 from shared.routes import ConnectorAPI
+
+# Context variable to propagate a scan job id during full_scan
+_SCAN_JOB_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("scan_job_id", default=None)
+_SCAN_ENQ_COUNTER: contextvars.ContextVar[int] = contextvars.ContextVar("scan_enq_counter", default=0)
 
 # Read API key if available from environment settings (via Pydantic's BaseSettings).
 # An empty or unset DSXCONNECTOR_API_KEY means no API key enforcement is desired.
@@ -55,6 +62,38 @@ async def validate_api_key(api_key: Optional[str] = Security(api_key_header)):
 connector_api = None
 
 
+def _sanitize_display_icon(raw: str | None) -> str | None:
+    """Best-effort server-side validation for connector display_icon.
+
+    - Limit length to 8KB
+    - Allow only data URIs that begin with "data:image"
+    - Allow raw <svg ...> markup but reject obvious dangerous patterns:
+      script tags, event handlers, foreignObject, and http(s) external refs.
+    Returns a safe string or None to drop.
+    """
+    if not raw:
+        return None
+    v = str(raw).strip()
+    if not v:
+        return None
+    if len(v) > 8192:
+        return None
+    lower = v.lower()
+    if lower.startswith("data:image"):
+        return v
+    if lower.startswith("<svg"):
+        bad_tokens = (
+            "<script", "onload=", "onerror=", "foreignobject", "<iframe",
+            "xlink:href=\"http", "xlink:href='http", "href=\"http", "href='http",
+            "url(http", "url(https"
+        )
+        if any(t in lower for t in bad_tokens):
+            return None
+        return v
+    # Anything else is rejected
+    return None
+
+
 class DSXConnector:
     def __init__(self, connector_config: BaseConnectorConfig):
         self.connector_id = connector_config.name
@@ -68,12 +107,15 @@ class DSXConnector:
 
         self.connector_running_model = ConnectorInstanceModel(
             name=connector_config.name,
+            display_name=(connector_config.display_name or None),
+            display_icon=_sanitize_display_icon(getattr(connector_config, "display_icon", None) or None),
             uuid=uuid,
             # IMPORTANT: expose the connector under "<base>/<name>"
             url=f'{str(connector_config.connector_url).rstrip("/")}/{self.connector_id}',
             status=ConnectorStatusEnum.STARTING,
             item_action_move_metainfo=connector_config.item_action_move_metainfo,
             asset=connector_config.asset,
+            asset_display_name=getattr(connector_config, 'asset_display_name', None) or None,
             filter=connector_config.filter
         )
 
@@ -89,6 +131,10 @@ class DSXConnector:
         self.repo_check_connection_handler: Optional[Callable[[], bool | Awaitable[bool]]] = None
 
         self.config_handler: Optional[Callable[[ConnectorInstanceModel], Awaitable[ConnectorInstanceModel]]] = None
+        # Optional preview provider: returns up to N sample item identifiers
+        self.preview_provider: Optional[Callable[[int], Awaitable[list[str]]]] = None
+        # Optional estimate provider: returns {"count": int|None, "confidence": "exact"|"unknown"}
+        self.estimate_provider: Optional[Callable[[], Awaitable[dict]]] = None
         self._reg_retry_task: asyncio.Task | None = None
         # --- heartbeat (refreshes presence/TTL via register endpoint) ---
         self._hb_task: asyncio.Task | None = None
@@ -189,6 +235,16 @@ class DSXConnector:
         self.config_handler = func
         return func
 
+    def preview(self, func: Callable[[int], Awaitable[list[str]]]):
+        """Register a function to return up to N preview items (strings)."""
+        self.preview_provider = func
+        return func
+
+    def estimate(self, func: Callable[[], Awaitable[dict]]):
+        """Register a function to return an estimate dict {count, confidence}."""
+        self.estimate_provider = func
+        return func
+
     # ----------------- helpers -----------------
 
     def _start_retry_loop(self):
@@ -206,13 +262,47 @@ class DSXConnector:
         self._reg_retry_task = None
 
     async def _safe_repo_check_ok(self) -> bool:
-        """Run repo check if provided; accept sync or async; default True if no handler."""
+        """
+        Run repo check if provided; accept sync/async and multiple return shapes.
+
+        Supported return types from connector @repo_check handler:
+        - bool: True/False directly
+        - StatusResponse: success => True, error => False
+        - dict-like: interpreted if it contains a "status" field equal to "success"
+
+        Defaults to True when no handler is registered.
+        """
         if not self.repo_check_connection_handler:
             return True
         try:
             res = self.repo_check_connection_handler()
             if inspect.isawaitable(res):
                 res = await res  # type: ignore[assignment]
+
+            # Normalize common return types to a boolean
+            try:
+                from shared.models.status_responses import StatusResponse, StatusResponseEnum  # local import
+            except Exception:  # pragma: no cover - defensive
+                StatusResponse = None  # type: ignore
+                StatusResponseEnum = None  # type: ignore
+
+            # 1) Explicit bool
+            if isinstance(res, bool):
+                return res
+
+            # 2) Pydantic StatusResponse
+            if StatusResponse is not None and isinstance(res, StatusResponse):
+                try:
+                    return res.status == StatusResponseEnum.SUCCESS  # type: ignore[union-attr]
+                except Exception:
+                    return False
+
+            # 3) dict-like with a status field
+            if isinstance(res, dict):
+                status = str(res.get("status", "")).lower()
+                return status == "success"
+
+            # 4) Fallback to truthiness (legacy); be conservative
             return bool(res)
         except Exception as e:
             dsx_logging.warning(f"repo_check raised error: {e}")
@@ -225,6 +315,17 @@ class DSXConnector:
             return StatusResponse(status=StatusResponseEnum.NOTHING, description="Quarantine path", message=f"Skip {scan_request.location}")
         scan_request.connector = self.connector_running_model
         scan_request.connector_url = self.connector_running_model.url
+        # Ensure scan_job_id is set: use context from full_scan, else generate per-request id (e.g., webhook event)
+        if not getattr(scan_request, "scan_job_id", None):
+            job_ctx = _SCAN_JOB_ID.get()
+            scan_request.scan_job_id = job_ctx or str(uuid.uuid4())
+        # If in a full-scan job, increment the job enqueue counter
+        try:
+            if _SCAN_JOB_ID.get() == scan_request.scan_job_id:
+                c = _SCAN_ENQ_COUNTER.get()
+                _SCAN_ENQ_COUNTER.set(c + 1)
+        except Exception:
+            pass
         try:
             async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.SCAN_PREFIX, ScanPath.REQUEST)
@@ -357,8 +458,12 @@ class DSXAConnectorRouter(APIRouter):
         self.get(route_path(ConnectorAPI.REPO_CHECK.value),
                  description="Check repository connectivity")(self.get_repo_check)
 
+        # Optional estimation endpoint: returns count preflight if supported by connector.
+        self.get(route_path(ConnectorAPI.ESTIMATE.value),
+                 description="Estimate item count (exact or unknown)")(self.get_estimate)
+
         self.post(route_path(ConnectorAPI.WEBHOOK_EVENT.value),
-                  description="Handle inbound webhook")(self.post_handle_webhook_event)
+                 description="Handle inbound webhook")(self.post_handle_webhook_event)
 
         self.get(route_path(ConnectorAPI.CONFIG.value),
                  description="Connector configuration")(self.get_config)
@@ -392,13 +497,74 @@ class DSXAConnectorRouter(APIRouter):
                                         message="No handler registered for quarantine_action",
                                         description="Add a decorator (ex: @connector.item_action) to handle item_action requests")
 
-    async def post_full_scan(self, background_tasks: BackgroundTasks) -> StatusResponse:
+    async def _run_full_scan(self, limit: int | None, job_id: str):
+        """Run connector full_scan handler within a scan-job context."""
+        token = _SCAN_JOB_ID.set(job_id)
+        ctoken = _SCAN_ENQ_COUNTER.set(0)
+        try:
+            handler = self._connector.full_scan_handler
+            if not handler:
+                return
+            # Call with limit if supported
+            try:
+                params = inspect.signature(handler).parameters
+                if 'limit' in params:
+                    await handler(limit)  # type: ignore[misc]
+                else:
+                    await handler()  # type: ignore[misc]
+            except ValueError:
+                # Fallback: call without inspection
+                await handler()  # type: ignore[misc]
+        except Exception as e:
+            dsx_logging.error(f"full_scan background task error: {e}", exc_info=True)
+        finally:
+            try:
+                _SCAN_JOB_ID.reset(token)
+            except Exception:
+                pass
+            # Best-effort: report enqueue_done with enqueued_total to dsx-connect
+            try:
+                enq_total = int(_SCAN_ENQ_COUNTER.get())
+            except Exception:
+                enq_total = -1
+            try:
+                async with httpx.AsyncClient(verify=self._httpx_verify) as client:
+                    url = service_url(self.dsx_connect_url, API_PREFIX_V1,
+                                      DSXConnectAPI.SCAN_PREFIX, ScanPath.JOBS, job_id, 'enqueue_done')
+                    payload: dict[str, Any] = {}
+                    if enq_total >= 0:
+                        payload = {"enqueued_total": enq_total}
+                    resp = await client.post(url, json=payload)
+                    dsx_logging.info(f"enqueue_done posted job={job_id} enqueued_total={enq_total} status={resp.status_code}")
+            except Exception:
+                pass
+            try:
+                _SCAN_ENQ_COUNTER.reset(ctoken)
+            except Exception:
+                pass
+
+    async def post_full_scan(self, request: Request, background_tasks: BackgroundTasks) -> StatusResponse:
+        # Optional limit=N query to enqueue a small sample for testing
+        limit_q = request.query_params.get("limit")
+        try:
+            limit = int(limit_q) if limit_q is not None else None
+            if limit is not None and limit < 1:
+                limit = 1
+        except Exception:
+            limit = None
+
         if self._connector.full_scan_handler:
-            background_tasks.add_task(self._connector.full_scan_handler)
+            # Allow caller to provide job_id, else generate a new one
+            job_id = request.query_params.get("job_id") or str(uuid.uuid4())
+            # Schedule within the running event loop to avoid threadpool/no-loop issues
+            asyncio.create_task(self._run_full_scan(limit, job_id))
             return StatusResponse(
                 status=StatusResponseEnum.SUCCESS,
                 message="Full scan initiated",
-                description="The scan is running in the background."
+                description=(
+                    "The scan is running in the background. "
+                    f"job_id={job_id}{f' limit={limit}' if limit else ''}"
+                )
             )
         return StatusResponse(status=StatusResponseEnum.ERROR,
                               message="No handler registered for full_scan",
@@ -435,12 +601,55 @@ class DSXAConnectorRouter(APIRouter):
             status_code=501,
         )
 
-    async def get_repo_check(self) -> StatusResponse:
+    async def get_repo_check(self, request: Request) -> StatusResponse:
+        # Optional preview query (?preview=N) for a non-destructive sample listing
+        try:
+            limit_q = request.query_params.get("preview")
+            preview_limit = max(0, int(limit_q)) if limit_q is not None else 0
+        except Exception:
+            preview_limit = 0
+
+        # Base connectivity result
+        dsx_logging.debug(f"repo_check called (preview={preview_limit})")
         if self._connector.repo_check_connection_handler:
-            return await self._connector.repo_check_connection_handler()
-        return StatusResponse(status=StatusResponseEnum.ERROR,
-                              message="No event handler registered for repo_check",
-                              description="Add a decorator (ex: @connector.repo_check) to handle repo check requests")
+            res = self._connector.repo_check_connection_handler()
+            if inspect.isawaitable(res):
+                res = await res  # type: ignore
+            status = res if isinstance(res, StatusResponse) else StatusResponse(
+                status=StatusResponseEnum.SUCCESS if bool(res) else StatusResponseEnum.ERROR,
+                message="Repository connectivity success" if bool(res) else "Repository connectivity failed"
+            )
+        else:
+            status = StatusResponse(status=StatusResponseEnum.ERROR,
+                                    message="No event handler registered for repo_check",
+                                    description="Add a decorator (ex: @connector.repo_check) to handle repo check requests")
+
+        # Attach preview (no scanning side-effects)
+        provider = self._connector.preview_provider
+        if preview_limit and provider is not None:
+            try:
+                items = await provider(preview_limit)
+                status.preview = items[:preview_limit]
+                status.description = (status.description + ' | ' if status.description else '') + f"preview={len(status.preview)}"
+            except Exception as e:
+                dsx_logging.warning(f"preview provider failed: {e}")
+        return status
+
+    async def get_estimate(self, request: Request) -> dict:
+        """
+        Default count estimate: unknown. Connectors can override by providing a provider
+        on the connector instance (estimate_provider) that returns
+        {"count": int | None, "confidence": "exact" | "unknown"}.
+        """
+        try:
+            provider = getattr(self._connector, "estimate_provider", None)
+            if provider is not None:
+                out = await provider()
+                if isinstance(out, dict) and "confidence" in out and "count" in out:
+                    return out
+        except Exception:
+            pass
+        return {"count": None, "confidence": "unknown"}
 
     async def post_handle_webhook_event(self, request: Request):
         if self._connector.webhook_handler:

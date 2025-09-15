@@ -57,7 +57,7 @@ async def shutdown_event():
 
 
 @connector.full_scan
-async def full_scan_handler() -> StatusResponse:
+async def full_scan_handler(limit: int | None = None) -> StatusResponse:
     """
     Full Scan handler for the DSX Connector.
 
@@ -91,6 +91,7 @@ async def full_scan_handler() -> StatusResponse:
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
     # Enumerate all keys in the container (optionally optimized later) and apply rsync-like filter
+    count = 0
     for blob in abs_client.keys(config.asset, filter_str=config.filter):
         key = blob['Key']
         # Final guard to ensure exact parity with rsync rules
@@ -99,7 +100,11 @@ async def full_scan_handler() -> StatusResponse:
         full_path = f"{config.asset}/{key}"
         await connector.scan_file_request(ScanRequestModel(location=key, metainfo=full_path))
         dsx_logging.debug(f"Sent scan request for {full_path}")
-    return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.')
+        count += 1
+        if limit and count >= limit:
+            break
+    dsx_logging.info(f"Full scan enqueued {count} item(s) (asset={config.asset}, filter='{config.filter or ''}')")
+    return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.', description=f"enqueued={count}")
 
 
 @connector.item_action
@@ -212,6 +217,24 @@ async def repo_check_handler() -> StatusResponse:
         return StatusResponse(status=StatusResponseEnum.SUCCESS,
                               message=f"Connection to {config.asset} successful.")
     return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.asset} failed.")
+
+
+@connector.preview
+async def preview_provider(limit: int) -> list[str]:
+    items: list[str] = []
+    try:
+        for blob in abs_client.keys(config.asset, filter_str=config.filter):
+            key = blob.get('Key')
+            if not key:
+                continue
+            if config.filter and not relpath_matches_filter(key, config.filter):
+                continue
+            items.append(f"{config.asset}/{key}")
+            if len(items) >= max(1, limit):
+                break
+    except Exception:
+        pass
+    return items
 
 
 @connector.webhook_event

@@ -1,0 +1,62 @@
+replicaCount: 1
+
+image:
+  repository: dsxconnect/filesystem-connector
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart AppVersion.
+  tag: ""
+  # Note: When installing this chart from an OCI registry with --version=X.Y.Z,
+  # the default image tag will be that chart's appVersion.
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+tls:
+  enabled: false
+  port: 443
+  # The name of the k8s secret that contains the TLS certificate and key
+  secretName: ""
+  mountPath: "/app/certs"
+
+env:
+  LOG_LEVEL: "debug"
+  # Optional friendly display name shown in the dsx-connect UI card
+  # DSXCONNECTOR_DISPLAY_NAME: "TrueNAS Connector"
+  DSXCONNECTOR_TLS_CERTFILE: "/app/certs/tls.crt"
+  DSXCONNECTOR_TLS_KEYFILE: "/app/certs/tls.key"
+  # Outbound TLS verification to dsx-connect
+  # DSXCONNECTOR_VERIFY_TLS: "true"
+  # DSXCONNECTOR_CA_BUNDLE: "/app/certs/ca.pem"
+  # DSXCONNECTOR_DSX_CONNECT_URL: "https://my-dsx-connect.example.com"
+  # Only override this if the connector is NOT deployed in the same cluster
+  # as dsx-connect API. By default, the chart computes:
+  #   - http://dsx-connect-api  (when DSXCONNECTOR_USE_TLS != true)
+  #   - https://dsx-connect-api (when DSXCONNECTOR_USE_TLS == true)
+  DSXCONNECTOR_ITEM_ACTION: "nothing"         # nothing, delete, tag, move, move_tag
+  DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "/app/quarantine"
+  # DSXCONNECTOR_ASSET is set automatically from scanVolume.mountPath when scanVolume.enabled=true.
+  # Do not override unless you know what you're doing.
+  DSXCONNECTOR_ASSET: "/app/scan_folder"
+  DSXCONNECTOR_FILTER: ""                     # optional filter expression
+  DSXCONNECTOR_SCAN_BY_PATH: "False"
+
+scanVolume:
+  enabled: false
+  # Path inside the container where the volume will be mounted.
+  mountPath: "/app/scan_folder"
+  # Provide one of the following sources (prefer PVC in production):
+  existingClaim: ""   # Name of an existing PersistentVolumeClaim
+  hostPath: ""        # Node path for development only (e.g., /mnt/data)
+  readOnly: false
+  subPath: ""         # Optional subPath within the volume
+
+command:
+  - "python"
+  - "connectors/filesystem/start.py"
+  - "--workers"
+  - "1"
