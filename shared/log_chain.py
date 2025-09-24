@@ -2,6 +2,7 @@ import logging
 import logging.handlers
 import json
 import socket
+import ssl
 from datetime import datetime
 
 from typing import Optional
@@ -27,25 +28,108 @@ syslog_logger.setLevel(logging.INFO)  # Only INFO or above go to syslog
 _syslog_handler: Optional[logging.Handler] = None
 
 
-def init_syslog_handler(syslog_host: str = "localhost", syslog_port: int = 514):
-    """Initialize the syslog handler for the worker process."""
+class TLSSysLogHandler(logging.Handler):
+    """Minimal TLS syslog handler using newline-delimited framing.
+
+    Note: Many servers accept LF-delimited frames; for strict RFC6587 octet-counting,
+    this can be extended to prefix the length. This implementation aims for practicality.
+    """
+
+    def __init__(self, host: str, port: int, *,
+                 ca_file: str | None = None,
+                 cert_file: str | None = None,
+                 key_file: str | None = None,
+                 insecure: bool = False):
+        super().__init__()
+        self.host = host
+        self.port = port
+        ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH, cafile=ca_file if ca_file else None)
+        if insecure:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        if cert_file and key_file:
+            ctx.load_cert_chain(certfile=cert_file, keyfile=key_file)
+        self._ctx = ctx
+        self._sock: ssl.SSLSocket | None = None
+        self._connect()
+
+    def _connect(self):
+        try:
+            raw = socket.create_connection((self.host, self.port), timeout=5.0)
+            self._sock = self._ctx.wrap_socket(raw, server_hostname=self.host)
+        except Exception:
+            self._sock = None
+
+    def emit(self, record: logging.LogRecord) -> None:
+        msg = self.format(record)
+        data = (msg + "\n").encode("utf-8", errors="ignore")
+        if not self._sock:
+            self._connect()
+        if not self._sock:
+            return
+        try:
+            self._sock.sendall(data)
+        except Exception:
+            # reconnect once
+            try:
+                if self._sock:
+                    self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+            self._connect()
+            if self._sock:
+                try:
+                    self._sock.sendall(data)
+                except Exception:
+                    pass
+
+
+def init_syslog_handler(syslog_host: str = "localhost", syslog_port: int = 514,
+                        transport: str = "udp",
+                        tls_ca: str | None = None,
+                        tls_cert: str | None = None,
+                        tls_key: str | None = None,
+                        tls_insecure: bool = False):
+    """Initialize the syslog handler for the worker process.
+
+    transport: 'udp' (default), 'tcp', or 'tls'
+    """
     global _syslog_handler
     if _syslog_handler:
         return   # already initialized
 
     try:
-        _syslog_handler = logging.handlers.SysLogHandler(
-            address=(syslog_host, syslog_port),
-            facility=logging.handlers.SysLogHandler.LOG_LOCAL0,
-            socktype=socket.SOCK_DGRAM  # UDP for syslog
-        )
+        if transport.lower() == "udp":
+            _syslog_handler = logging.handlers.SysLogHandler(
+                address=(syslog_host, syslog_port),
+                facility=logging.handlers.SysLogHandler.LOG_LOCAL0,
+                socktype=socket.SOCK_DGRAM
+            )
+        elif transport.lower() == "tcp":
+            _syslog_handler = logging.handlers.SysLogHandler(
+                address=(syslog_host, syslog_port),
+                facility=logging.handlers.SysLogHandler.LOG_LOCAL0,
+                socktype=socket.SOCK_STREAM
+            )
+        elif transport.lower() == "tls":
+            _syslog_handler = TLSSysLogHandler(
+                host=syslog_host,
+                port=syslog_port,
+                ca_file=tls_ca,
+                cert_file=tls_cert,
+                key_file=tls_key,
+                insecure=bool(tls_insecure),
+            )
+        else:
+            raise ValueError(f"Unsupported syslog transport: {transport}")
         _syslog_handler.setFormatter(logging.Formatter('%(message)s'))
         syslog_logger.addHandler(_syslog_handler)
 
         # Emit the initial “workers initialized” message to remote syslog
         syslog_logger.info("dsx-connect-workers initialized to use syslog")
 
-        dsx_logging.info(f"Initialized syslog handler for {syslog_host}:{syslog_port}")
+        dsx_logging.info(f"Initialized syslog handler for {syslog_host}:{syslog_port} transport={transport}")
     except Exception as e:
         dsx_logging.error(f"Failed to initialize syslog handler: {e}")
 
@@ -72,10 +156,30 @@ def log_verdict_chain(
         return False
 
     try:
+        # Derive optional fields for easier downstream parsing
+        try:
+            job_id = getattr(scan_result, "scan_job_id", None) or (
+                getattr(getattr(scan_result, "scan_request", None), "scan_job_id", None)
+            )
+        except Exception:
+            job_id = None
+        try:
+            status = getattr(scan_result, "status", None)
+        except Exception:
+            status = None
+        try:
+            rid = getattr(scan_result, "id", None)
+        except Exception:
+            rid = None
+
         log_data = {
             "scan_request_task_id": scan_request_task_id,
             "final_task_id": current_task_id,
             "timestamp": datetime.utcnow().isoformat(),
+            "event": "scan_result",
+            "job_id": job_id,
+            "status": status,
+            "id": rid,
             "scan_request": scan_result.scan_request.model_dump(),
             "verdict": scan_result.verdict.model_dump(),
             "item_action": scan_result.item_action.model_dump()

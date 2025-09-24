@@ -51,19 +51,26 @@ class DatabaseConfig(BaseSettings):
 
 class ScannerConfig(BaseSettings):
     model_config = SettingsConfigDict(env_nested_delimiter="__")
-    scan_binary_url: str = "http://0.0.0.0:8080/scan/binary/v2"
+    scan_binary_url: str = "http://0.0.0.0:5000/scan/binary/v2"
 
 
 class SyslogConfig(BaseSettings):
     model_config = SettingsConfigDict(env_nested_delimiter="__")
     syslog_server_url: str = "127.0.0.1"
     syslog_server_port: int = 514
+    # transport: udp | tcp | tls
+    transport: str = "udp"
+    # TLS options (used when transport == 'tls')
+    tls_ca_file: str | None = None
+    tls_cert_file: str | None = None
+    tls_key_file: str | None = None
+    tls_insecure: bool = False
 
 
 class CeleryTaskConfig(BaseSettings):
     model_config = SettingsConfigDict(env_nested_delimiter="__")
-    broker: AnyUrl = "redis://localhost:6379/5"
-    backend: AnyUrl = "redis://localhost:6379/6"
+    broker: AnyUrl = "redis://redis:6379/5"
+    backend: AnyUrl = "redis://redis:6379/6"
     scan_request_max_retries: int = 2
     dlq_expire_after_days: int = 7
     connector_retry_backoff_base: int = 60

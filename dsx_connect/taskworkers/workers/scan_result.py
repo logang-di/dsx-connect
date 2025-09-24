@@ -298,6 +298,11 @@ def _init_syslog_for_worker(**kwargs):
         init_syslog_handler(
             syslog_host=cfg.syslog.syslog_server_url,
             syslog_port=cfg.syslog.syslog_server_port,
+            transport=str(getattr(cfg.syslog, "transport", "udp")),
+            tls_ca=getattr(cfg.syslog, "tls_ca_file", None),
+            tls_cert=getattr(cfg.syslog, "tls_cert_file", None),
+            tls_key=getattr(cfg.syslog, "tls_key_file", None),
+            tls_insecure=bool(getattr(cfg.syslog, "tls_insecure", False)),
         )
         try:
             dsx_logging.info(
