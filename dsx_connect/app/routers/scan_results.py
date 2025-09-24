@@ -13,11 +13,10 @@ from shared.dsx_logging import dsx_logging
 router = APIRouter(prefix=route_path(API_PREFIX_V1))
 
 config = get_config()
-_results_database = database_scan_results_factory(config.database.type,
-                                                  database_loc=config.database.loc,
-                                                  retain=config.database.retain)
+_results_database = database_scan_results_factory(database_loc=config.results_database.loc,
+                                                  retain=config.results_database.retain)
 
-_stats_database = database_scan_stats_factory(database_loc=config.database.scan_stats_db)
+_stats_database = database_scan_stats_factory(database_loc=config.results_database.loc)
 
 
 @router.get(

@@ -283,17 +283,15 @@ x-common-env: &common-env
   DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
   DSXCONNECT_TASKQUEUE__BROKER: "redis://redis:6379/0"
   DSXCONNECT_TASKQUEUE__BACKEND: "redis://redis:6379/0"
-  DSXCONNECT_DATABASE__TYPE: tinydb
-  DSXCONNECT_DATABASE__LOC: /app/data/dsx-connect.db.json
-  DSXCONNECT_DATABASE__RETAIN: 100
-  DSXCONNECT_DATABASE__SCAN_STATS_DB: /app/data/scan-stats.db.json
+  DSXCONNECT_RESULTS_DB: redis://redis:6379/3
+  DSXCONNECT_RESULTS_DB__RETAIN: 100
   PYTHONUNBUFFERED: 1
 ```
 
 ###### Scanner Integration:
 
 - **DSXCONNECT_SCANNER__SCAN_BINARY_URL:** DSXA's scan/binary/v2 URL. In this example, DSXA has been deployed via the docker-compose-dsxa.yaml file, in which case it will reside on the same network as this service, under the name dsxa_scanner. Otherwise, this could refer to a complete URL to a running DSXA instance, such as: http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2
-Next there are settings to change the type of scan results database and retention policy. Note that the dsx-connect databases are meant for ease of reviewing scan results - both benign and malicious verdicts.
+Next there are settings to change the scan results database location and retention policy. Note that the dsx-connect databases are meant for ease of reviewing scan results - both benign and malicious verdicts.
 
 ##### Core Infrastructure:
 
@@ -306,23 +304,13 @@ to pull scan statistics and results, but realistically for a production style de
 offloaded to a third party logging/event handler, such as a syslog server or SIEM.
 
 ##### Defined in the common env settings:
-- **DSXCONNECT_DATABASE__TYPE:** one of memory, tinydb, or sqlite3.
-  - Scan results are stored here.
-    - memory - scan results stored in memory only, gone after restart
-    - tinydb - scan results persisted to a tinydb plain text json "database" (for ease of reading results in the raw)
-    - sqlite3 - (default) scan results stored in a file based database - good when there's thousands of results to persist
-    - mongodb - for use when you want to persist all scan results - and need to offload database services to a separately running process
-- **DSXCONNECT_DATABASE__LOC:** sets the "location" of the database, which will vary based on the database type.  Note that this location needs to correspond to a folder within the docker image/container (images are created with an /app/data folder)
-  - memory - not used
-  - tinydb - the filepath to the tinydb database
-  - sqlite3 - the filepath to the sqlite3 database (default: /app/data/scan_results.db.sql)
-  - mongodb - the URL to the mongo instance
-- **DSXCONNECT_DATABASE__RETAIN:** sets the retention policy for the scan results database. Given that there can be thousands, if not millions or billions of results, in memory, tinydb, and sqlite3 are not appropriate for large amounts of data. Memory and Tinydb should be limited to 10,000 results, and sqlite3 can typically handle hundreds of thousands of records.
+- Results/Stats DB options: memory or Redis.
+- **DSXCONNECT_RESULTS_DB:** DB URL; `redis://...` uses Redis, anything else uses in-memory.
+- **DSXCONNECT_RESULTS_DB__RETAIN:** retention policy for the scan results list. For Redis this caps the list size via LTRIM.
   - Settings:
     - -1: retain forever
     - 0: retain nothing
     - n: retain n records
-- **DSXCONNECT_DATABASE__SCAN_STATS_DB:** filepath for the statistics database (separate from scan results, always uses TinyDB, a JSON formatted "database" for ease of portability)
 
 ##### Defined in the service 'dsx_connect_results_worker' env settings:
 - **DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL:** default 'syslog' - the service defined in the same docker-compose file, otherwise, use the complete URL to a syslog server

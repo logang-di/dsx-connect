@@ -20,6 +20,15 @@ if __name__ == "__main__":
     # Print debug info
     print(f"Worker will connect to broker: {config.workers.broker}")
     print(f"Worker will connect to backend: {config.workers.backend}")
+    try:
+        print(f"Registry Redis URL (DSXCONNECT_REDIS_URL): {config.redis_url}")
+    except Exception:
+        pass
+    try:
+        print(f"Results DB URL (DSXCONNECT_RESULTS_DB): {config.results_database.loc}")
+        print(f"Results retain (DSXCONNECT_RESULTS_DB__RETAIN): {config.results_database.retain}")
+    except Exception:
+        pass
     print(f"Queues to listen on:")
     print(f"  - {Queues.REQUEST}")
     print(f"  - {Queues.VERDICT}")

@@ -50,7 +50,11 @@ def init_syslog_handler(syslog_host: str = "localhost", syslog_port: int = 514):
         dsx_logging.error(f"Failed to initialize syslog handler: {e}")
 
 
-def log_verdict_chain(scan_result: ScanResultModel, scan_request_task_id: str, current_task_id: Optional[str] = None) -> None:
+def log_verdict_chain(
+    scan_result: ScanResultModel,
+    scan_request_task_id: str,
+    current_task_id: Optional[str] = None,
+) -> bool:
     """
     Log the complete chain (scan request, verdict, and item action) to syslog.
 
@@ -65,7 +69,7 @@ def log_verdict_chain(scan_result: ScanResultModel, scan_request_task_id: str, c
     global _syslog_handler
     if not _syslog_handler:
         dsx_logging.warning("Syslog handler not initialized, skipping log")
-        return
+        return False
 
     try:
         log_data = {
@@ -80,5 +84,7 @@ def log_verdict_chain(scan_result: ScanResultModel, scan_request_task_id: str, c
         syslog_logger.info(syslog_message)
 
         dsx_logging.debug(f"Sent verdict chain to syslog: {syslog_message}")
+        return True
     except Exception as e:
         dsx_logging.error(f"Failed to log verdict chain to syslog: {e}", exc_info=True)
+        return False

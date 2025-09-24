@@ -23,6 +23,19 @@ spec:
         app.kubernetes.io/name: {{ include "dsx-connect-results-worker.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      {{- if .Values.dataVolume.enabled }}
+      volumes:
+        - name: app-data
+          {{- if .Values.dataVolume.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.dataVolume.existingClaim | quote }}
+          {{- else if .Values.dataVolume.hostPath }}
+          hostPath:
+            path: {{ .Values.dataVolume.hostPath | quote }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- end }}
       containers:
         - name: dsx-connect-results-worker
           image: "{{ default .Values.image.repository $.Values.global.image.repository }}:{{ coalesce .Values.image.tag $.Values.global.image.tag .Chart.AppVersion }}"
@@ -38,6 +51,12 @@ spec:
             "-Q", "{{ $queue }}",
             "--concurrency", "{{ .Values.celery.concurrency }}"
           ]
+          {{- if .Values.dataVolume.enabled }}
+          volumeMounts:
+            - name: app-data
+              mountPath: "/app/data"
+              readOnly: false
+          {{- end }}
           env:
             {{ $env := merge (default (dict) $.Values.global.env) (default (dict) .Values.env) }}
             {{ $scanner := default (dict) $.Values.global.scanner }}
@@ -56,14 +75,10 @@ spec:
               value: {{ $env.DSXCONNECT_WORKERS__BACKEND | default "redis://redis:6379/6" | quote }}
             - name: DSXCONNECT_REDIS_URL
               value: {{ $env.DSXCONNECT_REDIS_URL | default "redis://redis:6379/3" | quote }}
-            - name: DSXCONNECT_DATABASE__TYPE
-              value: {{ $env.DSXCONNECT_DATABASE__TYPE | default "sqlite3" | quote }}
-            - name: DSXCONNECT_DATABASE__LOC
-              value: {{ $env.DSXCONNECT_DATABASE__LOC | default "/app/data/dsx-connect.db.sql" | quote }}
-            - name: DSXCONNECT_DATABASE__RETAIN
-              value: {{ $env.DSXCONNECT_DATABASE__RETAIN | default "100" | quote }}
-            - name: DSXCONNECT_DATABASE__SCAN_STATS_DB
-              value: {{ $env.DSXCONNECT_DATABASE__SCAN_STATS_DB | default "/app/data/scan-stats.db.json" | quote }}
+            - name: DSXCONNECT_RESULTS_DB
+              value: {{ $env.DSXCONNECT_RESULTS_DB | default "redis://redis:6379/3" | quote }}
+            - name: DSXCONNECT_RESULTS_DB__RETAIN
+              value: {{ $env.DSXCONNECT_RESULTS_DB__RETAIN | default "100" | quote }}
             - name: PYTHONUNBUFFERED
               value: {{ $env.PYTHONUNBUFFERED | default "1" | quote }}
             - name: LOG_LEVEL
@@ -74,7 +89,7 @@ spec:
               value: {{ $env.DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT | default "514" | quote }}
             {{- with $env }}
             {{- range $key, $value := . }}
-            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECTOR_API_KEY" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_DATABASE__TYPE" "DSXCONNECT_DATABASE__LOC" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_DATABASE__SCAN_STATS_DB" "PYTHONUNBUFFERED" "LOG_LEVEL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT")) }}
+            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECTOR_API_KEY" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT")) }}
             - name: {{ $key }}
               value: "{{ $value }}"
             {{- end }}

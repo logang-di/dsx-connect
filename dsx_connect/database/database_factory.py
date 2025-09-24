@@ -1,41 +1,27 @@
 from dsx_connect.database.scan_stats_collection import ScanStatsCollection
-from dsx_connect.database.scan_stats_tinydb import ScanStatsTinyDB
-from dsx_connect.config import ConfigDatabaseType
+from dsx_connect.database.scan_stats_redis import ScanStatsRedisDB
 from dsx_connect.database.scan_results_collection import ScanResultsCollection
-from dsx_connect.database.scan_results_sqlite import ScanResultsSQLiteDB
-from dsx_connect.database.scan_results_tinydb import ScanResultsTinyDB
+from dsx_connect.database.scan_results_redis import ScanResultsRedisDB
 from shared.dsx_logging import dsx_logging
 
 
-def database_scan_results_factory(database_type: str = 'tinydb',
-                                  database_loc: str = 'data',
+def database_scan_results_factory(database_loc: str = 'redis://redis:6379/3',
                                   retain: int = -1,
                                   collection_name: str = 'scan_results'):
-    scan_results_db = None
-    if database_type == ConfigDatabaseType.TINYDB:
-        scan_results_db = ScanResultsTinyDB(database_loc, collection_name=collection_name, retain=retain)
-        dsx_logging.debug(f'Scan results TinyDB database initialized at: {database_loc} Retention policy: {retain}')
-    elif database_type == ConfigDatabaseType.SQLITE3:
-        scan_results_db = ScanResultsSQLiteDB(database_loc,
-                                              collection_name=collection_name,
-                                              retain=retain)
-        dsx_logging.debug(f'Scan results SQLite3 database initialized at: {database_loc} Retention policy: {retain}')
-    else:
-        scan_results_db = ScanResultsCollection(retain=retain)
-        dsx_logging.debug(f'Scan results collection in memory. Retention policy: {retain}')
-
-    return scan_results_db
+    """Create a scan results DB. Uses Redis when database_loc starts with redis://, else in-memory.
+    """
+    if str(database_loc).startswith("redis://"):
+        dsx_logging.debug(f"Scan results Redis database initialized (loc='{database_loc}')")
+        return ScanResultsRedisDB(retain=retain, collection_name=collection_name)
+    dsx_logging.debug(f'Scan results collection in memory. Retention policy: {retain}')
+    return ScanResultsCollection(retain=retain)
 
 
-def database_scan_stats_factory(database_type: str = 'tinydb',
-                                database_loc: str = 'data',
+def database_scan_stats_factory(database_loc: str = 'redis://redis:6379/3',
                                 collection_name: str = 'scan_stats'):
-    scan_stats_db = None
-    if database_type == ConfigDatabaseType.TINYDB:
-        scan_stats_db = ScanStatsTinyDB(database_loc, collection_name=collection_name)
-        dsx_logging.debug(f'Scan stats TinyDB database initialized at: {database_loc}')
-    else:
-        scan_stats_db = ScanStatsCollection()
-        dsx_logging.debug(f'Scan stats collection in memory.')
-
-    return scan_stats_db
+    """Create a scan stats DB. Uses Redis when database_loc starts with redis://, else in-memory."""
+    if str(database_loc).startswith("redis://"):
+        dsx_logging.debug(f"Scan stats Redis database initialized (loc='{database_loc}')")
+        return ScanStatsRedisDB(collection_name=collection_name)
+    dsx_logging.debug('Scan stats collection in memory.')
+    return ScanStatsCollection()

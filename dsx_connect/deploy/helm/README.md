@@ -28,9 +28,8 @@ This umbrella chart deploys the DSX‑Connect stack. Key configuration areas (mi
 
 ## Quick Reference (most deployments)
 
-- `global.env.DSXCONNECTOR_API_KEY`: set a non‑default API key for connectors.
 - `global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL`: REQUIRED when `dsxa-scanner.enabled=false` (default); set external DSXA endpoint.
-- `dsx-connect-api.tls.enabled` + `dsx-connect-api.tls.secretName`: enable HTTPS for the API; certs mounted at `tls.mountPath`.
+- `dsx-connect-api.tls.enabled` + `dsx-connect-api.tls.secretName`: enable HTTPS for the API; certs mounted at `tls.mountPath`.  Will use self-signed certs if none supplied.
 - `global.image.tag`: pin a specific image version across all components.
 - `dsx-connect-*-worker.celery.concurrency`: adjust worker parallelism per queue.
 
@@ -52,22 +51,26 @@ This method is best for quick, temporary deployments, like for local testing. It
 
 **2. Deploy the Stack:**
    *   **Simplest deployment: deploys DSXA scanner and dsx-connect on the same cluster:**
-        Development mode deployment with a local DSXA scanner.  You can change the values in `values-dev.yaml` to match your environment,
-        but, overriding values in the command line allows for flexible deployment.
+        Development mode deployment with a local DSXA scanner.  Use the `values-dev.yaml` (or copy it) to set deploy dsx-connect with a dsxa-scanner.  
+        You can change the values in `values-dev.yaml` to match your environment,
+        but, overriding values in the command line allows for flexible deployment.  In this case the only 
+        setting that needs to be set is global.image.tag.
        ```bash 
-       helm upgrade --install dsx . -f values-dev.yaml --set dsxa-scanner.enabled=true --set-string global.image.tag=0.2.82
+       helm upgrade --install dsx . -f values-dev.yaml --set-string global.image.tag=0.2.82
        ```
 
-   *   **For a simple HTTP deployment:**
+   *   **Using an external DSX/A Scanner, HTTP deployment:**
         In this case, using the values.yaml (the default), DSXA scanner is not deployed, so the scan binary URL must be set. 
+        You can either edit the values.yaml, or copy it and edit, or simply pass in settings on the helm arguments:
        ```bash
-       helm install dsx-connect . --set-string global.image.tag=0.2.82 \
-         --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://my-dsxa:5000/scan/binary/v2
+       helm upgrade --install dsx -f values.yaml --set-string global.image.tag=0.2.82
+         --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://my-dsxa-url:5000/scan/binary/v2
        ```
 
    *   **For a TLS-enabled deployment:**
        ```bash
-       helm install dsx-connect . \
+       helm upgrade --install dsx . \
+         --set-string
          --set dsx-connect-api.tls.enabled=true \
          --set dsx-connect-api.tls.secretName=my-dsx-connect-api-tls \
          --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://my-dsxa.example.com/scan/binary/v2
@@ -191,10 +194,9 @@ To override a default environment variable, specify it under the `env` section o
 *   **`DSXCONNECT_WORKERS__BROKER`**: `redis://redis:6379/5`
 *   **`DSXCONNECT_WORKERS__BACKEND`**: `redis://redis:6379/6`
 *   **`DSXCONNECT_REDIS_URL`**: `redis://redis:6379/3`
-*   **`DSXCONNECT_DATABASE__TYPE`**: `sqlite3`
-*   **`DSXCONNECT_DATABASE__LOC`**: `/app/data/dsx-connect.db.sql`
-*   **`DSXCONNECT_DATABASE__RETAIN`**: `100`
-*   **`DSXCONNECT_DATABASE__SCAN_STATS_DB`**: `/app/data/scan-stats.db.json`
+*   **`DSXCONNECT_RESULTS_DB`**: `redis://redis:6379/3`
+*   **`DSXCONNECT_RESULTS_DB__RETAIN`**: `100`
+*   Results/Stats DB: controlled by `DSXCONNECT_RESULTS_DB` (redis://… for Redis, else in-memory)
 *   **`PYTHONUNBUFFERED`**: `1`
 *   **`LOG_LEVEL`**: `debug` (for API), `warning` (for workers)
 

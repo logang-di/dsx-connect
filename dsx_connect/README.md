@@ -134,7 +134,7 @@ You should see output like this:
 INFO:     Started server process [75934]
 INFO:     Waiting for application startup.
 2025-04-25 13:00:19,982 INFO     dsx_connect_api.py  : dsx-connect version: <module 'dsx_connect.version' from '/Users/logangilbert/PycharmProjects/SEScripts/build/dist/dsx-connect-0.0.19/dsx_connect/version.py'>
-2025-04-25 13:00:19,982 INFO     dsx_connect_api.py  : dsx-connect configuration: results_database=DatabaseConfig(type='tinydb', loc='data/dsx-connect.db.json', retain=1000) scanner=ScannerConfig(scan_binary_url='http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2')
+2025-04-25 13:00:19,982 INFO     dsx_connect_api.py  : dsx-connect configuration: results_database=DatabaseConfig(loc='redis://redis:6379/3', retain=100) scanner=ScannerConfig(scan_binary_url='http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2')
 2025-04-25 13:00:19,982 INFO     dsx_connect_api.py  : dsx-connect startup completed.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8586 (Press CTRL+C to quit)
@@ -238,9 +238,8 @@ dsx_connect_api:
   - PYTHONUNBUFFERED=1
   - DSXCONNECT_TASKQUEUE__BROKER=redis1://redis1:6379/0
   - DSXCONNECT_TASKQUEUE__BACKEND=redis1://redis1:6379/0
-  - DSXCONNECT_DATABASE__TYPE=tinydb
-  - DSXCONNECT_DATABASE__LOC=data/dsx-connect.db.json
-  - DSXCONNECT_DATABASE__RETAIN=100
+  - DSXCONNECT_RESULTS_DB=redis://redis:6379/3
+  - DSXCONNECT_RESULTS_DB__RETAIN=100
   - DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://dsxa_scanner:5000/scan/binary/v2
   - LOG_LEVEL=debug
   depends_on:
@@ -256,19 +255,13 @@ dsx_connect_api:
 
 - **DSXCONNECT_SCANNER__SCAN_BINARY_URL:** DSXA's scan/binary/v2 URL.  In this example, DSXA has been deployed via the docker-compose-dsxa.yaml file, in which case it will reside on the same netowrk as this service, under the name dsxa_scanner.  Otherwise, this could refer to a complete URL to a running DSXA instance, such as: http://a0c8b85f8a14743c6b3de320b780a359-1883598926.us-west-1.elb.amazonaws.com/scan/binary/v2
 
-Next there are settings to change the type of scan results database and retention policy.  Note that the dsx-connect databases are meant for ease of reviewing scan results - both benign and malicious verdicts.  
-- **DSXCONNECT_DATABASE__TYPE:** one of memory, tinydb, sqlite3, mongodb.  
-  - Scan results are stored here.
-    - memory - scan results stored in memory only, gone after 
-    - tinydb - scan results persisted to a tinydb plain text json "database" (for ease of reading results int the raw) 
-    - sqlite3 - scan results stored in a file based database - good when there's thousands of results to persist
-    - mongodb - for use when you want to persist all scan results - and need to offload database services to a separately running process
-- **DSXCONNECT_DATABASE__LOC:** sets the "location" of the database, which will vary based on the database type
+Next there are settings to change the scan results database location and retention policy.  Note that the dsx-connect databases are meant for ease of reviewing scan results - both benign and malicious verdicts.
+- Results/Stats DB options: memory or Redis only.
+- **DSXCONNECT_RESULTS_DB:** DB URL; `redis://...` uses Redis, anything else uses in-memory.
   - memory - not used
-  - tinydb - the filepath to the tinydb database
-  - sqlite3 - the filepath to the sqlite3 database
+  - Redis: set DSXCONNECT_RESULTS_DB to a `redis://` URL (e.g., redis://redis:6379/3). Any other value falls back to in-memory (non-persistent).
   - mongodb - the URL to the mongo instance
-- **DSXCONNECT_DATABASE__RETAIN**: sets the retention policy for the scan results database.  Given that there can be thousands, if not millions or billions of results, in memory, tinydb, and sqlite3 are not appropriate for large amounts of data.  Memory and Tinydb should be limited to 10,000 results, and sqlite3 can typically handle hundreds of thousands of records.
+- **DSXCONNECT_RESULTS_DB__RETAIN**: retention policy for scan results. For Redis this caps the list size via LTRIM.
   - Settings:
   - -1: retain forever
   - 0: retain nothing

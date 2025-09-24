@@ -24,7 +24,7 @@ tls:
 
 gcp:
   # Optional: mount a GCP service account JSON Secret and set GOOGLE_APPLICATION_CREDENTIALS
-  credentialsSecretName: ""
+  credentialsSecretName: "gcp-sa" # set this to the name of the secret you created (see example gcp-sa-secret.yaml)
   mountPath: "/app/creds"
   filename: "service-account.json"
 

@@ -38,6 +38,18 @@
 ## Next Steps
 - Improve “full scan” UX: estimate counts up front, persist job progress, and support pause/cancel via Celery revoke + job state checks.
 
+## Superlog (Scan-Result Logging) Roadmap
+- Scope and separation: Use superlog only for operational scan-result events sent to SIEMs/receivers. Keep application/runtime logs on stdlib/console; do not route app logs through superlog.
+- Event model: Define a stable `scan_result` event schema in superlog (job_id, scan_request_task_id, connector, location, verdict, threat, action, timestamps). Provide a helper `LogEvent.from_scan_result(...)` to build events from `ScanResultModel`.
+- Destinations: Support pluggable outputs behind config: syslog (UDP/TCP/TLS), Splunk HEC, CloudWatch Logs, Azure Sentinel (DCR). Keep each destination small, with retries/backoff and bounded buffers. Start with syslog UDP and TLS.
+- Formatters: Default to compact JSON for SIEMs. Keep RFC5424/syslog formatter available for environments that require it. Avoid mixing console formatting into superlog.
+- Configuration: Add `DSXCONNECT_SUPERLOG__ENABLED` and `DSXCONNECT_SUPERLOG__DESTINATIONS` (CSV: syslog,splunk,cloudwatch,sentinel). Provide nested settings for each (host/port/facility/transport for syslog; url/token for Splunk; group/stream/region for CloudWatch; DCE/DCR/stream for Sentinel). Maintain compatibility with existing `DSXCONNECT_SYSLOG__*` when only syslog is enabled.
+- Initialization: Build the scan-result log chain once per Celery worker process in `worker_process_init` using config. Expose a small accessor (e.g., `get_scan_result_chain()`); have the scan-result worker emit via this chain instead of direct syslog calls. Keep failures non-retriable for the task path.
+- Backpressure and failure handling: For network failures, use short timeouts, exponential backoff, and bounded queues. Drop oldest or sample if buffers fill; always log a warning to console with task/job context.
+- Security/PII: Provide field filtering/masking hooks (e.g., redact PII, truncate large paths). Ensure tokens/keys only come from env/secret stores and are never logged.
+- Testing: Unit tests for formatters and acceptance filters; destination stubs with captured payloads; a UDP syslog test server for integration; config parsing tests per destination. Keep tests fast and hermetic.
+- Migration: Keep `shared/log_chain.py` as a thin adapter temporarily, forwarding to superlog when enabled; deprecate once consumers switch. Document env var mapping and rollout steps.
+
 ## Current Status (UI + Workers)
 - Event-driven progress: The UI no longer polls for job summaries. Progress and completion come from the scan-results SSE stream only.
 - Buttons lifecycle: Cards flip to Pause/Cancel when a job starts, and revert to Full Scan on completion/cancel. A counts-based fallback flips immediately when processed >= total even before a final status frame.

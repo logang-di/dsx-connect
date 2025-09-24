@@ -9,10 +9,12 @@
 global:
   # Minimal, common env most users need to touch. Everything else is set in templates with sane defaults.
   env:
-    DSXCONNECT_APP_ENV: dev
+    DSXCONNECT_APP_ENV: dev # dev, stg, prod
     DSXCONNECTOR_API_KEY: api-key-NOT-FOR-PRODUCTION
     # REQUIRED when (dsxa-scanner.enabled=false): set to your external DSXA endpoint
     DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://external-dsxa:5000/scan/binary/v2"
+    # Results/stats DB URL (redis://... => Redis, anything else => in-memory)
+    DSXCONNECT_RESULTS_DB: redis://redis:6379/3
 
   # Optional shared image defaults (subcharts fall back to these when set)
   image:
@@ -43,6 +45,12 @@ dsx-connect-api:
     mountPath: "/app/certs"
   env:
     LOG_LEVEL: info
+  # Optional shared data volume for /app/data so API can read DB files
+  dataVolume:
+    enabled: false
+    # Provide one of the following sources (prefer a RWX PVC in multi-node clusters):
+    existingClaim: ""   # Name of an existing PersistentVolumeClaim (RWX recommended)
+    hostPath: ""        # Node path for single-node/dev only
 
 dsx-connect-scan-request-worker:
   enabled: true
@@ -68,6 +76,11 @@ dsx-connect-results-worker:
   celery:
     # queue: "dev.dsx_connect.scans.result"
     concurrency: 1
+  # Optional shared data volume for /app/data so worker and API share DB files
+  dataVolume:
+    enabled: false
+    existingClaim: ""
+    hostPath: ""
 
 dsx-connect-notification-worker:
   enabled: true

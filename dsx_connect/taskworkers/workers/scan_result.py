@@ -4,11 +4,11 @@ from typing import Any, Dict
 import time
 import redis as _redis
 from celery import signals
+from celery.signals import worker_process_init
 from functools import cached_property
 
 from pydantic import ValidationError
 
-from dsx_connect.config import ConfigDatabaseType
 from dsx_connect.taskworkers.celery_app import celery_app
 from dsx_connect.taskworkers.names import Tasks, Queues
 from dsx_connect.taskworkers.workers.base_worker import BaseWorker, RetryGroup, RetryGroups
@@ -27,15 +27,26 @@ from shared.models.status_responses import ItemActionStatusResponse
 # If you have helpers, import them here; otherwise keep the try/except blocks inline.
 
 def _send_syslog(scan_result: ScanResultModel, original_task_id: str, current_task_id: str) -> None:
-    """Critical path: raise retriable TaskError on failure to trigger BaseWorker retry."""
+    """Attempt to send syslog; if uninitialized, warn with task context.
+
+    Only raise a retryable error if an unexpected exception bubbles up.
+    """
     try:
         from shared.log_chain import log_verdict_chain
-        log_verdict_chain(
+        sent = log_verdict_chain(
             scan_result=scan_result,
             scan_request_task_id=original_task_id,
             current_task_id=current_task_id,
         )
-        dsx_logging.debug(f"[scan_result:{current_task_id}] syslog sent for {scan_result.scan_request.location}")
+        if sent:
+            dsx_logging.debug(
+                f"[scan_result:{current_task_id}] syslog sent for {scan_result.scan_request.location}"
+            )
+        else:
+            # Provide worker-context warning to make logs clearer than MainProcess warning
+            dsx_logging.warning(
+                f"[scan_result:{current_task_id}] syslog not initialized; skipping for {scan_result.scan_request.location}"
+            )
     except Exception as e:
         # Mark as retriable so BaseWorker will backoff/retry
         raise TaskError(retriable=True, reason="syslog_failure") from e
@@ -57,14 +68,12 @@ class ScanResultWorker(BaseWorker):
             cfg = get_config()
             # one-time, per-process
             self.__class__._scan_results_db = database_scan_results_factory(
-                database_type=cfg.database.type,
-                database_loc=cfg.database.loc,
-                retain=cfg.database.retain,
+                database_loc=cfg.results_database.loc,
+                retain=cfg.results_database.retain,
                 collection_name="scan_results",
             )
             self.__class__._stats_db = database_scan_stats_factory(
-                database_type=ConfigDatabaseType.TINYDB,
-                database_loc=cfg.database.scan_stats_db,
+                database_loc=cfg.results_database.loc,
                 collection_name="scan_stats",
             )
 
@@ -90,8 +99,23 @@ class ScanResultWorker(BaseWorker):
             item_action=item_action_status,
             scan_request_task_id=scan_request_task_id,   # ← add this
             scan_job_id=getattr(scan_request, "scan_job_id", None),
-            # status=ScanResultStatusEnum.SUCCESS,  # only if this member exists; else omit
         )
+        # Derive overall status for logging/syslog
+        try:
+            from shared.models.status_responses import StatusResponseEnum as _SRE
+            ia = item_action_status
+            if ia and getattr(ia, "status", None) is not None:
+                st = getattr(ia, "status")
+                if st == _SRE.SUCCESS:
+                    scan_result.status = ScanResultStatusEnum.ACTION_SUCCEEDED
+                elif st == _SRE.ERROR:
+                    scan_result.status = ScanResultStatusEnum.ACTION_FAILED
+                else:
+                    scan_result.status = ScanResultStatusEnum.SCANNED
+            else:
+                scan_result.status = ScanResultStatusEnum.SCANNED
+        except Exception:
+            scan_result.status = ScanResultStatusEnum.SCANNED
 
         # 3) critical: send syslog (retryable on failure)
         _send_syslog(scan_result, original_task_id=scan_request_task_id, current_task_id=self.context.task_id)
@@ -160,6 +184,19 @@ class ScanResultWorker(BaseWorker):
                                     dsx_logging.info(f"job.complete job={job_id} processed={processed} enqueued_total={enq_total} finished_at={now}")
                                 except Exception:
                                     pass
+                        else:
+                            # Fallback: if we don't know total but enqueued_count is available and matches processed, complete
+                            try:
+                                enq_count = int(data.get("enqueued_count", -1)) if data.get("enqueued_count") is not None else -1
+                            except Exception:
+                                enq_count = -1
+                            if enq_count >= 0 and processed >= enq_count and not data.get("finished_at"):
+                                now = str(int(time.time()))
+                                r.hset(f"dsxconnect:job:{job_id}", mapping={"status": "completed", "finished_at": now, "last_update": now})
+                                try:
+                                    dsx_logging.info(f"job.complete job={job_id} processed={processed} enqueued_count={enq_count} finished_at={now}")
+                                except Exception:
+                                    pass
                     except Exception:
                         pass
         except Exception:
@@ -182,7 +219,11 @@ class ScanResultWorker(BaseWorker):
                     self.__class__._scan_results_db.insert(scan_result)
                     dsx_logging.debug("[scan_result] stored in scan_results DB")
                 except Exception as e:
-                    dsx_logging.warning(f"[scan_result] store DB failed: {e}")
+                    try:
+                        loc = getattr(get_config().results_database, "loc", "?")
+                    except Exception:
+                        loc = "?"
+                    dsx_logging.warning(f"[scan_result] store DB failed (loc={loc}): {e}")
 
             if getattr(cfg.workers, "enable_scan_stats", True):
                 try:
@@ -190,7 +231,11 @@ class ScanResultWorker(BaseWorker):
                     ScanStatsWorker(self.__class__._stats_db).insert(scan_result)
                     dsx_logging.debug("[scan_result] stats updated")
                 except Exception as e:
-                    dsx_logging.warning(f"[scan_result] stats update failed: {e}")
+                    try:
+                        loc = getattr(get_config().results_database, "loc", "?")
+                    except Exception:
+                        loc = "?"
+                    dsx_logging.warning(f"[scan_result] stats update failed (loc={loc}): {e}")
 
             # Example: UI notifications
             if getattr(cfg.workers, "enable_notifications", True):
@@ -241,3 +286,28 @@ class ScanResultWorker(BaseWorker):
 
 # Register with Celery
 celery_app.register_task(ScanResultWorker())
+
+
+# Initialize syslog once per worker process so _send_syslog can log immediately
+@worker_process_init.connect
+def _init_syslog_for_worker(**kwargs):
+    try:
+        from dsx_connect.config import get_config
+        from shared.log_chain import init_syslog_handler
+        cfg = get_config()
+        init_syslog_handler(
+            syslog_host=cfg.syslog.syslog_server_url,
+            syslog_port=cfg.syslog.syslog_server_port,
+        )
+        try:
+            dsx_logging.info(
+                f"[scan_result] syslog initialized {cfg.syslog.syslog_server_url}:{cfg.syslog.syslog_server_port}"
+            )
+        except Exception:
+            pass
+    except Exception as e:
+        # Do not crash worker startup; _send_syslog will warn if missing
+        try:
+            dsx_logging.warning(f"[scan_result] syslog init failed: {e}")
+        except Exception:
+            pass

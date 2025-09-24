@@ -5,10 +5,9 @@ x-common-env: &common-env
   DSXCONNECT_WORKERS__BROKER: "redis://redis:6379/5"
   DSXCONNECT_WORKERS__BACKEND: "redis://redis:6379/6"
   DSXCONNECT_REDIS_URL: "redis://redis:6379/3"
-  DSXCONNECT_DATABASE__TYPE: sqlite3
-  DSXCONNECT_DATABASE__LOC: "/app/data/dsx-connect.db.sql"
-  DSXCONNECT_DATABASE__RETAIN: 100
-  DSXCONNECT_DATABASE__SCAN_STATS_DB: "/app/data/scan-stats.db.json"
+  # Results/stats DB config (Redis by default)
+  DSXCONNECT_RESULTS_DB: "redis://redis:6379/3"
+  DSXCONNECT_RESULTS_DB__RETAIN: 100
   PYTHONUNBUFFERED: 1
 
 services:

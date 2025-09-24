@@ -163,21 +163,22 @@ class ConnectorsRegistry:
             dsx_logging.info(f"Startup validation confirmed {len(alive_connectors)} healthy connector(s)")
 
 
-    async def _evict_connector(self, uuid: str, reason: str = "health_check_failed") -> None:
+    async def _evict_connector(self, uuid: str | UUID, reason: str = "health_check_failed") -> None:
         try:
-            await self.remove(uuid)
-            key = ConnectorKeys.presence(uuid)
+            uid = str(uuid)
+            await self.remove(uid)
+            key = ConnectorKeys.presence(uid)
             await self._r.delete(key)
             unregister_event = {
                 "type": "unregistered",
-                "uuid": uuid,
+                "uuid": uid,
                 "reason": reason
             }
             try:
                 await self._r.publish(str(Channel.REGISTRY_CONNECTORS), json.dumps(unregister_event))
-                dsx_logging.debug(f"Published unregister event for {uuid} (reason: {reason})")
+                dsx_logging.debug(f"Published unregister event for {uid} (reason: {reason})")
             except Exception as notify_error:
-                dsx_logging.warning(f"Failed to notify about connector {uuid} removal: {notify_error}")
+                dsx_logging.warning(f"Failed to notify about connector {uid} removal: {notify_error}")
         except Exception as e:
             dsx_logging.error(f"Failed to evict connector {uuid}: {e}")
 

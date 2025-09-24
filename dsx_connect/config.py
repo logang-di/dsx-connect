@@ -1,9 +1,10 @@
 # dsx_connect/config.py
 from enum import Enum
+import os
 from pathlib import Path
 from typing import Final
 
-from pydantic import AnyUrl
+from pydantic import AnyUrl, Field, AliasChoices, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shared.dev_env import load_devenv
@@ -31,19 +32,21 @@ class AuthConfig(BaseSettings):
         case_sensitive = False
 
 
-class ConfigDatabaseType(str, Enum):
-    MEMORY_COLLECTION = "memory"
-    TINYDB = "tinydb"
-    SQLITE3 = "sqlite3"
-    MONGODB = "mongodb"
+# Note: Storage backend is auto-detected from DSXCONNECT_RESULTS_DB; no enum required.
 
 
 class DatabaseConfig(BaseSettings):
     model_config = SettingsConfigDict(env_nested_delimiter="__")
-    type: str = ConfigDatabaseType.SQLITE3
-    loc: str = "data/dsx-connect.db.sql"
-    retain: int = 1000
-    scan_stats_db: str = "data/scan-stats.db.json"
+    # Default location/URL. For Redis, this should be a redis:// URL (DB index typically 3)
+    # Environment override: DSXCONNECT_RESULTS_DB (redis://... => Redis; anything else => in‑memory)
+    loc: str = Field(
+        default="redis://redis:6379/3",
+        validation_alias=AliasChoices("DSXCONNECT_RESULTS_DB"),
+    )
+    retain: int = Field(
+        default=1000,
+        validation_alias=AliasChoices("DSXCONNECT_RESULTS_DB__RETAIN", "DSXCONNECT_DATABASE__RETAIN"),
+    )
 
 
 class ScannerConfig(BaseSettings):
@@ -85,7 +88,7 @@ class DSXConnectConfig(BaseSettings):
 
     app_env: AppEnv = AppEnv.dev
 
-    database: DatabaseConfig = DatabaseConfig()
+    results_database: DatabaseConfig = DatabaseConfig()
     scanner: ScannerConfig = ScannerConfig()
     workers: CeleryTaskConfig = CeleryTaskConfig()
 
@@ -98,6 +101,7 @@ class DSXConnectConfig(BaseSettings):
     features: FeatureFlags = FeatureFlags()
 
     # App datastore / pubsub (not Celery)
+    # App Redis (job progress, pubsub). Results/stats DB may use a different Redis via database.loc.
     redis_url: AnyUrl = "redis://localhost:6379/3"
     syslog: SyslogConfig = SyslogConfig()
 
@@ -111,6 +115,23 @@ class DSXConnectConfig(BaseSettings):
         env_prefix="DSXCONNECT_",
         env_nested_delimiter="__",
     )
+
+    # Ensure flat env overrides (used in local dev) are applied even when nested settings aliasing is finicky
+    @model_validator(mode="after")
+    def _apply_flat_results_db_env(self):
+        try:
+            env_db = os.getenv("DSXCONNECT_RESULTS_DB")
+            if env_db:
+                self.results_database.loc = env_db
+            env_ret = os.getenv("DSXCONNECT_RESULTS_DB__RETAIN")
+            if env_ret is not None and str(env_ret).strip() != "":
+                try:
+                    self.results_database.retain = int(env_ret)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return self
 
 
 # Singleton accessor

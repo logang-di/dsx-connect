@@ -396,6 +396,73 @@
         fetchStatus(); // Re-run to update colors
     }
 
+    // UUID-based action button updater
+    function updateActionButtonsByUuid(connectorUuid, state, jobId = null) {
+        const actions = document.getElementById(`actions-${connectorUuid}`);
+        if (!actions) return;
+        if (state === 'running') {
+            try { const card = document.querySelector(`.connector-card[data-connector-uuid='${connectorUuid}']`); const b = card && card.querySelector('.job-complete-badge'); if (b) b.remove(); } catch {}
+            actions.innerHTML = `
+                <button id="btn-pause-${connectorUuid}">Pause</button>
+                <button id="btn-cancel-${connectorUuid}" style="background:#ef4444;">Cancel</button>
+            `;
+            const pill = document.createElement('span');
+            pill.className = 'job-id-pill';
+            pill.id = `job-pill-${connectorUuid}`;
+            actions.appendChild(pill);
+            const copy = document.createElement('button');
+            copy.className = 'job-id-copy';
+            copy.id = `job-copy-${connectorUuid}`;
+            copy.title = 'Copy job id';
+            copy.innerHTML = '<i class="far fa-copy"></i>';
+            actions.appendChild(copy);
+            setJobIdPillByUuid(connectorUuid, jobId);
+            document.getElementById(`btn-pause-${connectorUuid}`).onclick = async () => {
+                if (!jobId) return;
+                try { await fetch(r.scan.jobs.pause(jobId), { method: 'POST' }); } catch {}
+            };
+            document.getElementById(`btn-cancel-${connectorUuid}`).onclick = async () => {
+                if (!jobId) return;
+                try { await fetch(r.scan.jobs.cancel(jobId), { method: 'POST' }); } catch {}
+            };
+        } else if (state === 'paused') {
+            try { const card = document.querySelector(`.connector-card[data-connector-uuid='${connectorUuid}']`); const b = card && card.querySelector('.job-complete-badge'); if (b) b.remove(); } catch {}
+            actions.innerHTML = `
+                <button id="btn-resume-${connectorUuid}">Resume</button>
+                <button id="btn-cancel-${connectorUuid}" style="background:#ef4444;">Cancel</button>
+            `;
+            const pill = document.createElement('span');
+            pill.className = 'job-id-pill';
+            pill.id = `job-pill-${connectorUuid}`;
+            actions.appendChild(pill);
+            const copy = document.createElement('button');
+            copy.className = 'job-id-copy';
+            copy.id = `job-copy-${connectorUuid}`;
+            copy.title = 'Copy job id';
+            copy.innerHTML = '<i class="far fa-copy"></i>';
+            actions.appendChild(copy);
+            setJobIdPillByUuid(connectorUuid, jobId);
+            document.getElementById(`btn-resume-${connectorUuid}`).onclick = async () => {
+                if (!jobId) return;
+                try { await fetch(r.scan.jobs.resume(jobId), { method: 'POST' }); } catch {}
+            };
+            document.getElementById(`btn-cancel-${connectorUuid}`).onclick = async () => {
+                if (!jobId) return;
+                try { await fetch(r.scan.jobs.cancel(jobId), { method: 'POST' }); } catch {}
+            };
+        } else if (state === 'done') {
+            const scanUrl = actions.dataset.scanUrl;
+            const connectorNameEsc = actions.dataset.connectorName;
+            const cu = actions.dataset.connectorUuid;
+            actions.innerHTML = `
+                <button onclick="invokeFullScanByUuid('${cu}', '${scanUrl}', '${connectorNameEsc}')">Full Scan</button>
+            `;
+            const pill = document.getElementById(`job-pill-${connectorUuid}`);
+            if (pill) { pill.style.display = 'none'; pill.textContent=''; pill.title=''; }
+            const copy = document.getElementById(`job-copy-${connectorUuid}`);
+            if (copy) { copy.style.display = 'none'; copy.title=''; copy.onclick = null; }
+        }
+    }
     themeToggle.addEventListener('click', () => {
         const currentTheme = document.documentElement.getAttribute('data-theme') || 'light';
         setTheme(currentTheme === 'light' ? 'dark' : 'light');
@@ -804,7 +871,7 @@
         }
     }
 
-    function invokeFullScan(idx, scanUrl, connectorName, connectorUuid) {
+function invokeFullScanByUuid(connectorUuid, scanUrl, connectorName) {
         showNotification(`Starting full scan for ${connectorName}...`, 'info');
 
         fetch(scanUrl, { method: 'POST' })
@@ -821,9 +888,9 @@
                     showNotification(`Full scan initiated for ${connectorName}${extra}`, 'success');
                     if (jobId) {
                         rememberActiveJob(jobId, connectorUuid);
-                        const noteEl = document.getElementById(`scan-note-${idx}`);
+                        const noteEl = document.getElementById(`scan-note-${connectorUuid}`);
                         if (noteEl) noteEl.textContent = `Job ${jobId.substring(0,8)}… started`;
-                        updateActionButtons(idx, 'running', jobId);
+                        updateActionButtonsByUuid(connectorUuid, 'running', jobId);
                     }
                 } else {
                     showNotification(`Scan failed for ${connectorName}: ${json.message}`, 'error');
@@ -834,7 +901,7 @@
             });
     }
 
-    function invokeSampleScan(idx, scanUrl, connectorName, n = 5, connectorUuid = null) {
+function invokeSampleScanByUuid(connectorUuid, scanUrl, connectorName, n = 5) {
         const limit = Number(n) || 5;
         showNotification(`Starting sample scan (limit=${limit}) for ${connectorName}...`, 'info');
         fetch(`${scanUrl}?limit=${limit}`, { method: 'POST' })
@@ -851,9 +918,9 @@
                     showNotification(`Sample scan queued for ${connectorName}${extra}`, 'success');
                     if (jobId) {
                         rememberActiveJob(jobId, connectorUuid);
-                        const noteEl = document.getElementById(`scan-note-${idx}`);
+                        const noteEl = document.getElementById(`scan-note-${connectorUuid}`);
                         if (noteEl) noteEl.textContent = `Job ${jobId.substring(0,8)}… started`;
-                        updateActionButtons(idx, 'running', jobId);
+                        updateActionButtonsByUuid(connectorUuid, 'running', jobId);
                     }
                 } else {
                     showNotification(`Sample scan failed for ${connectorName}: ${json.message}`, 'error');
@@ -866,80 +933,10 @@
 
     // No startJobSummarySSE: progress comes via scan-result SSE only.
 
-    function updateActionButtons(idx, state, jobId = null) {
-        const actions = document.getElementById(`actions-${idx}`);
-        if (!actions) return;
-        if (state === 'running') {
-            // Remove any lingering completion badge when a new run starts
-            try { const card = document.querySelector(`.connector-card[data-index='${idx}']`); const b = card && card.querySelector('.job-complete-badge'); if (b) b.remove(); } catch {}
-            actions.innerHTML = `
-                <button id="btn-pause-${idx}">Pause</button>
-                <button id="btn-cancel-${idx}" style="background:#ef4444;">Cancel</button>
-            `;
-            // Preserve job-id pill element after innerHTML rewrite
-            const pill = document.createElement('span');
-            pill.className = 'job-id-pill';
-            pill.id = `job-pill-${idx}`;
-            actions.appendChild(pill);
-            // Add copy button for job id
-            const copy = document.createElement('button');
-            copy.className = 'job-id-copy';
-            copy.id = `job-copy-${idx}`;
-            copy.title = 'Copy job id';
-            copy.innerHTML = '<i class="far fa-copy"></i>';
-            actions.appendChild(copy);
-            setJobIdPill(idx, jobId);
-            document.getElementById(`btn-pause-${idx}`).onclick = async () => {
-                if (!jobId) return;
-                try { await fetch(r.scan.jobs.pause(jobId), { method: 'POST' }); } catch {}
-            };
-            document.getElementById(`btn-cancel-${idx}`).onclick = async () => {
-                if (!jobId) return;
-                try { await fetch(r.scan.jobs.cancel(jobId), { method: 'POST' }); } catch {}
-            };
-        } else if (state === 'paused') {
-            try { const card = document.querySelector(`.connector-card[data-index='${idx}']`); const b = card && card.querySelector('.job-complete-badge'); if (b) b.remove(); } catch {}
-            actions.innerHTML = `
-                <button id="btn-resume-${idx}">Resume</button>
-                <button id="btn-cancel-${idx}" style="background:#ef4444;">Cancel</button>
-            `;
-            const pill = document.createElement('span');
-            pill.className = 'job-id-pill';
-            pill.id = `job-pill-${idx}`;
-            actions.appendChild(pill);
-            const copy = document.createElement('button');
-            copy.className = 'job-id-copy';
-            copy.id = `job-copy-${idx}`;
-            copy.title = 'Copy job id';
-            copy.innerHTML = '<i class="far fa-copy"></i>';
-            actions.appendChild(copy);
-            setJobIdPill(idx, jobId);
-            document.getElementById(`btn-resume-${idx}`).onclick = async () => {
-                if (!jobId) return;
-                try { await fetch(r.scan.jobs.resume(jobId), { method: 'POST' }); } catch {}
-            };
-            document.getElementById(`btn-cancel-${idx}`).onclick = async () => {
-                if (!jobId) return;
-                try { await fetch(r.scan.jobs.cancel(jobId), { method: 'POST' }); } catch {}
-            };
-        } else if (state === 'done') {
-            // Restore to Full Scan button
-            const scanUrl = actions.dataset.scanUrl;
-            const connectorNameEsc = actions.dataset.connectorName;
-            const connectorUuid = actions.dataset.connectorUuid;
-            actions.innerHTML = `
-                <button onclick="invokeFullScan(${idx}, '${scanUrl}', '${connectorNameEsc}', '${connectorUuid}')">Full Scan</button>
-            `;
-            // Also remove any pill
-            const pill = document.getElementById(`job-pill-${idx}`);
-            if (pill) { pill.style.display = 'none'; pill.textContent=''; pill.title=''; }
-            const copy = document.getElementById(`job-copy-${idx}`);
-            if (copy) { copy.style.display = 'none'; copy.title=''; copy.onclick = null; }
-        }
-    }
+    // removed idx-based updater (use updateActionButtonsByUuid)
 
-    function addCompletionBadge(idx, status) {
-        const card = document.querySelector(`.connector-card[data-index='${idx}']`);
+function addCompletionBadgeByUuid(connectorUuid, status) {
+    const card = document.querySelector(`.connector-card[data-connector-uuid='${connectorUuid}']`);
         if (!card) return;
         let badge = card.querySelector('.job-complete-badge');
         if (!badge) {
@@ -952,9 +949,9 @@
         badge.textContent = status === 'cancelled' ? 'Cancelled' : 'Completed';
     }
 
-    function setJobIdPill(idx, jobId) {
-        const pill = document.getElementById(`job-pill-${idx}`);
-        const copy = document.getElementById(`job-copy-${idx}`);
+    function setJobIdPillByUuid(connectorUuid, jobId) {
+    const pill = document.getElementById(`job-pill-${connectorUuid}`);
+    const copy = document.getElementById(`job-copy-${connectorUuid}`);
         if (!pill) return;
         const shortId = jobId ? jobId.substring(0,8) + '…' : '';
         if (jobId) {
@@ -987,6 +984,8 @@
         }
     }
 
+    // removed idx-based setJobIdPill (use setJobIdPillByUuid)
+
     function rememberActiveJob(jobId, connectorUuid) {
         try {
             const raw = localStorage.getItem('activeJobs');
@@ -995,13 +994,9 @@
             localStorage.setItem('activeJobs', JSON.stringify(obj));
         } catch {}
         try {
-            const card = [...document.querySelectorAll('.connector-card')].find(el => el.dataset.connectorUuid === connectorUuid);
-            if (card) {
-                const idx = Number(card.dataset.index);
-                const actions = document.getElementById(`actions-${idx}`);
-                if (actions) actions.dataset.jobId = jobId;
-                setJobIdPill(idx, jobId);
-            }
+            const actions = document.getElementById(`actions-${connectorUuid}`);
+            if (actions) actions.dataset.jobId = jobId;
+            setJobIdPillByUuid(connectorUuid, jobId);
         } catch {}
     }
     function forgetActiveJob(jobId) {
@@ -1031,7 +1026,6 @@
                 if (!uuid) continue;
                 const card = [...document.querySelectorAll('.connector-card')].find(el => el.dataset.connectorUuid === uuid);
                 if (!card) continue;
-                const idx = Number(card.dataset.index);
                 // One-shot verify status from API to clear stale state
                 try {
                     const res = await fetch(r.scan.jobs.status(jobId));
@@ -1060,20 +1054,20 @@
 
                     if (isComplete || isStale) {
                         // On rehydrate, simply clear stale job; leave UI clean without badge/note
-                        updateActionButtons(idx, 'done', jobId);
+                        updateActionButtonsByUuid(uuid, 'done', jobId);
                         forgetActiveJob(jobId);
                         continue;
                     }
                     // Running/paused: set buttons accordingly
                     if (status === 'paused') {
-                        updateActionButtons(idx, 'paused', jobId);
+                        updateActionButtonsByUuid(uuid, 'paused', jobId);
                     } else {
-                        updateActionButtons(idx, 'running', jobId);
+                        updateActionButtonsByUuid(uuid, 'running', jobId);
                     }
-                    setJobIdPill(idx, jobId);
+                    setJobIdPillByUuid(uuid, jobId);
                 } catch {
                     // If job not found or API error, revert to Full Scan (no badge on rehydrate)
-                    updateActionButtons(idx, 'done', jobId);
+                    updateActionButtonsByUuid(uuid, 'done', jobId);
                     forgetActiveJob(jobId);
                 }
             }
@@ -1125,11 +1119,11 @@
                 <div class="asset-line" title="${cfg.asset || cfg.resolved_asset_base || cfg.asset_display_name || ''}"><span class="kv">Asset:</span> ${cfg.asset_display_name || cfg.resolved_asset_base || cfg.asset || 'n/a'}</div>
                 <div class="filter-line" title="${cfg.filter || ''}"><span class="kv">Filter:</span> ${cfg.filter || 'n/a'}</div>
             ` : ''}
-            <div id="actions-${idx}" data-scan-url="${scanUrl}" data-connector-name="${conn.name.replace(/'/g, "\'")}" data-connector-uuid="${conn.uuid}" style="display:flex; gap: 0.5rem; align-items: baseline; margin-top: 0.75rem; flex-wrap: wrap;">
-                <button onclick="invokeFullScan(${idx}, '${scanUrl}', '${conn.name.replace(/'/g, "\'")}', '${conn.uuid}')">Full Scan</button>
-                <span class="job-id-pill" id="job-pill-${idx}" style="display:none"></span>
+            <div id="actions-${conn.uuid}" data-scan-url="${scanUrl}" data-connector-name="${conn.name.replace(/'/g, "\'")}" data-connector-uuid="${conn.uuid}" style="display:flex; gap: 0.5rem; align-items: baseline; margin-top: 0.75rem; flex-wrap: wrap;">
+                <button onclick="invokeFullScanByUuid('${conn.uuid}', '${scanUrl}', '${conn.name.replace(/'/g, "\'")}')">Full Scan</button>
+                <span class="job-id-pill" id="job-pill-${conn.uuid}" style="display:none"></span>
             </div>
-            <span class="scan-note" id="scan-note-${idx}"></span>
+            <span class="scan-note" id="scan-note-${conn.uuid}"></span>
         `;
         return card;
     }
@@ -1173,7 +1167,8 @@
         let ready = false, cfg = {};
         try { const rz = await fetchSafe(r.connectors.readyz(uuid)); ready = !!(rz && rz.ok); } catch {}
         try { const c = await fetchSafe(r.connectors.config(uuid)); cfg = c ? await c.json() : {}; } catch {}
-        const idx = 0;
+        // Preserve the existing index if the card already exists; else append at the end
+        const idx = target ? Number(target.dataset.index) : container.children.length;
         const newCard = renderConnectorCard(conn, cfg, idx, ready);
         if (target) {
             container.replaceChild(newCard, target);
@@ -1181,7 +1176,7 @@
             if (container.textContent.includes('No connectors registered')) {
                 container.innerHTML = '';
             }
-            container.prepend(newCard);
+            container.appendChild(newCard);
         }
         // If still not ready or config missing, schedule one background refresh
         if (!ready || !(cfg && (cfg.asset || cfg.filter || cfg.resolved_asset_base))) {
@@ -1259,7 +1254,7 @@
 
         const idx = container.children.length;
         const card = renderConnectorCard(newConnector, config, idx);
-        container.prepend(card);
+        container.appendChild(card);
 
         showNotification(`${newConnector.name} connected`, 'success');
     }
@@ -1479,8 +1474,8 @@
                             card = [...document.querySelectorAll('.connector-card')].find(el => el.dataset.connectorUuid === rec.scan_request.connector.uuid);
                         }
                         if (card) {
-                            const idx = Number(card.dataset.index);
-                            const noteEl = document.getElementById(`scan-note-${idx}`);
+                            const connectorUuid = String(card.dataset.connectorUuid);
+                            const noteEl = document.getElementById(`scan-note-${connectorUuid}`);
                             const fmtDur = (s) => {
                                 if (s == null || isNaN(s)) return '';
                                 s = Math.max(0, Number(s));
@@ -1510,10 +1505,10 @@
                             }
                             const status = (job.status || '').toLowerCase();
                             if (status === 'paused') {
-                                updateActionButtons(idx, 'paused', job.job_id);
+                                updateActionButtonsByUuid(connectorUuid, 'paused', job.job_id);
                             } else if (status === 'completed' || status === 'cancelled') {
-                                updateActionButtons(idx, 'done', job.job_id);
-                                addCompletionBadge(idx, status);
+                                updateActionButtonsByUuid(connectorUuid, 'done', job.job_id);
+                                addCompletionBadgeByUuid(connectorUuid, status);
                                 if (noteEl) {
                                     const proc = Number(job.processed_count || 0);
                                     const dur = (job.duration_secs != null) ? fmtDur(job.duration_secs) : '';
@@ -1529,15 +1524,15 @@
                                             : ((job.enqueued_total != null && Number(job.enqueued_total) >= 0) ? Number(job.enqueued_total)
                                                : ((job.enqueued_count != null && Number(job.enqueued_count) >= 0) ? Number(job.enqueued_count) : null));
                                 if (tot != null && proc >= tot) {
-                                    updateActionButtons(idx, 'done', job.job_id);
-                                    addCompletionBadge(idx, 'completed');
+                                    updateActionButtonsByUuid(connectorUuid, 'done', job.job_id);
+                                    addCompletionBadgeByUuid(connectorUuid, 'completed');
                                     if (noteEl) {
                                         const dur = (job.duration_secs != null) ? fmtDur(job.duration_secs) : '';
                                         noteEl.textContent = `Scan complete: ${proc}${dur ? ` / ${dur}` : ''}`;
                                     }
                                     forgetActiveJob(job.job_id);
                                 } else {
-                                    updateActionButtons(idx, 'running', job.job_id);
+                                    updateActionButtonsByUuid(connectorUuid, 'running', job.job_id);
                                 }
                             }
                         }
@@ -1630,7 +1625,7 @@
 
             // Wire buttons
             const scanUrl = r.connectors.fullscan(uuid);
-            document.getElementById('btn-sample-scan').addEventListener('click', () => invokeSampleScan(0, scanUrl, connectorName, 5, uuid));
+            document.getElementById('btn-sample-scan').addEventListener('click', () => invokeSampleScanByUuid(uuid, scanUrl, connectorName, 5));
             document.getElementById('btn-preview').addEventListener('click', async () => {
                 const target = document.getElementById('previewList');
                 target.textContent = 'Loading preview...';

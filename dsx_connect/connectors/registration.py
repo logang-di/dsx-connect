@@ -12,7 +12,22 @@ from dsx_connect.messaging.connector_keys import ConnectorKeys
 from shared.models.connector_models import ConnectorInstanceModel
 from shared.dsx_logging import dsx_logging
 
-DEFAULT_TTL = 120  # seconds
+DEFAULT_TTL = 120  # seconds (non-dev default)
+
+def _effective_ttl(default_ttl: int | None = None) -> int:
+    """Resolve the TTL based on app environment.
+
+    Dev environment: use a longer TTL (600s) to tolerate laptop sleep.
+    Other environments: use provided default (or 120s).
+    """
+    try:
+        from dsx_connect.config import get_config, AppEnv  # local import to avoid circulars at import time
+        cfg = get_config()
+        if getattr(cfg, "app_env", None) == AppEnv.dev:
+            return 600
+    except Exception:
+        pass
+    return int(default_ttl or DEFAULT_TTL)
 
 # ---------------------------------------------------------------------------
 # Note on registration functions:
@@ -45,7 +60,7 @@ def _get_services(request: Request) -> tuple[Optional[AsyncRedis], Optional[Bus]
 async def register_or_refresh_connector(
         request: Request,
         conn: ConnectorInstanceModel,
-        ttl: int = DEFAULT_TTL,
+        ttl: int | None = None,
 ) -> Tuple[bool, str]:
     """
     Upsert presence for a connector and broadcast:
@@ -55,16 +70,24 @@ async def register_or_refresh_connector(
     """
     r, bus, notifiers = _get_services(request)
     if r is None:
-        dsx_logging.warning("Registry unavailable; no async Redis client provided")
+        try:
+            from dsx_connect.config import get_config  # local import to avoid cycles
+            cfg = get_config()
+            dsx_logging.warning(
+                f"Registry unavailable; no async Redis client provided (DSXCONNECT_REDIS_URL={cfg.redis_url})"
+            )
+        except Exception:
+            dsx_logging.warning("Registry unavailable; no async Redis client provided")
         return False, "unavailable"
 
     key = ConnectorKeys.presence(str(conn.uuid))
     model_json = json.dumps(conn.model_dump(mode="json"), separators=(",", ":"))
+    ttl_sec = _effective_ttl(ttl)
 
     try:
-        is_new = await r.set(name=key, value=model_json, ex=ttl, nx=True)
+        is_new = await r.set(name=key, value=model_json, ex=ttl_sec, nx=True)
         if not is_new:
-            await r.expire(key, ttl)
+            await r.expire(key, ttl_sec)
 
         # Internal bus: full payload for registry cache
         if bus is not None:
@@ -92,7 +115,14 @@ async def unregister_connector(
     """Delete presence and publish an 'unregistered' to both buses."""
     r, bus, notifiers = _get_services(request)
     if r is None:
-        dsx_logging.warning("Registry unavailable; no async Redis client provided")
+        try:
+            from dsx_connect.config import get_config
+            cfg = get_config()
+            dsx_logging.warning(
+                f"Registry unavailable; no async Redis client provided (DSXCONNECT_REDIS_URL={cfg.redis_url})"
+            )
+        except Exception:
+            dsx_logging.warning("Registry unavailable; no async Redis client provided")
         return False
 
     uid = str(uuid)
@@ -149,7 +179,7 @@ def _get_sync_services() -> tuple[redis.Redis | None, SyncBus | None]:
 
 def register_or_refresh_connector_from_redis(
         conn: ConnectorInstanceModel,
-        ttl: int = DEFAULT_TTL,
+        ttl: int | None = None,
 ) -> tuple[bool, str]:
     """
     Synchronous variant of ``register_or_refresh_connector`` for use outside of
@@ -175,11 +205,12 @@ def register_or_refresh_connector_from_redis(
 
     key = ConnectorKeys.presence(str(conn.uuid))
     model_json = json.dumps(conn.model_dump(mode="json"), separators=(",", ":"))
+    ttl_eff = _effective_ttl(ttl)
     try:
-        is_new = r.set(name=key, value=model_json, ex=ttl, nx=True)
+        is_new = r.set(name=key, value=model_json, ex=ttl_eff, nx=True)
         if not is_new:
             # Refresh TTL if existing
-            r.expire(key, ttl)
+            r.expire(key, ttl_eff)
 
         # Publish full payload on the internal registry bus
         if bus is not None:

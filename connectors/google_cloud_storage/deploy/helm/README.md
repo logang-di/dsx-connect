@@ -52,25 +52,32 @@ gcloud iam service-accounts keys create sa.json \
   --iam-account dsx-gcs-connector@${PROJECT_ID}.iam.gserviceaccount.com
 ```
 
-4) Create a Kubernetes Secret (name must match your values or overrides)
+4) Simplest: create the Secret from the provided manifest
+
+- Edit `gcp-sa-secret.yaml` in this directory and paste your key into `stringData.service-account.json`.
+- Apply it to your target namespace (example uses `default`; change as needed):
 
 ```bash
-kubectl create secret generic gcp-sa \
-  --from-file=service-account.json=./sa.json
+kubectl -n default apply -f gcp-sa-secret.yaml
 ```
 
-Set in values (or via `--set`):
+- Configure the chart to use that Secret (if your values don’t already set it):
 
 ```yaml
 gcp:
-  credentialsSecretName: gcp-sa
+  credentialsSecretName: gcp-sa   # must match metadata.name in gcp-sa-secret.yaml
   mountPath: /app/creds
-  filename: service-account.json
+  filename: service-account.json  # must match the key in the Secret
 ```
 
-The chart will mount the Secret and set `GOOGLE_APPLICATION_CREDENTIALS=/app/creds/service-account.json` for the pod.
+The chart mounts the Secret and sets `GOOGLE_APPLICATION_CREDENTIALS=/app/creds/service-account.json` for the pod.
 
-> Alternative: `kubectl apply -f gcp-sa-secret.yaml` in this directory and set `gcp.credentialsSecretName: gcp-sa`.
+Alternative (CLI): create the Secret without editing the file
+
+```bash
+kubectl -n default create secret generic gcp-sa \
+  --from-file=service-account.json=./sa.json
+```
 
 ---
 

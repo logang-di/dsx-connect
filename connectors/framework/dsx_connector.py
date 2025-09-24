@@ -165,6 +165,8 @@ class DSXConnector:
                 if repo_ok:
                     self.connector_running_model.status = ConnectorStatusEnum.READY
                     dsx_logging.info("Connector is READY (registration + repo check OK).")
+                    # Ensure heartbeat loop is running to refresh presence TTL in dsx-connect
+                    self._start_heartbeat()
                 else:
                     self.connector_running_model.status = ConnectorStatusEnum.STARTING
                     dsx_logging.info("Registration OK but repo check not ready; entering retry loop.")
@@ -178,7 +180,8 @@ class DSXConnector:
             yield
 
             # ============ shutdown ============
-            # stop retry loop if running
+            # stop loops if running
+            await self._cancel_heartbeat()
             await self._cancel_retry_loop()
 
             # unregister
@@ -260,6 +263,39 @@ class DSXConnector:
             except asyncio.CancelledError:
                 pass
         self._reg_retry_task = None
+        
+    def _start_heartbeat(self) -> None:
+        """Start a background task to refresh connector registration periodically."""
+        if self._hb_task is None or self._hb_task.done():
+            self._hb_task = asyncio.create_task(self._heartbeat_loop(), name="dsxconn-heartbeat")
+
+    async def _cancel_heartbeat(self) -> None:
+        task = self._hb_task
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._hb_task = None
+
+    async def _heartbeat_loop(self) -> None:
+        """Periodically (re)register to refresh presence TTL in dsx-connect."""
+        interval = max(5, int(getattr(self, "HEARTBEAT_INTERVAL_SECONDS", 60)))
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                res = await self.register_connector(self.connector_running_model)
+                if res.status == StatusResponseEnum.SUCCESS:
+                    # keep quiet in steady state to avoid log spam
+                    continue
+                # On failures, log at warning with concise message
+                dsx_logging.warning(f"Heartbeat register failed: {getattr(res, 'message', 'unknown')}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                # Non-fatal; try again next tick
+                dsx_logging.debug(f"Heartbeat loop error: {e}", exc_info=True)
 
     async def _safe_repo_check_ok(self) -> bool:
         """
