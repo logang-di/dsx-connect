@@ -57,3 +57,10 @@ Selector labels
 {{- toYaml $labels -}}
 {{- end -}}
 
+{{/*
+HTTP route base used by the application for health/ready endpoints.
+Defaults to the DSX connector's logical name, which is different from the chart name.
+*/}}
+{{- define "filesystem-connector.routeBase" -}}
+{{- default "filesystem-connector" .Values.routeBase -}}
+{{- end -}}

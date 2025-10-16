@@ -24,6 +24,8 @@ This guide explains the core configuration concepts and details three deployment
 - env.DSXCONNECTOR_DISPLAY_NAME: Optional friendly name shown on the dsx-connect UI card (e.g., "Azure Blob Storage Connector").
 - env.DSXCONNECTOR_ITEM_ACTION: What to do with malicious files. One of: `nothing` (default), `delete`, `tag`, `move`, `move_tag`.
 - env.DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: Target when action is `move` or `move_tag` (e.g., `dsxconnect-quarantine`).
+- workers: Uvicorn worker processes per pod (default 1). Increases in-pod parallel request handling (e.g., read_file). Typical 2–4.
+- replicaCount: Number of pods (default 1). Horizontal scaling and HA.
 
 These are the most commonly changed settings on first deploy.
 
@@ -118,6 +120,23 @@ Instead of running `helm` commands manually, you declare the desired state of yo
 This involves storing environment-specific values files (e.g., `values-invoices-prod.yaml`) in a separate GitOps repository. The GitOps tool then uses these files to automate Helm deployments, providing a fully auditable and declarative system for managing your application lifecycle.
 
 ---
+
+## Scaling and Workers
+
+- `workers` controls the number of Uvicorn processes inside a single connector pod. Raise to 2–4 to increase parallel read_file handling without adding pods.
+- `replicaCount` controls how many pods run behind the Service. Useful for horizontal scale and resiliency. Kubernetes balances requests across pods.
+- Practical tips:
+  - Favor modest Celery concurrency (2–4) on dsx-connect scan-request workers first; then add worker replicas when CPU-bound or for resiliency.
+  - For this connector, raise `workers` to 2–4 if read_file is CPU-bound or you want more in-pod parallel reads; add replicas if a single pod’s CPU or network is saturated, or for HA.
+  - If you see uneven distribution across replicas (HTTP keep-alive), higher Celery concurrency tends to open more connections and spread load better; httpx connection limits can be tuned later if needed.
+
+Important:
+- Each connector replica registers independently with dsx-connect and receives a unique connector UUID. You will see multiple connectors for the same asset/filter in the UI when `replicaCount > 1`.
+- A Full Scan request targets one connector instance; increasing `replicaCount` does not parallelize a single Full Scan’s file enumeration. Prefer increasing `workers` (and dsx-connect worker concurrency) for throughput. Replicas primarily help HA and serving concurrent `read_file` requests; Service load-balancing spreads connections across pods.
+
+Important:
+- Each connector replica registers independently with dsx-connect and receives a unique connector UUID. You will see multiple connectors for the same asset/filter in the UI when `replicaCount > 1`.
+- A Full Scan request targets one connector instance; increasing `replicaCount` does not parallelize a single Full Scan enqueue path. Prefer increasing `workers` (and dsx-connect worker concurrency) for throughput, and use replicas primarily for HA and serving concurrent `read_file` requests.
 
 ## Advanced Configuration
 

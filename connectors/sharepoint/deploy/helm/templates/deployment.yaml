@@ -38,7 +38,12 @@ spec:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: {{ toJson .Values.command }}
+          {{- $workers := (default 1 .Values.workers) }}
+          command:
+            - "python"
+            - "connectors/sharepoint/start.py"
+            - "--workers"
+            - "{{ $workers }}"
           args:
             - "--port"
             - "{{- if .Values.tls.enabled -}}{{ .Values.tls.port }}{{- else -}}{{ .Values.service.port }}{{- end -}}"
@@ -88,7 +93,7 @@ spec:
                   key: DSXCONNECTOR_SP_CLIENT_SECRET
           readinessProbe:
             httpGet:
-              path: /{{ include "sharepoint-connector.name" . }}/readyz
+              path: /{{ include "sharepoint-connector.routeBase" . }}/readyz
               port: {{- if .Values.tls.enabled }} https {{ else }} http {{ end }}
               scheme: {{- if .Values.tls.enabled }} HTTPS {{ else }} HTTP {{ end }}
             initialDelaySeconds: 5
@@ -97,7 +102,7 @@ spec:
             failureThreshold: 3
           livenessProbe:
             httpGet:
-              path: /{{ include "sharepoint-connector.name" . }}/healthz
+              path: /{{ include "sharepoint-connector.routeBase" . }}/healthz
               port: {{- if .Values.tls.enabled }} https {{ else }} http {{ end }}
               scheme: {{- if .Values.tls.enabled }} HTTPS {{ else }} HTTP {{ end }}
             initialDelaySeconds: 10

@@ -5,6 +5,8 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+replicaCount: 1
+
 env:
   LOG_LEVEL: debug
 
@@ -12,3 +14,11 @@ celery:
   # queue computed from DSXCONNECT_APP_ENV in template unless overridden here
   # queue: "dev.dsx_connect.scans.result.notify"
   concurrency: 1
+
+hpa:
+  enabled: false
+  # minReplicas defaults to replicaCount when omitted
+  # minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80

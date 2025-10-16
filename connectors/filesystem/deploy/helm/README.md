@@ -20,6 +20,8 @@ Use it to run a connector instance that scans a directory path available to the 
 - env.DSXCONNECTOR_MONITOR_POLL_INTERVAL_MS: Polling interval in milliseconds when force polling is enabled (default `"1000"`).
 - env.DSXCONNECTOR_ITEM_ACTION: What to do with malicious files. One of: `nothing` (default), `delete`, `tag`, `move`, `move_tag`.
 - env.DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: Target directory when action is `move` or `move_tag` (default `/app/quarantine`). Ensure the volume and path exist.
+- workers: Uvicorn worker processes per pod (default 1). Increases in-pod parallel request handling (e.g., read_file). Typical 2–4.
+- replicaCount: Number of pods (default 1). Horizontal scaling and HA.
 
 These are the most commonly changed settings on first deploy.
 
@@ -162,6 +164,16 @@ Notes
 - The chart sets `DSXCONNECTOR_ASSET` to `scanVolume.mountPath` automatically (default `/app/scan_folder`).
 - Prefer PVCs in production; hostPath is for local/dev.
 - Helm guardrails: when `scanVolume.enabled=true`, the chart requires exactly one of `scanVolume.existingClaim` or `scanVolume.hostPath`. The install will fail if neither or both are set.
+
+### Scaling and Workers
+
+- `workers` controls the number of Uvicorn processes inside a single connector pod. Raise to 2–4 to increase parallel read_file handling without adding pods.
+- `replicaCount` controls how many pods run behind the Service. Useful for HA and for capacity to serve concurrent `read_file` requests. Kubernetes balances connections across pods.
+- Important: each replica registers as an independent connector with a unique UUID (you will see multiple connectors for the same asset/filter in the UI). A Full Scan request targets a single connector instance and its file enumeration is not parallelized by `replicaCount`. Replicas can still serve concurrent `read_file` requests initiated by dsx-connect workers (including those from a Full Scan) via Service load-balancing.
+- Practical tips:
+  - Favor modest Celery concurrency (2–4) on dsx-connect scan-request workers first; then add worker replicas when CPU-bound or for resiliency.
+  - For this connector, raise `workers` to 2–4 if read_file is CPU-bound or you want more in-pod parallel reads; add replicas if a single pod’s CPU or network is saturated, or for HA.
+  - If you see uneven distribution across replicas (HTTP keep-alive), higher Celery concurrency tends to open more connections and spread load better; httpx connection limits can be tuned later if needed.
 
 Example manifests are provided under `volume-mount-examples/`:
 - `volume-mount-examples/pvc-scan-data.yaml` (simple RWO PVC)

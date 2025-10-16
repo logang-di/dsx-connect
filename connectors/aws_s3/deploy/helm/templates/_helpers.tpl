@@ -58,6 +58,14 @@ Selector labels
 {{- end -}}
 
 {{/*
+HTTP route base used by the application for health/ready endpoints.
+Defaults to the DSX connector's logical name, which is different from the chart name.
+*/}}
+{{- define "aws-s3-connector.routeBase" -}}
+{{- default "aws-s3-connector" .Values.routeBase -}}
+{{- end -}}
+
+{{/*
 Create the name of the service account to use (not used, but kept for parity)
 */}}
 {{- define "aws-s3-connector.serviceAccountName" -}}
@@ -67,4 +75,3 @@ Create the name of the service account to use (not used, but kept for parity)
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
-

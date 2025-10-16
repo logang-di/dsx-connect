@@ -34,6 +34,7 @@ This umbrella chart deploys the DSX‑Connect stack. Key configuration areas (mi
 - `dsx-connect-api.tls.enabled` + `dsx-connect-api.tls.secretName`: enable HTTPS for the API; certs mounted at `tls.mountPath`.  Will use self-signed certs if none supplied.
 - `global.image.tag`: pin a specific image version across all components.
 - `dsx-connect-*-worker.celery.concurrency`: adjust worker parallelism per queue.
+- `dsx-connect-*-worker.replicaCount`: number of identical pods for that worker.
 - `dsx-connect-dianna-worker`: runs DIANNA analyze tasks on queue `<env>.dsx_connect.analyze.dianna`; scale independently.
   - Polling controls (wired from `global.dianna`):
     - `global.dianna.pollResultsEnabled` → `DSXCONNECT_DIANNA__POLL_RESULTS_ENABLED` (default: true)
@@ -80,7 +81,37 @@ For production, source the DIANNA API token from a Kubernetes Secret rather than
 
    - Queue defaults to `<DSXCONNECT_APP_ENV>.dsx_connect.analyze.dianna`.
    - Override with `dsx-connect-dianna-worker.celery.queue` if needed.
-   - Scale parallelism via `dsx-connect-dianna-worker.celery.concurrency`.
+  - Scale parallelism via `dsx-connect-dianna-worker.celery.concurrency`.
+
+### Notes on Concurrency and Replicas
+
+Workers scale with two knobs. Use them together for best results:
+
+- Replica count (`replicaCount`): number of pods. Each pod has its own CPU/memory limits/requests and its own Celery process. Good for horizontal scaling and resilience.
+- Concurrency (`celery.concurrency`): number of task workers inside one pod. Increases parallelism within a pod; shares that pod’s resources.
+
+Guidance:
+- The Scan request workers are generally the place to start with concurrency.  These workers take enqueued scan request tasks, reads a file from a connector, and sends the file to DSXA for scanning.
+  Needless to say, a single pod / single celery worker can only handle a single scan request at a time.
+- Start by raising `celery.concurrency` modestly (2–4), then add `replicaCount` to spread load across nodes.
+- If CPU-bound within a pod, increase pod resources or add replicas. If I/O-bound (network/Redis/HTTP), modest concurrency increases often help.
+- Example: 3 pods × concurrency 3 ≈ 9 workers on the queue.
+- Scale downstream workers (verdict/result/notification) when increasing request throughput to avoid bottlenecks.
+
+#### Practical Tuning Tips
+- Continue favoring modest Celery concurrency (2–4) before adding pods; add replicas when you see CPU saturation or want resiliency.
+- For connectors, bump `workers` to 2–4 if read_file handlers are CPU-bound or you want more in-pod parallel reads; add connector replicas if a single pod’s CPU or network is saturated, or for HA.
+- If you notice uneven distribution across connector replicas due to HTTP keep-alive, higher Celery concurrency tends to open more connections and spread load better; you can also tune httpx connection limits if needed later.
+
+#### Connector Replicas: What `replicaCount` Actually Does
+- Setting a connector chart’s `replicaCount > 1` deploys multiple identical connector pods that each register independently with dsx-connect, each with a unique connector UUID. The UI will show multiple connectors for the same asset/filter.
+- A Full Scan request (from the UI or API) targets a single registered connector instance. Increasing `replicaCount` does not parallelize a single full-scan enqueue path.
+- Where replicas do help:
+  - High availability (one pod can restart while another continues to serve), and
+  - Serving concurrent `read_file` requests from the dsx-connect scan-request workers (Kubernetes Service balances connections across pods; higher Celery concurrency opens more connections and spreads load).
+- To parallelize work across a single asset intentionally, prefer:
+  - Increasing connector `workers` (Uvicorn processes) for in-pod concurrency, and/or
+  - Running multiple connector releases with different `DSXCONNECTOR_FILTER` partitions (sharding), so Full Scan is performed in parallel across slices by distinct connector instances.
 
 ---
 

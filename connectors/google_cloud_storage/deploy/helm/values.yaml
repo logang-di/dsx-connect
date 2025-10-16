@@ -1,4 +1,3 @@
-replicaCount: 1
 
 image:
   repository: dsxconnect/google-cloud-storage-connector
@@ -47,8 +46,9 @@ dataVolume:
   enabled: true
   mountPath: "/app/data"
 
-command:
-  - "python"
-  - "connectors/google_cloud_storage/start.py"
-  - "--workers"
-  - "1"
+# Uvicorn concurrency and pod replicas
+# 'workers' = Uvicorn worker processes per pod (in‑pod parallelism)
+# 'replicaCount' = number of pods (horizontal scale/HA)
+
+workers: 1  # Uvicorn worker processes per pod (in‑pod parallel requests)
+replicaCount: 1  # Number of pods for this connector (HA/service capacity). Note: does not parallelize Full Scan enumeration; replicas can still serve concurrent read_file via Service LB.

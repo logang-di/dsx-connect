@@ -73,28 +73,34 @@ dsx-connect-api:
 
 dsx-connect-scan-request-worker:
   enabled: true
+  replicaCount: 1
   env:
     LOG_LEVEL: info
   celery:
     # queue computed from DSXCONNECT_APP_ENV in template unless overridden here
     # queue: "dev.dsx_connect.scans.request"
+    # Concurrency = Celery workers per pod. Combine with replicaCount for total parallelism.
     concurrency: 1
 
 dsx-connect-verdict-action-worker:
   enabled: true
+  replicaCount: 1
   env:
     LOG_LEVEL: info
   celery:
     # queue: "dev.dsx_connect.scans.verdict"
+    # Concurrency = Celery workers per pod.
     concurrency: 1
 
 dsx-connect-results-worker:
   enabled: true
+  replicaCount: 1
   env:
     LOG_LEVEL: info
     DSXCONNECT_SYSLOG__TRANSPORT: tcp
   celery:
     # queue: "dev.dsx_connect.scans.result"
+    # Concurrency = Celery workers per pod.
     concurrency: 1
   # Optional shared data volume for /app/data so worker and API share DB files
   dataVolume:
@@ -104,19 +110,23 @@ dsx-connect-results-worker:
 
 dsx-connect-notification-worker:
   enabled: true
+  replicaCount: 1
   # image:
   env:
     LOG_LEVEL: info
   celery:
     # queue: "dev.dsx_connect.scans.result.notify"
+    # Concurrency = Celery workers per pod.
     concurrency: 1
 
 dsx-connect-dianna-worker:
   enabled: true
+  replicaCount: 1
   env:
     LOG_LEVEL: info
   celery:
     # queue: "dev.dsx_connect.analyze.dianna"
+    # Concurrency = Celery workers per pod.
     concurrency: 1
 
 redis:

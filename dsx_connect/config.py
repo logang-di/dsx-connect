@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Final
 
-from pydantic import AnyUrl, Field, AliasChoices, model_validator
+from pydantic import AnyUrl, Field, AliasChoices, model_validator, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from shared.dev_env import load_devenv
@@ -88,6 +88,24 @@ class DiannaConfig(BaseSettings):
     poll_interval_seconds: int = 5
     # Maximum time to wait for a final result (seconds)
     poll_timeout_seconds: int = 900
+
+    # Allow scientific notation or float-like env values for chunk_size (e.g., "4.194304e+06")
+    @field_validator("chunk_size", mode="before")
+    @classmethod
+    def _coerce_chunk_size(cls, v):
+        if v is None:
+            return v
+        if isinstance(v, int):
+            return v
+        try:
+            # Accept floats or strings in scientific notation; coerce to int bytes
+            # Use Decimal for robust parsing, then floor to int
+            from decimal import Decimal
+
+            return int(Decimal(str(v)))
+        except Exception:
+            # Fall back to default validation error path
+            return v
 
     # Normalize management_url to include scheme if omitted
     @model_validator(mode="after")

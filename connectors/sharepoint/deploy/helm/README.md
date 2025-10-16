@@ -91,6 +91,18 @@ Store environment-specific values in a GitOps repo and sync this chart from OCI 
 - tls.secretName: Secret with `tls.crt` and `tls.key`
 - env.*: Additional environment variables
 - secrets.name: Name of Secret with SP credentials
+- workers: Uvicorn worker processes per pod (default 1). Increases in-pod parallel request handling (e.g., read_file). Typical 2–4.
+- replicaCount: Number of pods (default 1). Horizontal scaling and HA.
+
+### Scaling and Workers
+
+- `workers` controls the number of Uvicorn processes inside a single connector pod. Raise to 2–4 to increase parallel read_file handling without adding pods.
+- `replicaCount` controls how many pods run behind the Service. Useful for HA and for capacity to serve concurrent `read_file` requests. Kubernetes balances connections across pods.
+- Important: each replica registers as an independent connector with a unique UUID (you will see multiple connectors for the same asset/filter in the UI). A Full Scan request targets a single connector instance and its file enumeration is not parallelized by `replicaCount`. Replicas can still serve concurrent `read_file` requests initiated by dsx-connect workers (including those from a Full Scan) via Service load-balancing.
+- Practical tips:
+  - Favor modest Celery concurrency (2–4) on dsx-connect scan-request workers first; then add worker replicas when CPU-bound or for resiliency.
+  - For this connector, raise `workers` to 2–4 if read_file is CPU-bound or you want more in-pod parallel reads; add replicas if a single pod’s CPU or network is saturated, or for HA.
+  - If you see uneven distribution across replicas (HTTP keep-alive), higher Celery concurrency tends to open more connections and spread load better; httpx connection limits can be tuned later if needed.
 
 The following envs are commonly set:
 
