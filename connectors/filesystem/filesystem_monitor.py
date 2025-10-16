@@ -21,12 +21,15 @@ class FilesystemMonitorCallback(ABC):
 
 class FilesystemMonitor:
 
-    def __init__(self, folder: pathlib.Path, filter: str, callback: FilesystemMonitorCallback):
+    def __init__(self, folder: pathlib.Path, filter: str, callback: FilesystemMonitorCallback,
+                 force_polling: bool = False, poll_interval_ms: int = 1000):
         self._folder = folder
         self._filter = filter or ""
         self._callback = callback
         self._shutdown_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._force_polling = force_polling
+        self._poll_interval_ms = max(10, int(poll_interval_ms or 1000))
 
     def start(self):
         if not _HAVE_WATCHFILES:
@@ -39,8 +42,18 @@ class FilesystemMonitor:
             self._shutdown_event.clear()
 
         def _run():
-            dsx_logging.debug(
-                f"Starting watchfiles on {self._folder} with filter='{self._filter}'")
+            if self._force_polling:
+                # Configure watchfiles via env for portability across versions
+                import os
+                os.environ["WATCHFILES_FORCE_POLLING"] = "1"
+                # watchfiles expects seconds (float) for WATCHFILES_POLL_DELAY
+                delay_s = str(self._poll_interval_ms / 1000.0)
+                os.environ["WATCHFILES_POLL_DELAY"] = delay_s
+                dsx_logging.debug(
+                    f"Starting watchfiles (polling) on {self._folder} with filter='{self._filter}', interval={delay_s}s")
+            else:
+                dsx_logging.debug(
+                    f"Starting watchfiles on {self._folder} with filter='{self._filter}'")
             try:
                 # Build a watchfiles filter that screens non-matching files early
                 def _watch_filter(change, path_str: str) -> bool:  # type: ignore[override]

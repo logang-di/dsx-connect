@@ -173,6 +173,45 @@ async def pause_job(job_id: str, request: Request) -> dict:
     key = f"dsxconnect:job:{job_id}"
     await r.hset(key, mapping={"paused": "1", "status": "paused", "last_update": str(int(__import__('time').time()))})
     await r.expire(key, 7 * 24 * 3600)
+    # Proactively publish a job-status frame so UI reflects "paused" immediately
+    try:
+        notifiers = getattr(request.app.state, "notifiers", None)
+        if notifiers is not None:
+            data = await r.hgetall(key)
+            # Normalize ints
+            def _to_int(v):
+                try:
+                    return int(v)
+                except Exception:
+                    return None
+            processed = _to_int(data.get("processed_count")) or 0
+            enq_total = _to_int(data.get("enqueued_total"))
+            expected = _to_int(data.get("expected_total"))
+            enq_count = _to_int(data.get("enqueued_count")) or 0
+            total = enq_total if (enq_total is not None and enq_total >= 0) else expected
+            # Build summary consistent with scan_result notifications
+            import time as _t
+            started = _to_int(data.get("started_at")) or 0
+            finished = _to_int(data.get("finished_at")) or 0
+            now_ts = int(_t.time())
+            duration = (finished or now_ts) - started if started else None
+            # Compose event with job summary
+            summary = {
+                "job_id": job_id,
+                "status": "paused",
+                "processed_count": processed,
+                "total": total,
+                "enqueued_total": enq_total,
+                "enqueued_count": enq_count,
+                "enqueue_done": data.get("enqueue_done"),
+                "last_update": data.get("last_update"),
+                "duration_secs": duration,
+            }
+            event = {"type": "scan_result", "scan_result": {"type": "job_status"}, "job": summary}
+            await notifiers.publish_scan_results(event)
+    except Exception:
+        # Non-fatal: SSE update is best-effort
+        pass
     return {"ok": True}
 
 

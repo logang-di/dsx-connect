@@ -15,6 +15,9 @@ Use it to run a connector instance that scans a directory path available to the 
 - env.DSXCONNECTOR_ASSET: Base path inside the container to scan (default `/app/scan_folder`).
 - env.DSXCONNECTOR_FILTER: Optional include/exclude rules under the asset root. Use to scope into subfolders (e.g., `subdir/**`). Follows rsync‑like rules. Examples: `"subdir/**"`, `"**/*.zip,**/*.docx"`, `"-tmp --exclude cache"`.
 - env.DSXCONNECTOR_DISPLAY_NAME: Optional friendly name shown on the dsx-connect UI card (e.g., "TrueNAS Connector").
+- env.DSXCONNECTOR_MONITOR: Set `"true"` to enable realtime monitoring (watchfiles) of `DSXCONNECTOR_ASSET` for new/modified files; default `"false"`.
+- env.DSXCONNECTOR_MONITOR_FORCE_POLLING: For SMB/CIFS or remote mounts that don’t emit inotify events, set to `"true"` to use polling (default `"false"`).
+- env.DSXCONNECTOR_MONITOR_POLL_INTERVAL_MS: Polling interval in milliseconds when force polling is enabled (default `"1000"`).
 - env.DSXCONNECTOR_ITEM_ACTION: What to do with malicious files. One of: `nothing` (default), `delete`, `tag`, `move`, `move_tag`.
 - env.DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: Target directory when action is `move` or `move_tag` (default `/app/quarantine`). Ensure the volume and path exist.
 
@@ -107,7 +110,7 @@ helm install my-connector . -f values-dev-my-asset1.yaml
 Mounts first: set `scanVolume.*` (PVC or hostPath) so `/app/scan_folder` points at your data.
 
 ```bash
-helm install fs oci://registry-1.docker.io/dsxconnect/filesystem-connector \
+helm install fs oci://registry-1.docker.io/dsxconnect/filesystem-connector-chart \
   --version <ver> \
   --set env.DSXCONNECTOR_ASSET="/app/scan_folder" \
   --set-string env.DSXCONNECTOR_FILTER="**/*.zip,**/*.docx"
@@ -132,6 +135,27 @@ scanVolume:
   enabled: true
   hostPath: /mnt/data
   mountPath: /app/scan_folder
+```
+
+macOS + Colima hostPath example:
+```yaml
+# connectors/filesystem/deploy/helm/volume-mount-examples/hostpath-macos-colima.yaml
+scanVolume:
+  enabled: true
+  # Colima (Lima) mounts your macOS home under /Users by default
+  hostPath: /Users/<yourname>/scan-data
+  mountPath: /app/scan_folder
+  readOnly: false
+```
+Install with:
+```bash
+helm install fs oci://registry-1.docker.io/dsxconnect/filesystem-connector-chart \
+  --version <ver> \
+  -f connectors/filesystem/deploy/helm/volume-mount-examples/hostpath-macos-colima.yaml
+```
+Tip: Verify from the pod
+```bash
+kubectl exec -it deploy/filesystem-connector -- sh -lc 'ls -lah /app/scan_folder'
 ```
 
 Notes
@@ -279,6 +303,24 @@ Examples (paths are relative to `DSXCONNECTOR_ASSET`):
 | "sub1 -tmp --exclude sub2"                            | Include `sub1` subtree but exclude `tmp` and `sub2`                         |
 | "'scan here' -'not here' --exclude 'not here either'" | Quoted tokens for names with spaces                                          |
 
+## Asset vs Filter
+
+- Asset: Absolute filesystem base path. No wildcards. Listings start here.
+- Filter: Rsync‑like include/exclude rules relative to the asset base. Supports wildcards and exclusions.
+- Equivalences:
+  - `asset=/mnt/assetroot`, `filter=prefix1/**`  ≈  `asset=/mnt/assetroot/prefix1`, `filter=""`
+  - `asset=/mnt/assetroot`, `filter=sub1`       ≈  `asset=/mnt/assetroot/sub1`, `filter=""` (common usage)
+  - `asset=/mnt/assetroot`, `filter=sub1/*`     ≈  `asset=/mnt/assetroot/sub1`, `filter="*"`
+- Guidance: Prefer Asset for the stable, exact root; use Filter for wildcard selection and excludes under that root.
+  - Plain‑English note: “Complex” filters (e.g., excludes like `-tmp`, or advanced globs beyond simple directory includes) mean the connector can’t prune as aggressively up front. It may have to traverse more of the tree and then match/exclude locally, which is slower than scanning from an exact asset sub‑root.
+
+## Sharding & Deployment Strategies
+
+- Multiple instances: Deploy separate releases pointing at different subdirectories via `DSXCONNECTOR_ASSET` or use include-only filters.
+- Asset-based sharding: set `DSXCONNECTOR_ASSET=/mnt/assetroot/prefix1/sub1` for instance A and `/mnt/assetroot/prefix1/sub2` for instance B.
+- Filter-based sharding: keep a common `DSXCONNECTOR_ASSET=/mnt/assetroot` and use `DSXCONNECTOR_FILTER` like `prefix1/sub1/**` and `prefix1/sub2/**`.
+- Performance tip: Includes prune traversal up front; excludes are applied during traversal too, but include-only shards are the simplest mental model.
+
 ### SMB (CIFS) Example
 SMB requires the SMB CSI driver. Install it first: https://github.com/kubernetes-csi/csi-driver-smb
 
@@ -374,3 +416,20 @@ If dsx-connect uses a private/internal CA, set:
 
 - Local chart (this repo): the default image tag comes from the chart `appVersion` unless you override it (e.g., `--set-string image.tag=<version>`).
 - OCI install (e.g., `helm install oci://… --version X.Y.Z`): the chart at that version is pulled and its `appVersion` becomes the default image tag. You can still override with `--set-string image.tag=...`.
+## SMB/CIFS Shares (Windows file servers)
+
+Many CIFS/SMB mounts on Linux do not emit inotify events for changes made by remote clients. If your share is mounted via `cifs` and you see full scans work but live monitoring does not react when files are dropped from Windows, enable polling:
+
+- Set `env.DSXCONNECTOR_MONITOR="true"`.
+- Set `env.DSXCONNECTOR_MONITOR_FORCE_POLLING="true"`.
+- Optionally tune `env.DSXCONNECTOR_MONITOR_POLL_INTERVAL_MS` (default `1000`).
+
+Mount options that help stat refresh (won’t fix missing inotify):
+- Use SMB 3.x: `vers=3.0` or `vers=3.1.1`
+- Reduce attribute cache: `actimeo=1`, and consider `cache=strict`
+
+Example `cifs` mount (performed on the node where the pod runs when using `hostPath`; not needed for PVC-backed RWX solutions like SMB CSI):
+```bash
+sudo mount -t cifs //server/share /mnt/share \
+  -o vers=3.1.1,username=USER,password=PASS,actimeo=1,cache=strict,uid=$(id -u),gid=$(id -g)
+```

@@ -19,7 +19,7 @@ async def test_full_scan_filters(monkeypatch):
 
     monkeypatch.setattr(gc.connector, "scan_file_request", fake_scan)
 
-    def fake_keys(bucket, filter_str=""):
+    def fake_keys(bucket, base_prefix: str = "", filter_str=""):
         yield {"Key": "sub1/a.txt"}
         yield {"Key": "sub1/deep/b.txt"}
         yield {"Key": "sub2/c.txt"}
@@ -30,4 +30,3 @@ async def test_full_scan_filters(monkeypatch):
     assert resp.status.value == "success"
     # Only direct children under sub1/* are included
     assert calls == ["sub1/a.txt"]
-

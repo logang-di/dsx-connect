@@ -23,6 +23,29 @@ spec:
         app.kubernetes.io/name: {{ include "dsx-connect-results-worker.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      {{- $env := merge (default (dict) $.Values.global.env) (default (dict) .Values.env) }}
+      {{- $syslogHost := ($env.DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL | default "rsyslog") }}
+      {{- $syslogPort := ($env.DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT | default "514") }}
+      {{- if .Values.waitFor.rsyslog.enabled }}
+      initContainers:
+        - name: wait-for-rsyslog
+          image: {{ .Values.waitFor.rsyslog.image | default "busybox:1.36" | quote }}
+          command: ["/bin/sh","-lc"]
+          args:
+            - >-
+              i=0; lim={{ default 60 (div .Values.waitFor.rsyslog.timeoutSeconds 2 | int) }};
+              while :; do
+                host="";
+                for H in {{ $syslogHost }} {{ .Release.Name }}-rsyslog rsyslog; do
+                  if nslookup $H >/dev/null 2>&1; then host=$H; break; fi;
+                done;
+                if [ -n "$host" ]; then
+                  if nc -z -w2 $host {{ $syslogPort }}; then echo "rsyslog reachable at $host:{{ $syslogPort }}"; exit 0; fi;
+                fi;
+                i=$((i+1)); if [ $i -gt $lim ]; then echo 'rsyslog not ready'; exit 1; fi;
+                echo 'waiting for rsyslog...'; sleep 2;
+              done
+      {{- end }}
       {{- if .Values.dataVolume.enabled }}
       volumes:
         - name: app-data
@@ -63,6 +86,7 @@ spec:
             {{ $svc := default (printf "%s-dsxa-scanner" $.Release.Name) $scanner.serviceName }}
             {{ $port := default 5000 $scanner.port }}
             {{ $scheme := default "http" $scanner.scheme }}
+            {{- $di := (default (dict) $.Values.global.dianna) }}
             - name: DSXCONNECT_APP_ENV
               value: {{ $env.DSXCONNECT_APP_ENV | default "dev" | quote }}
             - name: DSXCONNECTOR_API_KEY
@@ -84,9 +108,40 @@ spec:
             - name: LOG_LEVEL
               value: {{ $env.LOG_LEVEL | default "warning" | quote }}
             - name: DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL
-              value: {{ $env.DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL | default "syslog" | quote }}
+              value: {{ $env.DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL | default "rsyslog" | quote }}
             - name: DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT
               value: {{ $env.DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT | default "514" | quote }}
+            # DIANNA settings
+            {{- with $di }}
+            {{- if .managementUrl }}
+            - name: DSXCONNECT_DIANNA__MANAGEMENT_URL
+              value: {{ .managementUrl | quote }}
+            {{- end }}
+            {{- if .apiToken }}
+            - name: DSXCONNECT_DIANNA__API_TOKEN
+              value: {{ .apiToken | quote }}
+            {{- end }}
+            {{- if hasKey . "verifyTls" }}
+            - name: DSXCONNECT_DIANNA__VERIFY_TLS
+              value: {{ .verifyTls | toString | quote }}
+            {{- end }}
+            {{- if .caBundle }}
+            - name: DSXCONNECT_DIANNA__CA_BUNDLE
+              value: {{ .caBundle | quote }}
+            {{- end }}
+            {{- if .chunkSize }}
+            - name: DSXCONNECT_DIANNA__CHUNK_SIZE
+              value: {{ .chunkSize | toString | quote }}
+            {{- end }}
+            {{- if .timeout }}
+            - name: DSXCONNECT_DIANNA__TIMEOUT
+              value: {{ .timeout | toString | quote }}
+            {{- end }}
+            {{- if hasKey . "autoOnMalicious" }}
+            - name: DSXCONNECT_DIANNA__AUTO_ON_MALICIOUS
+              value: {{ .autoOnMalicious | toString | quote }}
+            {{- end }}
+            {{- end }}
             {{- with $env }}
             {{- range $key, $value := . }}
             {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECTOR_API_KEY" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT")) }}

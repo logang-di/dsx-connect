@@ -9,7 +9,7 @@ This guide shows how to run the AWS S3 connector with Docker Compose.
 ## Example docker-compose service
 
 Use the provided `deploy/docker/docker-compose-aws-s3-connector.yaml` as a starting point. Adjust:
-- `DSXCONNECTOR_ASSET` to your bucket/prefix.
+- `DSXCONNECTOR_ASSET` to your bucket or bucket/prefix. If a prefix is provided, listings start at that sub-root and filters are evaluated relative to it.
 - `DSXCONNECTOR_FILTER` for scoping; see filter rules below.
 - AWS credentials via environment variables or secrets.
 

@@ -36,7 +36,7 @@ class GCSClient:
             dsx_logging.error(f"GCS key_exists error: {e}")
             raise
 
-    def keys(self, bucket: str, filter_str: str = ""):
+    def keys(self, bucket: str, base_prefix: str = "", filter_str: str = ""):
         """
         Yield blobs in a GCS bucket applying DSXCONNECTOR_FILTER.
         Uses prefix hints when safe and always verifies with relpath_matches_filter.
@@ -45,22 +45,38 @@ class GCSClient:
         hints = compute_prefix_hints(filter_str or "")
         seen: set[str] = set()
 
+        # Normalize base_prefix to either '' or 'path/'
+        bp = (base_prefix or "").strip("/")
+        if bp:
+            bp = bp + "/"
+
+        def _rel(key: str) -> str:
+            if not bp:
+                return key
+            return key[len(bp):] if key.startswith(bp) else key
+
         def _emit(blob):
             key = blob.name
             if not key or key in seen or key.endswith('/'):
                 return
-            if filter_str and not relpath_matches_filter(key, filter_str):
+            rel = _rel(key)
+            if filter_str and not relpath_matches_filter(rel, filter_str):
                 return
             seen.add(key)
             yield {'Key': key, 'Size': getattr(blob, 'size', None)}
 
         if hints:
             for prefix in sorted(set(hints)):
-                for blob in client.list_blobs(bucket, prefix=prefix):
+                eff = f"{bp}{prefix}" if bp else prefix
+                for blob in client.list_blobs(bucket, prefix=eff):
                     for item in _emit(blob):
                         yield item
         else:
-            for blob in client.list_blobs(bucket):
+            if bp:
+                it = client.list_blobs(bucket, prefix=bp)
+            else:
+                it = client.list_blobs(bucket)
+            for blob in it:
                 for item in _emit(blob):
                     yield item
 

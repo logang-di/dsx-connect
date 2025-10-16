@@ -127,7 +127,7 @@ class AzureBlobClient:
 
 
 
-    def keys(self, container: str, filter_str: str = ""):
+    def keys(self, container: str, base_prefix: str = "", filter_str: str = ""):
         """
         Yield blob keys from a container applying DSXCONNECTOR_FILTER rules.
 
@@ -138,27 +138,43 @@ class AzureBlobClient:
         try:
             container_client = self.service_client.get_container_client(container)
 
+            # Normalize base prefix (virtual folder) to '' or 'path/'
+            bp = (base_prefix or "").strip("/")
+            if bp:
+                bp = bp + "/"
+
             # Compute conservative name_starts_with hints when possible
             hints: list[str] = compute_prefix_hints(filter_str or "")
 
             seen: set[str] = set()
 
+            def _rel(key: str) -> str:
+                if not bp:
+                    return key
+                return key[len(bp):] if key.startswith(bp) else key
+
             def _emit(blob):
                 key = blob.name
                 if key in seen:
                     return
-                if filter_str and not relpath_matches_filter(key, filter_str):
+                rel = _rel(key)
+                if filter_str and not relpath_matches_filter(rel, filter_str):
                     return
                 seen.add(key)
                 yield {'Key': key, 'Size': getattr(blob, 'size', None)}
 
             if hints:
                 for prefix in sorted(set(hints)):
-                    for blob in container_client.list_blobs(name_starts_with=prefix):
+                    eff = f"{bp}{prefix}" if bp else prefix
+                    for blob in container_client.list_blobs(name_starts_with=eff):
                         for item in _emit(blob):
                             yield item
             else:
-                for blob in container_client.list_blobs():
+                if bp:
+                    it = container_client.list_blobs(name_starts_with=bp)
+                else:
+                    it = container_client.list_blobs()
+                for blob in it:
                     for item in _emit(blob):
                         yield item
         except Exception as e:

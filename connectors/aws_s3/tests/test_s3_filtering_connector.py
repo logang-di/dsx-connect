@@ -22,7 +22,7 @@ async def test_full_scan_filters(monkeypatch):
     monkeypatch.setattr(s3c.connector, "scan_file_request", fake_scan)
 
     # Patch client.keys to yield sample keys
-    def fake_keys(bucket, filter_str=""):
+    def fake_keys(bucket, base_prefix: str = "", filter_str: str = ""):
         yield {"Key": "keep.txt"}
         yield {"Key": "sub/keep2.txt"}
         yield {"Key": "drop.bin"}
@@ -32,4 +32,3 @@ async def test_full_scan_filters(monkeypatch):
     resp = await s3c.full_scan_handler()
     assert resp.status.value == "success"
     assert calls == ["keep.txt", "sub/keep2.txt"]
-

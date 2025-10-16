@@ -178,6 +178,38 @@ From the dsx_connect/ directory, execute:
   * Prepares the distribution (dsx-connect-<version>/) with application code, Dockerfile, docker-compose.yaml, and helper files. 
   * Zips the distribution into dsx-connect-<version>.zip. 
   * Builds the Docker image (dsx-connect:<version>). 
+
+## DIANNA Analysis (Deep Instinct)
+
+DSX Connect can queue an on-demand DIANNA analysis for a file accessible via a registered connector.
+
+- Configure environment:
+  - `DSXCONNECT_DIANNA__MANAGEMENT_URL=https://<di-server>`
+    - Tip: you may also set a bare hostname (e.g., `di.example.com`); the app will default to `https://`.
+  - `DSXCONNECT_DIANNA__API_TOKEN=<token>`
+  - Optional TLS: `DSXCONNECT_DIANNA__VERIFY_TLS=true`, `DSXCONNECT_DIANNA__CA_BUNDLE=/path/to/ca.crt`
+  - Result polling (worker, can be set via Helm values for dianna worker):
+    - `DSXCONNECT_DIANNA__POLL_RESULTS_ENABLED` (default: `true`)
+    - `DSXCONNECT_DIANNA__POLL_INTERVAL_SECONDS` (default: `5`)
+    - `DSXCONNECT_DIANNA__POLL_TIMEOUT_SECONDS` (default: `900`)
+  - Helm: prefer setting via `global.dianna` in `dsx_connect/deploy/helm/values.yaml` (the chart maps these to the env vars above for API and workers).
+    For production, source the API token from a Kubernetes Secret:
+    - Example Secret: `dsx_connect/deploy/helm/di-api-secret.yaml`
+    - Setup and wiring instructions: `dsx_connect/deploy/helm/README.md` ("DIANNA API Token via Secret")
+
+- API request (returns 202):
+  - `POST /dsx-connect/api/v1/dianna/analyze/{connector_uuid}`
+  - Body: `{ "location": "path/in/repo", "metainfo": "optional", "archive_password": null }`
+
+- Flow:
+  1) Worker reads the file from the connector (`read_file`).
+  2) Uploads to DI in 4MB chunks using the DIANNA REST API.
+  3) Publishes UI notifications over SSE on the scan-results channel:
+     - `{"type":"dianna_analysis","status":"QUEUED", "upload_id", "location", ...}` when upload completes
+     - `{"type":"dianna_analysis","status":"SUCCESS|FAILED|ERROR|CANCELLED", "upload_id", "analysis":{...}, "is_malicious":bool}` when result is ready
+  4) Emits syslog JSON events for observability: phases `QUEUED` and `RESULT`.
+  5) Failure behavior: DIANNA upload/poll failures do not retry and are not sent to DLQ; the worker logs a warning and returns.
+
   * Pushes the image to Docker Hub (dsxconnect/dsx-connect:<version>).
 
 

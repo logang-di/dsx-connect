@@ -12,6 +12,21 @@ from shared.file_ops import relpath_matches_filter
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
+
+# Derive bucket and base prefix from asset, supporting both "bucket" and "bucket/prefix" forms
+try:
+    raw_asset = (config.asset or "").strip()
+    if "/" in raw_asset:
+        bucket, prefix = raw_asset.split("/", 1)
+        config.asset_bucket = bucket.strip()
+        config.asset_prefix_root = prefix.strip("/")
+    else:
+        config.asset_bucket = raw_asset
+        config.asset_prefix_root = ""
+except Exception:
+    # Fallback: treat entire asset as bucket
+    config.asset_bucket = config.asset
+    config.asset_prefix_root = ""
 connector = DSXConnector(config)
 
 aws_s3_client = AWSS3Client(s3_endpoint_url=config.s3_endpoint_url, s3_endpoint_verify=config.s3_endpoint_verify)
@@ -36,7 +51,9 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
-    base.meta_info = f"S3 Bucket: {config.asset}, filter: {config.filter or '(none)'}"
+    # Show bucket and optional prefix
+    prefix_disp = f"/{config.asset_prefix_root}" if getattr(config, 'asset_prefix_root', '') else ""
+    base.meta_info = f"S3 Bucket: {config.asset_bucket}{prefix_disp}, filter: {config.filter or '(none)'}"
     return base
 
 
@@ -88,14 +105,22 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
+    def _rel(k: str) -> str:
+        bp = (config.asset_prefix_root or "").strip("/")
+        if not bp:
+            return k
+        bp = bp + "/"
+        return k[len(bp):] if k.startswith(bp) else k
+
     count = 0
-    for key in aws_s3_client.keys(config.asset, filter_str=config.filter):
-        file_name = key['Key']
-        if config.filter and not relpath_matches_filter(file_name, config.filter):
+    for key in aws_s3_client.keys(config.asset_bucket, base_prefix=config.asset_prefix_root, filter_str=config.filter):
+        file_name = key['Key']  # full key
+        rel_name = _rel(file_name)
+        if config.filter and not relpath_matches_filter(rel_name, config.filter):
             continue
-        full_path = f"{config.asset}/{file_name}"
+        full_path = f"{config.asset_bucket}/{file_name}"
         status_response = await connector.scan_file_request(
-            ScanRequestModel(location=str(f"{file_name}"), metainfo=full_path))
+            ScanRequestModel(location=str(file_name), metainfo=full_path))
         dsx_logging.debug(f'Sent scan request for {full_path}, result: {status_response}')
         count += 1
         if limit and count >= limit:
@@ -108,13 +133,21 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
 async def preview_provider(limit: int) -> list[str]:
     items: list[str] = []
     try:
-        for obj in aws_s3_client.keys(config.asset, filter_str=config.filter):
+        def _rel(k: str) -> str:
+            bp = (config.asset_prefix_root or "").strip("/")
+            if not bp:
+                return k
+            bp = bp + "/"
+            return k[len(bp):] if k.startswith(bp) else k
+
+        for obj in aws_s3_client.keys(config.asset_bucket, base_prefix=config.asset_prefix_root, filter_str=config.filter):
             key = obj.get('Key')
             if not key:
                 continue
-            if config.filter and not relpath_matches_filter(key, config.filter):
+            rel = _rel(key)
+            if config.filter and not relpath_matches_filter(rel, config.filter):
                 continue
-            items.append(f"{config.asset}/{key}")
+            items.append(f"{config.asset_bucket}/{key}")
             if len(items) >= max(1, limit):
                 break
     except Exception:
@@ -142,40 +175,40 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
     """
     full_path = scan_event_queue_info.metainfo
 
-    if not aws_s3_client.key_exists(config.asset, scan_event_queue_info.location):
+    if not aws_s3_client.key_exists(config.asset_bucket, scan_event_queue_info.location):
         return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action,
                                         message="Item action failed.",
                                         description=f"File does not exist at {full_path}")
 
     if config.item_action == ItemActionEnum.DELETE:
         dsx_logging.debug(f'Item action {ItemActionEnum.DELETE} on {full_path} invoked.')
-        if aws_s3_client.delete_object(config.asset, scan_event_queue_info.location):
+        if aws_s3_client.delete_object(config.asset_bucket, scan_event_queue_info.location):
             return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                             message="File deleted.",
-                                            description=f"File deleted from {config.asset}: {scan_event_queue_info.location}")
+                                            description=f"File deleted from {config.asset_bucket}: {scan_event_queue_info.location}")
     elif config.item_action == ItemActionEnum.MOVE:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE} on {full_path} invoked.')
         dest_key = f"{config.item_action_move_metainfo}/{scan_event_queue_info.location}"
-        aws_s3_client.move_object(src_bucket=config.asset, src_key=scan_event_queue_info.location,
-                                  dest_bucket=config.asset,
+        aws_s3_client.move_object(src_bucket=config.asset_bucket, src_key=scan_event_queue_info.location,
+                                  dest_bucket=config.asset_bucket,
                                   dest_key=dest_key)
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message="File moved.",
-                                        description=f"File moved from {config.asset}: {scan_event_queue_info.location} to {config.asset}: {dest_key}")
+                                        description=f"File moved from {config.asset_bucket}: {scan_event_queue_info.location} to {config.asset_bucket}: {dest_key}")
     elif config.item_action == ItemActionEnum.TAG:
         dsx_logging.debug(f'Item action {ItemActionEnum.TAG} on {full_path} invoked.')
-        aws_s3_client.tag_object(config.asset, scan_event_queue_info.location, tags={"Verdict": "Malicious"})
+        aws_s3_client.tag_object(config.asset_bucket, scan_event_queue_info.location, tags={"Verdict": "Malicious"})
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message="File tagged.",
-                                        description=f"File tagged at {config.asset}: {scan_event_queue_info.location}")
+                                        description=f"File tagged at {config.asset_bucket}: {scan_event_queue_info.location}")
     elif config.item_action == ItemActionEnum.MOVE_TAG:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE_TAG} on {full_path} invoked.')
         dest_key = f"{config.item_action_move_metainfo}/{scan_event_queue_info.location}"
 
-        aws_s3_client.move_object(src_bucket=config.asset, src_key=scan_event_queue_info.location,
-                                  dest_bucket=config.asset, dest_key=dest_key)
+        aws_s3_client.move_object(src_bucket=config.asset_bucket, src_key=scan_event_queue_info.location,
+                                  dest_bucket=config.asset_bucket, dest_key=dest_key)
 
-        aws_s3_client.tag_object(config.asset, dest_key, tags={"Verdict": "Malicious"})
+        aws_s3_client.tag_object(config.asset_bucket, dest_key, tags={"Verdict": "Malicious"})
 
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message=f'Item action {config.item_action} was invoked. File {full_path} successfully tagged.')
@@ -222,7 +255,7 @@ async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusRe
     """
     # Read the file content
     try:
-        bytes_obj = aws_s3_client.get_object(bucket=config.asset, key=scan_event_queue_info.location)
+        bytes_obj = aws_s3_client.get_object(bucket=config.asset_bucket, key=scan_event_queue_info.location)
         return StreamingResponse(stream_blob(bytes_obj), media_type="application/octet-stream")  # Stream file
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR,
@@ -239,16 +272,16 @@ async def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    if aws_s3_client.test_s3_connection(config.asset):
+    if aws_s3_client.test_s3_connection(config.asset_bucket):
         return StatusResponse(
             status=StatusResponseEnum.SUCCESS,
-            message=f"Connection to bucket: {config.asset} successful",
+            message=f"Connection to bucket: {config.asset_bucket} successful",
             description=""
         )
 
     return StatusResponse(
         status=StatusResponseEnum.ERROR,
-        message=f"Connection to bucket: {config.asset} NOT successful",
+        message=f"Connection to bucket: {config.asset_bucket} NOT successful",
         description=""
     )
 
@@ -295,8 +328,17 @@ async def webhook_handler(event: dict):
         location = f"{key}"
         metainfo = str({"bucket": bucket, "key": key})
 
-        # Apply connector filter
-        if config.filter and not relpath_matches_filter(key, config.filter):
+        # Ignore events for other buckets
+        if bucket and config.asset_bucket and bucket != config.asset_bucket:
+            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="S3 webhook processed", description=f"Ignored by bucket mismatch: {bucket}")
+
+        # Apply connector base prefix and filter (relative)
+        bp = (config.asset_prefix_root or "").strip("/")
+        bp = (bp + "/") if bp else ""
+        rel = key[len(bp):] if (bp and key.startswith(bp)) else key
+        if bp and not key.startswith(bp):
+            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="S3 webhook processed", description=f"Ignored by base prefix: {key}")
+        if config.filter and not relpath_matches_filter(rel, config.filter):
             return StatusResponse(status=StatusResponseEnum.SUCCESS, message="S3 webhook processed", description=f"Ignored by filter: {key}")
 
         dsx_logging.info(f"Received S3 event for {location}")

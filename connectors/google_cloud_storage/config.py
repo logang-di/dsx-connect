@@ -39,6 +39,13 @@ class GoogleCloudStorageConnectorConfig(BaseConnectorConfig):
     asset: str = "lg-test-01"
     filter: str = ""
 
+    # Derived at startup from `asset`. For GCS, `asset` may be either
+    #   - "bucket" or
+    #   - "bucket/prefix"
+    # We keep the raw `asset` for display and derive these for runtime use.
+    asset_bucket: str | None = None
+    asset_prefix_root: str = ""
+
 
     class Config:
         env_prefix = "DSXCONNECTOR_"

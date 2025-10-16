@@ -41,6 +41,7 @@ env:
   DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "dsxconnect-quarantine"
   DSXCONNECTOR_ASSET: ""                      # SharePoint URL (site/doc lib or folder)
   DSXCONNECTOR_FILTER: ""                     # optional filter expression
+  DSXCONNECTOR_DATA_DIR: "/app/data"
 
 secrets:
   # Name of the Secret containing SharePoint App credentials
@@ -51,3 +52,7 @@ command:
   - "connectors/sharepoint/start.py"
   - "--workers"
   - "1"
+
+dataVolume:
+  enabled: true
+  mountPath: "/app/data"

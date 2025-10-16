@@ -32,7 +32,7 @@ spec:
         app.kubernetes.io/name: {{ include "filesystem-connector.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      {{- if or .Values.tls.enabled .Values.scanVolume.enabled }}
+      {{- if or .Values.tls.enabled .Values.scanVolume.enabled .Values.dataVolume.enabled }}
       volumes:
         {{- if .Values.tls.enabled }}
         - name: tls-certs
@@ -50,6 +50,10 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
+        {{- if .Values.dataVolume.enabled }}
+        - name: data-dir
+          emptyDir: {}
         {{- end }}
       {{- end }}
       containers:
@@ -89,7 +93,6 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             {{- end }}
-          {{- if or .Values.tls.enabled .Values.scanVolume.enabled }}
           volumeMounts:
             {{- if .Values.tls.enabled }}
             - name: tls-certs
@@ -104,7 +107,10 @@ spec:
               {{- end }}
               readOnly: {{ .Values.scanVolume.readOnly }}
             {{- end }}
-          {{- end }}
+            {{- if .Values.dataVolume.enabled }}
+            - name: data-dir
+              mountPath: {{ .Values.dataVolume.mountPath | quote }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /{{ include "filesystem-connector.name" . }}/readyz

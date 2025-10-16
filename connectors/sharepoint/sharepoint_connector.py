@@ -59,6 +59,13 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
                     config.sp_drive_name = drive_name
 
                 base_path = rel_path or ""
+                # Prefer showing the original ASSET URL in the UI card 'Asset:' line.
+                # The UI uses asset_display_name > resolved_asset_base > asset.
+                # Setting asset_display_name avoids duplicating the FILTER below.
+                try:
+                    base.asset_display_name = asset
+                except Exception:
+                    pass
             except Exception as e:
                 dsx_logging.warning(f"Failed to parse DSXCONNECTOR_ASSET URL; using raw asset/filter: {e}")
                 base_path = asset
@@ -159,6 +166,9 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
     # Iterate files and enqueue scan requests
     try:
         base_path = config.resolved_asset_base or (config.asset or "")
+        # Avoid double-filtering: when resolved_asset_base already applies FILTER,
+        # don't apply config.filter again during enqueue.
+        eff_filter = "" if config.resolved_asset_base else (config.filter or "")
         concurrency = max(1, int(getattr(config, 'scan_concurrency', 10) or 10))
         sem = asyncio.Semaphore(concurrency)
         tasks: list[asyncio.Task] = []
@@ -174,7 +184,7 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
             # Determine a repository-relative path to apply the filter
             item_path = item.get("path") or item.get("name") or ""
             rel = item_path.strip('/')
-            if config.filter and not relpath_matches_filter(rel, config.filter):
+            if eff_filter and not relpath_matches_filter(rel, eff_filter):
                 continue
             item_id = item.get("id")
             metainfo = item_path
@@ -196,11 +206,12 @@ async def preview_provider(limit: int) -> list[str]:
     items: list[str] = []
     try:
         base_path = config.resolved_asset_base or (config.asset or "")
+        eff_filter = "" if config.resolved_asset_base else (config.filter or "")
         async for item in sp_client.iter_files_recursive(base_path):
             if item.get("folder"):
                 continue
             path = (item.get("path") or item.get("name") or "").strip('/')
-            if config.filter and not relpath_matches_filter(path, config.filter):
+            if eff_filter and not relpath_matches_filter(path, eff_filter):
                 continue
             items.append(path or item.get("id", ""))
             if len(items) >= max(1, limit):

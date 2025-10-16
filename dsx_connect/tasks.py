@@ -89,7 +89,6 @@ def prepare(c):
         "messaging",
         "models",
         "security",
-        "superlog",
         "taskworkers"
     ]
     for folder in folders:
@@ -102,8 +101,18 @@ def prepare(c):
     c.run(f"cp deploy/docker/docker-compose-dsx-connect-all-services.yaml {export_folder}/")
     c.run(f"cp deploy/docker/docker-compose-dsxa.yaml {export_folder}/")
     c.run(f"cp deploy/docker/README.md {export_folder}/")
+    # Collector configs are embedded inline in docker-compose; no bind mounts required
+    # rsyslog config is now embedded in the compose service startup; no external rsyslog.conf is bundled
     # Include Helm chart assets similar to connectors: place under export/helm
-    c.run(f"rsync -av deploy/helm/ {export_folder}/helm/ 2>/dev/null || true")
+    c.run(f"rsync -av --exclude '*.tgz' deploy/helm/ {export_folder}/helm/ 2>/dev/null || true")
+    # Ensure subchart dependencies inside the export are fresh (package file:// deps into charts/*.tgz)
+    try:
+        # Clean any stale packaged subcharts in the export path
+        c.run(f"rm -f {export_folder}/helm/charts/*.tgz 2>/dev/null || true")
+        # Build dependencies in the exported helm dir so installs from the folder pick up correct subcharts
+        c.run(f"helm dependency build {export_folder}/helm")
+    except Exception as e:
+        print(f"[helm] Skipped building export chart dependencies: {e}")
 
     # Also package the Helm chart into the export bundle (export/charts/*.tgz)
     try:
@@ -164,7 +173,16 @@ def build(c):
         print(f"Image {image_tag} already exists. Skipping build.")
     else:
         print(f"Building docker image {image_tag}...")
-        c.run(f"docker build -t {image_tag} {export_folder}")
+        # Allow overriding base image and pip indexes via env -> build-args
+        build_args = []
+        for env_key, arg_key in (("PY_BASE_IMAGE", "PY_BASE_IMAGE"),
+                                 ("PIP_INDEX_URL", "PIP_INDEX_URL"),
+                                 ("PIP_EXTRA_INDEX_URL", "PIP_EXTRA_INDEX_URL")):
+            val = os.environ.get(env_key)
+            if val:
+                build_args += ["--build-arg", f"{arg_key}={val}"]
+        ba = " ".join(build_args)
+        c.run(f"docker build {ba} -t {image_tag} {export_folder}")
         # c.run(f"docker tag {image_tag} {latest_tag}")
 
 @task(pre=[build])
@@ -226,15 +244,44 @@ def helm_package(c, out_dir="dist/charts", version=None, app_version=None):
     if app_version is None:
         app_version = version
     chart_dir = project_root / "deploy" / "helm"
+    # Ensure no stale subchart artifacts remain (e.g., renamed/removed charts)
+    charts_subdir = chart_dir / "charts"
+    if charts_subdir.exists():
+        # Remove old syslog and legacy dsx-collector-rsyslog folders if present
+        for stale_dir in [charts_subdir / "syslog", charts_subdir / "dsx-collector-rsyslog"]:
+            if stale_dir.exists():
+                shutil.rmtree(stale_dir, ignore_errors=True)
+        # Remove any prebuilt .tgz so `helm dependency build` rewrites them fresh
+        for f in charts_subdir.glob("*.tgz"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
     out_path = project_root.parent / out_dir
     out_path.mkdir(parents=True, exist_ok=True)
-    # Build deps first to ensure Chart.lock is in sync, then lint, then package
-    c.run(f"helm dependency build {chart_dir}")
+    # Build deps first; if lock is out of sync, update and retry
+    build_res = c.run(f"helm dependency build {chart_dir}", warn=True, hide=True)
+    build_out = (build_res.stdout or "") + (build_res.stderr or "")
+    if build_res.exited != 0 or "lock file" in build_out and "out of sync" in build_out:
+        print("[helm] Dependencies out of sync. Running: helm dependency update …")
+        c.run(f"helm dependency update {chart_dir}")
+        c.run(f"helm dependency build {chart_dir}")
+
     lint_res = c.run(f"helm lint {chart_dir}", warn=True, hide=True)
     if lint_res.exited != 0:
         out = (lint_res.stdout or "") + (lint_res.stderr or "")
-        if "Chart.lock is out of sync with the dependencies file" in out:
-            print("[helm] Dependencies out of sync. Run: helm dependency update dsx_connect/deploy/helm")
+        if "Chart.lock is out of sync with the dependencies file" in out or ("lock file" in out and "out of sync" in out):
+            print("[helm] Dependencies out of sync. Running: helm dependency update …")
+            c.run(f"helm dependency update {chart_dir}")
+            # Re-run lint after updating deps
+            lint_res = c.run(f"helm lint {chart_dir}", warn=True, hide=True)
+            out = (lint_res.stdout or "") + (lint_res.stderr or "")
+            if lint_res.exited != 0:
+                if lint_res.stdout:
+                    print(lint_res.stdout)
+                if lint_res.stderr:
+                    print(lint_res.stderr)
+                raise SystemExit(lint_res.exited)
         # Re-emit lint output for visibility
         if lint_res.stdout:
             print(lint_res.stdout)
@@ -253,6 +300,7 @@ def helm_push_oci(c, repo=None, charts_dir="dist/charts", version=None):
     if repo is None:
         import os as _os
         repo = _os.environ.get("HELM_REPO", DEFAULT_HELM_REPO)
+    # With '-chart' suffixes for chart names, pushing to dsxconnect namespace is safe.
     if version is None:
         version = _read_version()
     # Read chart name from Chart.yaml to construct the packaged filename

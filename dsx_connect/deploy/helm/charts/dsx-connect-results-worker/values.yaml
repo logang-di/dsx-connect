@@ -12,3 +12,10 @@ celery:
   # queue computed from DSXCONNECT_APP_ENV in template unless overridden here
   # queue: "dev.dsx_connect.scans.result"
   concurrency: 1
+
+# Optional: wait for rsyslog TCP to be reachable before starting the worker
+waitFor:
+  rsyslog:
+    enabled: false
+    image: busybox:1.36
+    timeoutSeconds: 120

@@ -19,7 +19,7 @@ async def test_full_scan_filters(monkeypatch):
 
     monkeypatch.setattr(ac.connector, "scan_file_request", fake_scan)
 
-    def fake_keys(container, filter_str=""):
+    def fake_keys(container, base_prefix: str = "", filter_str: str = ""):
         yield {"Key": "sub1/a.txt"}
         yield {"Key": "sub1/tmp/skip.txt"}
         yield {"Key": "sub2/z.txt"}
@@ -30,4 +30,3 @@ async def test_full_scan_filters(monkeypatch):
     assert resp.status.value == "success"
     # Excludes applied, only sub1 non-tmp included
     assert calls == ["sub1/a.txt"]
-

@@ -23,11 +23,8 @@ def load_devenv(default_path: Optional[Path] = None,
         if not path.exists():
             return
         from shared.dsx_logging import dsx_logging
-        global _DEVEVN_LOGGED
-        if not _DEVEVN_LOGGED:
-            # Reduce chatter: log only once and at debug level
-            dsx_logging.debug(f"Loading dev env from {path}")
-            _DEVEVN_LOGGED = True
+        import logging as _logging
+        applied = 0
         for line in path.read_text().splitlines():
             s = line.strip()
             if not s or s.startswith("#"):
@@ -39,6 +36,22 @@ def load_devenv(default_path: Optional[Path] = None,
             val = val.strip().strip('"').strip("'")
             if key and key not in os.environ:
                 os.environ[key] = val
+                applied += 1
+
+        # Log once, at INFO, with summary including effective LOG_LEVEL if set
+        # If LOG_LEVEL provided by .dev.env, update logger now (silent)
+        eff_level = os.environ.get("LOG_LEVEL")
+        if eff_level:
+            try:
+                dsx_logging.setLevel(getattr(_logging, eff_level.upper(), _logging.INFO))
+            except Exception:
+                pass
+
+        global _DEVEVN_LOGGED
+        if not _DEVEVN_LOGGED:
+            suffix = f", LOG_LEVEL={eff_level}" if eff_level else ""
+            dsx_logging.info(f"Loading dev env from {path} (applied {applied} keys{suffix})")
+            _DEVEVN_LOGGED = True
     except Exception:
         # Silent failure: dev convenience only
         return

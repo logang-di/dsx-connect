@@ -86,14 +86,14 @@ class TLSSysLogHandler(logging.Handler):
 
 
 def init_syslog_handler(syslog_host: str = "localhost", syslog_port: int = 514,
-                        transport: str = "udp",
+                        transport: str = "tcp",
                         tls_ca: str | None = None,
                         tls_cert: str | None = None,
                         tls_key: str | None = None,
                         tls_insecure: bool = False):
     """Initialize the syslog handler for the worker process.
 
-    transport: 'udp' (default), 'tcp', or 'tls'
+    transport: 'tcp' (default), 'udp', or 'tls'
     """
     global _syslog_handler
     if _syslog_handler:

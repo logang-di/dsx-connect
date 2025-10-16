@@ -12,6 +12,21 @@ from shared.file_ops import relpath_matches_filter
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
+
+# Derive bucket and base prefix from asset, supporting both "bucket" and "bucket/prefix" forms
+try:
+    raw_asset = (config.asset or "").strip()
+    if "/" in raw_asset:
+        bucket, prefix = raw_asset.split("/", 1)
+        config.asset_bucket = bucket.strip()
+        config.asset_prefix_root = prefix.strip("/")
+    else:
+        config.asset_bucket = raw_asset
+        config.asset_prefix_root = ""
+except Exception:
+    config.asset_bucket = config.asset
+    config.asset_prefix_root = ""
+
 connector = DSXConnector(config)
 
 gcs_client = GCSClient()
@@ -36,7 +51,8 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} startup completed.")
 
     base.status = ConnectorStatusEnum.READY
-    base.meta_info = f"GCS Bucket: {config.asset}, filter: {config.filter or '(none)'}"
+    prefix_disp = f"/{config.asset_prefix_root}" if getattr(config, 'asset_prefix_root', '') else ""
+    base.meta_info = f"GCS Bucket: {config.asset_bucket}{prefix_disp}, filter: {config.filter or '(none)'}"
     return base
 
 
@@ -88,12 +104,19 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
         SimpleResponse: A response indicating success if the full scan is initiated, or an error if the
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
+    def _rel(k: str) -> str:
+        bp = (config.asset_prefix_root or "").strip("/")
+        if not bp:
+            return k
+        bp = bp + "/"
+        return k[len(bp):] if k.startswith(bp) else k
+
     count = 0
-    for blob in gcs_client.keys(config.asset, filter_str=config.filter):
+    for blob in gcs_client.keys(config.asset_bucket, base_prefix=config.asset_prefix_root, filter_str=config.filter):
         key = blob['Key']
-        if config.filter and not relpath_matches_filter(key, config.filter):
+        if config.filter and not relpath_matches_filter(_rel(key), config.filter):
             continue
-        full_path = f"{config.asset}/{key}"
+        full_path = f"{config.asset_bucket}/{key}"
         await connector.scan_file_request(
             ScanRequestModel(location=key, metainfo=full_path)
         )
@@ -113,13 +136,13 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
 async def preview_provider(limit: int) -> list[str]:
     items: list[str] = []
     try:
-        for blob in gcs_client.keys(config.asset, filter_str=config.filter):
+        for blob in gcs_client.keys(config.asset_bucket, base_prefix=config.asset_prefix_root, filter_str=config.filter):
             key = blob.get('Key')
             if not key:
                 continue
-            if config.filter and not relpath_matches_filter(key, config.filter):
+            if config.filter and not relpath_matches_filter(_rel(key), config.filter):
                 continue
-            items.append(f"{config.asset}/{key}")
+            items.append(f"{config.asset_bucket}/{key}")
             if len(items) >= max(1, limit):
                 break
     except Exception:
@@ -145,18 +168,18 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
             or an error if the action is not implemented.
     """
     file_path = scan_event_queue_info.location
-    if not gcs_client.key_exists(config.asset, file_path):
+    if not gcs_client.key_exists(config.asset_bucket, file_path):
         return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action, message="Item action failed.", description=f"File does not exist at {config.asset}: {file_path}")
 
     if config.item_action == ItemActionEnum.DELETE:
-            gcs_client.delete_object(config.asset, file_path)
+            gcs_client.delete_object(config.asset_bucket, file_path)
             return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=ItemActionEnum.DELETE, message="File deleted.", description=f"File deleted from {config.asset}: {file_path}")
     elif config.item_action == ItemActionEnum.MOVE:
         dest_key = f"{config.item_action_move_metainfo}/{file_path}"
-        gcs_client.move_object(config.asset, file_path, config.asset, dest_key)
+        gcs_client.move_object(config.asset_bucket, file_path, config.asset_bucket, dest_key)
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=ItemActionEnum.MOVE, message="File moved.", description=f"File moved from {config.asset}: {file_path} to {dest_key}")
     elif config.item_action == ItemActionEnum.TAG:
-        gcs_client.tag_object(config.asset, file_path, {"Verdict": "Malicious"})
+        gcs_client.tag_object(config.asset_bucket, file_path, {"Verdict": "Malicious"})
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=ItemActionEnum.TAG, message="File tagged.", description=f"File tagged at {config.asset}: {file_path}")
     return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action, message="Item action did nothing or not implemented")
 
@@ -199,7 +222,7 @@ async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusRe
             or a SimpleResponse with an error message if file reading is not supported.
     """
     try:
-        file_stream = gcs_client.get_object(config.asset, scan_event_queue_info.location)
+        file_stream = gcs_client.get_object(config.asset_bucket, scan_event_queue_info.location)
         return StreamingResponse(stream_blob(file_stream), media_type="application/octet-stream")
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
@@ -215,7 +238,7 @@ async def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    if gcs_client.test_gcs_connection(bucket=config.asset):
+    if gcs_client.test_gcs_connection(bucket=config.asset_bucket):
         return StatusResponse(status=StatusResponseEnum.SUCCESS, message=f"Connection to {config.asset} successful.")
     return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.asset} failed.")
 

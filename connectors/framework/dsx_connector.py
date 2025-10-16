@@ -1,4 +1,7 @@
 import asyncio
+import os
+import sys
+from pathlib import Path
 import inspect
 import contextvars
 import uuid
@@ -97,6 +100,18 @@ def _sanitize_display_icon(raw: str | None) -> str | None:
 class DSXConnector:
     def __init__(self, connector_config: BaseConnectorConfig):
         self.connector_id = connector_config.name
+
+        # Ensure per-connector default data dir for UUID persistence in local/dev.
+        # If DSXCONNECTOR_DATA_DIR is not set, derive it from the connector's config module path.
+        try:
+            if "DSXCONNECTOR_DATA_DIR" not in os.environ:
+                mod_name = connector_config.__class__.__module__
+                mod = sys.modules.get(mod_name)
+                if mod and hasattr(mod, "__file__"):
+                    cfg_path = Path(getattr(mod, "__file__")).resolve()
+                    os.environ["DSXCONNECTOR_DATA_DIR"] = str(cfg_path.parent / "data")
+        except Exception:
+            pass
 
         uuid = get_or_create_connector_uuid()
         dsx_logging.debug(f"Logical connector {self.connector_id} using UUID: {uuid}")
@@ -362,6 +377,25 @@ class DSXConnector:
                 _SCAN_ENQ_COUNTER.set(c + 1)
         except Exception:
             pass
+
+        # Respect job pause: best-effort pre-check against dsx-connect job state
+        try:
+            job_id = getattr(scan_request, "scan_job_id", None)
+            if job_id and _SCAN_JOB_ID.get() == job_id:
+                # Only check when running within a full-scan context
+                async with httpx.AsyncClient(verify=self._httpx_verify, timeout=5.0) as client:
+                    raw_url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.SCAN_PREFIX, ScanPath.JOBS, f"{job_id}", "raw")
+                    r = await client.get(raw_url)
+                    if r.status_code == 200:
+                        data = r.json().get("data", {})
+                        if data.get("paused") == "1" or data.get("cancel") == "1":
+                            dsx_logging.debug(f"Job {job_id} paused/cancelled; skipping enqueue for {scan_request.location}")
+                            return StatusResponse(status=StatusResponseEnum.NOTHING,
+                                                  message="Job paused",
+                                                  description=f"scan_job_id={job_id}")
+        except Exception:
+            # Non-fatal: continue enqueue if state check fails
+            pass
         try:
             async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.SCAN_PREFIX, ScanPath.REQUEST)
@@ -450,8 +484,18 @@ class DSXConnector:
                                       description=f"Removed {self.connector_running_model.url} : {self.connector_running_model.uuid}")
             resp.raise_for_status()
             return StatusResponse(**resp.json())
+        except httpx.HTTPStatusError as e:
+            msg = f"HTTP {e.response.status_code} during connector unregistration"
+            dsx_logging.error(msg)
+            return StatusResponse(status=StatusResponseEnum.ERROR, message="Unregistration failed", description=msg)
+        except httpx.RequestError as e:
+            # Do not emit a traceback here; provide a concise hint instead
+            hint = "Likely unreachable or timed out. Verify DSXCONNECTOR_DSX_CONNECT_URL, scheme/port, DNS, and service availability."
+            dsx_logging.error(f"Unregister connector failed: {e}. {hint}")
+            return StatusResponse(status=StatusResponseEnum.ERROR, message="Unregistration failed", description=str(e))
         except Exception as e:
-            dsx_logging.error("Unregister connector failed", exc_info=True)
+            # Unexpected error; still avoid traceback noise on shutdown
+            dsx_logging.error(f"Unregister connector failed: {e}")
             return StatusResponse(status=StatusResponseEnum.ERROR, message="Unregistration failed", description=str(e))
 
     async def test_dsx_connect(self) -> Optional[dict]:

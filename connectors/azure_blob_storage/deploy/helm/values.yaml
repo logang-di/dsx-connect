@@ -12,6 +12,11 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# HTTP route base for health/ready endpoints exposed by the app.
+# This should match the connector's logical name (default in code is 'azure-blob-storage-connector').
+# Change only if you've customized the connector's route prefix.
+routeBase: "azure-blob-storage-connector"
+
 service:
   type: ClusterIP
   port: 80
@@ -42,10 +47,15 @@ env:
   # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector
   DSXCONNECTOR_ASSET: "" # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
   DSXCONNECTOR_FILTER: ""  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
+  DSXCONNECTOR_DATA_DIR: "/app/data"
 
   # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
   # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
   DSXCONNECTOR_API_KEY: ""
+
+dataVolume:
+  enabled: true
+  mountPath: "/app/data"
 
 secrets:
   # The name of the existing secret that contains the AZURE_STORAGE_CONNECTION_STRING

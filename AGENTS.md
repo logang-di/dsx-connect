@@ -87,3 +87,27 @@
 - If a reverse proxy strips `X-Job-Id`, the UI extracts `job_id` from the response description as a fallback.
 - If a connector is down (`readyz` 502), the card may not refresh immediately. Once the connector is reachable and scan events flow, the card reconciles state.
 - Pause/Resume: Endpoints are wired, but pause UX/state reconciliation remains WIP and will be revisited.
+
+## Connector Scaling TODOs (Kubernetes)
+- Stage 1 — Scale read_file throughput:
+  - Add `replicaCount` support and examples in each connector Helm chart (already present; document usage).
+  - Recommend 2–4 Uvicorn workers per pod for higher in‑pod concurrency.
+  - Keep connectors stateless; no external locks or Redis usage inside connectors.
+
+- Stage 2 — Autoscale connectors:
+  - Provide an HPA example per connector (CPU/Memory based) in Helm values.
+  - Optional: KEDA examples to scale on dsx‑connect queue depth or HTTP RPS (still connector‑agnostic).
+  - Document resource requests/limits and per‑pod concurrency guardrails.
+
+- Stage 3 — Prevent duplicate Full Scans (enforce in dsx‑connect):
+  - In dsx‑connect API, before forwarding a Full Scan request, check active job state for the target connector/asset.
+  - If a scan is active, return 409 (or 202) with `{ message: "Full scan already running", job_id }`.
+  - UI already calls once; this closes the gap for direct API callers without coupling connectors to dsx‑connect internals.
+
+- Sharding (follow‑on, optional):
+  - Accept per‑request `filter_override` plus `shard_label` to run multiple parallel slices when natural prefixes exist.
+  - For massive namespaces without natural prefixes, document “Single‑Lister, Multi‑Processor” (one pod lists, workers process) and inventory‑driven scans (S3/GCS/Azure inventories) as future strategies.
+
+- Documentation:
+  - Add a “Scaling Connectors on Kubernetes” guide covering replicas, HPA, and the Full Scan limiter behavior.
+  - Keep Docker/Compose examples as single‑service demos; steer production users to Helm.

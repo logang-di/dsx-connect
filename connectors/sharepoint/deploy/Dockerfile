@@ -1,9 +1,16 @@
-FROM python:3.12-slim
+ARG PY_BASE_IMAGE=python:3.12-slim
+FROM ${PY_BASE_IMAGE}
 
 # Create a non-root user
 RUN useradd -m appuser
 
 WORKDIR /app
+
+# Optional: allow overriding PyPI index via build args
+ARG PIP_INDEX_URL
+ARG PIP_EXTRA_INDEX_URL
+ENV PIP_INDEX_URL=${PIP_INDEX_URL}
+ENV PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

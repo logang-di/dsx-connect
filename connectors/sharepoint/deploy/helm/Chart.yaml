@@ -1,7 +1,6 @@
 apiVersion: v2
-name: sharepoint-connector
+name: sharepoint-connector-chart
 description: A Helm chart for the DSX-Connect SharePoint Connector
 type: application
 version: 0.1.0
 appVersion: "1.0"
-

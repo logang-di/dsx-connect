@@ -14,6 +14,7 @@ from __future__ import annotations
 from enum import auto, Enum
 
 from celery import Task, states
+from celery.exceptions import Retry as CeleryRetry
 from pydantic import ValidationError
 from dsx_connect.taskworkers.errors import (
     TaskError, MalformedScanRequest,
@@ -169,6 +170,9 @@ class BaseWorker(Task):
                 f"[{self.name}:{self.context.task_id}] Task completed successfully."
             )
             return result
+        except CeleryRetry:
+            # Let Celery handle retry scheduling; do not treat as failure
+            raise
         except Exception as error:
             return self._handle_exception(error, policy, *args, **kwargs)
 

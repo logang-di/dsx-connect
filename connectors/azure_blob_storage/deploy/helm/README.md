@@ -19,7 +19,7 @@ This guide explains the core configuration concepts and details three deployment
 
 ## Quick Config Reference
 
-- env.DSXCONNECTOR_ASSET: Azure Blob container (optionally with a virtual folder/prefix). Example: `my-container` or `my-container/prefix`.
+- env.DSXCONNECTOR_ASSET: Azure Blob container (optionally with a virtual folder/prefix). Example: `my-container` or `my-container/prefix`. When a prefix is provided, listings start at that sub-root and filters are evaluated relative to it.
 - env.DSXCONNECTOR_FILTER: Optional include/exclude rules under the asset root. Use for prefix scoping too (e.g., `prefix/**`). Follows rsync‑like rules. Examples: `"prefix/**"`, "**/*.zip,**/*.docx", or "-tmp --exclude cache".
 - env.DSXCONNECTOR_DISPLAY_NAME: Optional friendly name shown on the dsx-connect UI card (e.g., "Azure Blob Storage Connector").
 - env.DSXCONNECTOR_ITEM_ACTION: What to do with malicious files. One of: `nothing` (default), `delete`, `tag`, `move`, `move_tag`.
@@ -93,7 +93,7 @@ helm install my-connector . -f values-dev-my-asset1.yaml
 Install directly from the OCI registry and set runtime configuration on the CLI (handy for quick tests and ephemeral installs).
 
 ```bash
-helm install azure-abs oci://registry-1.docker.io/dsxconnect/azure-blob-storage-connector \
+helm install azure-abs oci://registry-1.docker.io/dsxconnect/azure-blob-storage-connector-chart \
   --version <ver> \
   --set env.DSXCONNECTOR_ASSET=my-container \
   --set-string env.DSXCONNECTOR_FILTER="*.zip,*.docx" \
@@ -225,3 +225,26 @@ Examples (paths are relative to `DSXCONNECTOR_ASSET`):
 | "test/2025*/*"                                        | Files in subtrees matching `test/2025*/*` (no recursion)                    |
 | "test/2025*/** -sub2"                                 | Recurse under `test/2025*/**`, excluding any `sub2` subtree                 |
 | "'scan here' -'not here' --exclude 'not here either'" | Quoted tokens for names with spaces                                          |
+
+## Asset vs Filter
+
+- Asset: Absolute base in the repository. No wildcards. For Azure Blob, this is `container` or `container/prefix`. Listings start here and webhooks are scoped here.
+- Filter: Rsync‑like include/exclude rules relative to the asset base. Supports wildcards and exclusions.
+- Equivalences:
+  - `asset=my-container`, `filter=prefix1/**`  ≈  `asset=my-container/prefix1`, `filter=""`
+  - `asset=my-container`, `filter=sub1`       ≈  `asset=my-container/sub1`, `filter=""` (common usage)
+  - `asset=my-container`, `filter=sub1/*`     ≈  `asset=my-container/sub1`, `filter="*"`
+- When to choose which:
+  - Prefer Asset for the stable, exact root of a scan (fast provider name_starts_with narrowing and simpler mental model).
+  - Use Filter for wildcard selection and excludes under that root.
+  - Plain‑English note: If your filter is “complex” (e.g., contains excludes like `-tmp`, or advanced globs beyond simple directory includes), the connector can’t rely on a tight `name_starts_with` prefix at the service. It will list more broadly (sometimes the whole container/prefix) and then match/exclude locally, which is slower than starting from an exact asset sub‑root.
+
+## Sharding & Deployment Strategies
+
+- Multiple instances: Deploy separate releases to split work across subtrees.
+  - Asset-based sharding: `DSXCONNECTOR_ASSET="container/prefix1/sub1"` and `container/prefix1/sub2` per instance.
+  - Filter-based sharding: `DSXCONNECTOR_ASSET=container` with include-only filters like `prefix1/sub1/**`, `prefix1/sub2/**`.
+- Prefer include-only filters for provider-side `name_starts_with` narrowing. Excludes are supported, but may widen listings with client-side filtering.
+- Example (two shards):
+  - A: `DSXCONNECTOR_ASSET=my-container/prefix1/sub1`, `DSXCONNECTOR_FILTER="**/*.zip"`
+  - B: `DSXCONNECTOR_ASSET=my-container/prefix1/sub2`, `DSXCONNECTOR_FILTER="**/*.zip"`

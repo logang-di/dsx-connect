@@ -33,7 +33,7 @@ from dsx_connect.dsxa_client.dsxa_client import DSXAClient
 from shared.dsx_logging import dsx_logging
 
 from dsx_connect.app.dependencies import static_path
-from dsx_connect.app.routers import scan_request, scan_results, connectors, dead_letter
+from dsx_connect.app.routers import scan_request, scan_results, connectors, dead_letter, dianna
 from dsx_connect import version
 
 # ---- Helper functions ----
@@ -532,6 +532,7 @@ app.include_router(sse_notifications)
 app.include_router(scan_request.router, tags=["scan"])
 app.include_router(scan_results.router, tags=["results"])
 app.include_router(connectors.router, tags=["connectors"])
+app.include_router(dianna.router, tags=["dianna"])
 app.include_router(dead_letter.router, tags=["dead-letter"])
 
 

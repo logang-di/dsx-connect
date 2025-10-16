@@ -7,8 +7,17 @@ services:
     #  dockerfile: docker/Dockerfile
     ports:
       - "8595:8595"
-    #volumes:
-        # map any external folders
+    volumes:
+      - type: volume
+        source: google_cloud_storage_connector_data
+        target: /app/data
+      # Mount a Google service account JSON and point GOOGLE_APPLICATION_CREDENTIALS to it
+      - type: bind
+        source: ./gcp-sa.json
+        target: /app/creds/gcp-sa.json
+        read_only: true
+        bind:
+          selinux: z
     environment:
       PYTHONUNBUFFERED: 1
       LOG_LEVEL: debug
@@ -18,7 +27,11 @@ services:
       DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: dsxconnect-quarantine # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
         # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector
       DSXCONNECTOR_ASSET: lg-test-02 # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
-      DSXCONNECTOR_FILTER:  # rsync-like include/exclude patterns; leave empty to scan all
+      DSXCONNECTOR_FILTER: ""  # rsync-like include/exclude patterns; leave empty to scan all
+
+      DSXCONNECTOR_DATA_DIR: "/app/data"
+      GOOGLE_APPLICATION_CREDENTIALS: /app/creds/gcp-sa.json
+      GOOGLE_CLOUD_PROJECT: your-project-id
 
         # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
         # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
@@ -36,3 +49,6 @@ networks:
     dsx-network:
       external: true
       name: dsx-connect-network  # change this to an existing docker network
+
+volumes:
+  google_cloud_storage_connector_data:

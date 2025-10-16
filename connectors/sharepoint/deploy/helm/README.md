@@ -70,7 +70,7 @@ helm install my-connector . -f values-dev-my-asset1.yaml
 ### Method 3: OCI Repository + Command-Line Overrides
 
 ```bash
-helm install sharepoint oci://registry-1.docker.io/dsxconnect/sharepoint-connector \
+helm install sharepoint oci://registry-1.docker.io/dsxconnect/sharepoint-connector-chart \
   --version <ver> \
   --set env.DSXCONNECTOR_ASSET="https://<host>/sites/<SiteName>/Shared%20Documents" \
   --set-string env.DSXCONNECTOR_FILTER="**/*.zip,**/*.docx"
@@ -133,7 +133,7 @@ helm upgrade --install sharepoint connectors/sharepoint/deploy/helm -f values.ya
 ## OCI Install (CLI overrides)
 
 ```bash
-helm install sharepoint oci://registry-1.docker.io/dsxconnect/sharepoint-connector \
+helm install sharepoint oci://registry-1.docker.io/dsxconnect/sharepoint-connector-chart \
   --version <ver> \
   --set env.DSXCONNECTOR_ASSET="https://<host>/sites/<SiteName>/Shared%20Documents" \
   --set-string env.DSXCONNECTOR_FILTER="**/*.zip,**/*.docx"

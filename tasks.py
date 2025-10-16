@@ -15,6 +15,7 @@ CONNECTORS_CONFIG = [
     {"name": "filesystem", "enabled": True},
     {"name": "google_cloud_storage", "enabled": True},
     {"name": "sharepoint", "enabled": True},
+    #{"name": "icap_passthrough", "enabled": True},
 ]
 # ---------- /Edit me ----------
 
@@ -80,6 +81,7 @@ def helm_release(
     if include_core:
         print("=== Helm release: core (dsx_connect) ===")
         repo = repo or _os.environ.get("HELM_REPO", DEFAULT_HELM_REPO)
+        # Pushing charts to the 'dsxconnect' namespace is safe because chart names carry a '-chart' suffix.
         core_cmd = f"invoke helm-release --repo={repo}"
         code = _run(c, core_cmd, cwd=PROJECT_ROOT / "dsx_connect", dry_run=dry_run)
         if code != 0:
@@ -355,6 +357,7 @@ def bundle(c):
         c.run(f"cp -f {core_compose_src_l} {docker_dir}/docker-compose-dsx-connect-all-services.yaml")
         c.run(f"cp -f {dsxa_compose_src_l} {docker_dir}/docker-compose-dsxa.yaml")
         c.run(f"cp -f {readme_src_l} {docker_dir}/README.md")
+        # rsyslog config is embedded in the rsyslog service startup (no external rsyslog.conf needed)
         # Append bundle quickstart to README
         _append_bundle_readme(target_dir / "README.md")
         # Copy core Helm chart (raw files) into the bundle
@@ -380,7 +383,10 @@ def bundle(c):
                 version = read_version_file(version_file)
                 export_dir = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}"
                 compose_primary = export_dir / f"docker-compose-{connector_name}.yaml"
-                readme_src_conn = export_dir / "README.md"
+                # Prefer a Docker-specific README if present; else fall back to deploy README
+                readme_src_conn = export_dir / "docker" / "README.md"
+                if not readme_src_conn.exists():
+                    readme_src_conn = export_dir / "README.md"
                 if not export_dir.exists():
                     print(f"Warning: export dir not found for {name}: {export_dir}")
                     continue
@@ -407,14 +413,11 @@ def bundle(c):
                 if conn_helm_src.exists():
                     c.run(f"mkdir -p {dest_dir}/helm && rsync -av {conn_helm_src}/ {dest_dir}/helm/")
 
-    # Emit to versioned and latest bundle directories
+    # Emit to versioned bundle directory only (no 'latest' alias)
     core_version = read_version_file(CORE_VERSION_FILE)
     versioned_dir = PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"
-    latest_dir = PROJECT_ROOT / DEPLOYMENT_DIR / "dsx-connect-latest"
     _emit_bundle_to(versioned_dir)
     print(f"Copied bundle to {versioned_dir}")
-    _emit_bundle_to(latest_dir)
-    print(f"Copied bundle to {latest_dir}")
 
 
 def _text_replace(path: Path, subs: list[tuple[str, str]]):
@@ -460,11 +463,8 @@ def bundle_usetls(c):
     """
     bundle(c)
     core_version = read_version_file(CORE_VERSION_FILE)
-    # Apply TLS transforms to both the versioned and 'latest' bundles
-    for bundle_dir in [
-        PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}",
-        PROJECT_ROOT / DEPLOYMENT_DIR / "dsx-connect-latest",
-    ]:
+    # Apply TLS transforms to the versioned bundle only
+    for bundle_dir in [PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"]:
         # Prefer docker/ compose paths; also update root if present for back-compat
         for core_compose in [bundle_dir / "docker" / "docker-compose-dsx-connect-all-services.yaml",
                              bundle_dir / "docker-compose-dsx-connect-all-services.yaml"]:

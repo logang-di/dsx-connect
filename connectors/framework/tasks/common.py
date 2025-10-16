@@ -10,7 +10,12 @@ import os
 def bump_patch_version(version_file: str) -> str:
     """
     Increment the patch version in the given version.py file.
-    Expects a line like: VERSION = "X.Y.Z"
+
+    Supports common constants used across this repo:
+      - CONNECTOR_VERSION = "X.Y.Z"
+      - DSX_CONNECT_VERSION = "X.Y.Z"
+      - VERSION = "X.Y.Z"
+
     Returns the new version string.
     """
     path = Path(version_file)
@@ -18,8 +23,19 @@ def bump_patch_version(version_file: str) -> str:
         raise FileNotFoundError(f"Version file not found: {version_file}")
     content = path.read_text()
 
-    pattern = r'(VERSION\s*=\s*["\'])(\d+)\.(\d+)\.(\d+)(["\'])'
-    match = re.search(pattern, content)
+    # Try the constants in priority order
+    patterns = [
+        r'(CONNECTOR_VERSION\s*=\s*["\'])(\d+)\.(\d+)\.(\d+)(["\'])',
+        r'(DSX_CONNECT_VERSION\s*=\s*["\'])(\d+)\.(\d+)\.(\d+)(["\'])',
+        r'(VERSION\s*=\s*["\'])(\d+)\.(\d+)\.(\d+)(["\'])',
+    ]
+    match = None
+    pattern_used = None
+    for pat in patterns:
+        match = re.search(pat, content)
+        if match:
+            pattern_used = pat
+            break
     if not match:
         raise ValueError(f"Version string not found in {version_file}")
 
@@ -29,7 +45,7 @@ def bump_patch_version(version_file: str) -> str:
     new_patch = patch + 1
     new_version = f"{major}.{minor}.{new_patch}"
     new_line = f"{match.group(1)}{new_version}{match.group(5)}"
-    new_content = re.sub(pattern, new_line, content)
+    new_content = re.sub(pattern_used, new_line, content)
     path.write_text(new_content)
     return new_version
 
@@ -78,7 +94,8 @@ def prepare_common_files(c: Context, project_slug: str, connector_name: str, ver
     #c.run(f"mkdir -p {export_folder}/connectors/azure_blob_storage")
     c.run(
         f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/{project_slug}/ {export_folder}/connectors/{project_slug}/ "
-        f"--exclude 'deploy' --exclude 'dist' --exclude 'tasks.py' --exclude '.devenv' --exclude '.dev.env' --exclude '.env'")
+        f"--exclude 'deploy' --exclude 'dist' --exclude 'tasks.py' --exclude '.devenv' --exclude '.dev.env' --exclude '.env' "
+        f"--exclude 'data/connector_uuid.txt'")
     c.run(
         f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/framework/ {export_folder}/connectors/framework/ --exclude 'tasks'")
     c.run(f"touch {export_folder}/connectors/__init__.py")
@@ -165,7 +182,16 @@ def build_image(c: Context, name: str, version: str, export_folder: str):
         dockerfile_path = Path(export_folder) / "Dockerfile"
 
     print(f"Building docker image {image_tag} using {dockerfile_path} …")
-    c.run(f"docker build -t {image_tag} -f {dockerfile_path} {export_folder}")
+    # Allow overriding base image and pip indexes via env -> build-args
+    build_args = []
+    for env_key, arg_key in (("PY_BASE_IMAGE", "PY_BASE_IMAGE"),
+                             ("PIP_INDEX_URL", "PIP_INDEX_URL"),
+                             ("PIP_EXTRA_INDEX_URL", "PIP_EXTRA_INDEX_URL")):
+        val = os.environ.get(env_key)
+        if val:
+            build_args += ["--build-arg", f"{arg_key}={val}"]
+    ba = " ".join(build_args)
+    c.run(f"docker build {ba} -t {image_tag} -f {dockerfile_path} {export_folder}")
 
 
 def push_image(c: Context, repo: str, name: str, version: str):
@@ -244,13 +270,29 @@ def helm_package_connector(c: Context, project_slug: str, out_dir: str = "dist/c
     if not out_path.is_absolute():
         out_path = root / out_dir
     out_path.mkdir(parents=True, exist_ok=True)
-    # Ensure lock is in sync first, then lint with a friendly guard message
-    c.run(f"helm dependency build {chart_dir}")
+    # Ensure lock is in sync first; auto-update when out of sync, then lint
+    build_res = c.run(f"helm dependency build {chart_dir}", warn=True, hide=True)
+    build_out = (build_res.stdout or "") + (build_res.stderr or "")
+    if build_res.exited != 0 or "lock file" in build_out and "out of sync" in build_out:
+        print(f"[helm] Dependencies out of sync for {project_slug}. Running: helm dependency update …")
+        c.run(f"helm dependency update {chart_dir}")
+        c.run(f"helm dependency build {chart_dir}")
+
     lint_res = c.run(f"helm lint {chart_dir}", warn=True, hide=True)
     if lint_res.exited != 0:
         out = (lint_res.stdout or "") + (lint_res.stderr or "")
-        if "Chart.lock is out of sync with the dependencies file" in out:
-            print(f"[helm] Dependencies out of sync for {project_slug}. Run: helm dependency update connectors/{project_slug}/deploy/helm")
+        if "Chart.lock is out of sync with the dependencies file" in out or ("lock file" in out and "out of sync" in out):
+            print(f"[helm] Dependencies out of sync for {project_slug}. Running: helm dependency update …")
+            c.run(f"helm dependency update {chart_dir}")
+            # Re-run lint after updating deps
+            lint_res = c.run(f"helm lint {chart_dir}", warn=True, hide=True)
+            out = (lint_res.stdout or "") + (lint_res.stderr or "")
+            if lint_res.exited != 0:
+                if lint_res.stdout:
+                    print(lint_res.stdout)
+                if lint_res.stderr:
+                    print(lint_res.stderr)
+                raise SystemExit(lint_res.exited)
         if lint_res.stdout:
             print(lint_res.stdout)
         if lint_res.stderr:

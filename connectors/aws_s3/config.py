@@ -34,6 +34,13 @@ class AWSS3ConnectorConfig(BaseConnectorConfig):
     asset: str = "lg-test-02"
     filter: str = ""
 
+    # Derived at startup from `asset`. For S3, `asset` may be either
+    #   - "bucket" or
+    #   - "bucket/prefix"
+    # We keep the raw `asset` for display and derive these for runtime use.
+    asset_bucket: str | None = None
+    asset_prefix_root: str = ""
+
     ### Connector specific configuration
     s3_endpoint_url: str | None = None
     s3_endpoint_verify: bool = True

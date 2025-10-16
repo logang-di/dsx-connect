@@ -22,7 +22,7 @@ spec:
         app.kubernetes.io/name: {{ include "google-cloud-storage-connector.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      {{- if or .Values.tls.enabled .Values.gcp.credentialsSecretName }}
+      {{- if or .Values.tls.enabled .Values.gcp.credentialsSecretName .Values.dataVolume.enabled }}
       volumes:
         {{- if .Values.tls.enabled }}
         - name: tls-certs
@@ -33,6 +33,10 @@ spec:
         - name: gcp-creds
           secret:
             secretName: {{ .Values.gcp.credentialsSecretName | quote }}
+        {{- end }}
+        {{- if .Values.dataVolume.enabled }}
+        - name: data-dir
+          emptyDir: {}
         {{- end }}
       {{- end }}
       containers:
@@ -92,7 +96,6 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
-          {{- if or .Values.tls.enabled .Values.gcp.credentialsSecretName }}
           volumeMounts:
             {{- if .Values.tls.enabled }}
             - name: tls-certs
@@ -104,4 +107,7 @@ spec:
               mountPath: {{ .Values.gcp.mountPath | quote }}
               readOnly: true
             {{- end }}
-          {{- end }}
+            {{- if .Values.dataVolume.enabled }}
+            - name: data-dir
+              mountPath: {{ .Values.dataVolume.mountPath | quote }}
+            {{- end }}

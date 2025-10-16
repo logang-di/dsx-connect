@@ -1,0 +1,15 @@
+enabled: true
+
+image:
+  repository: dsxconnect/dsx-connect
+  tag: ""
+  pullPolicy: IfNotPresent
+
+env:
+  LOG_LEVEL: debug
+
+celery:
+  # queue computed from DSXCONNECT_APP_ENV in template unless overridden here
+  # queue: "dev.dsx_connect.analyze.dianna"
+  concurrency: 1
+

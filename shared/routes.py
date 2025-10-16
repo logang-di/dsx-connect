@@ -19,6 +19,7 @@ class DSXConnectAPI(str, Enum):
     SCAN_PREFIX = "scan"
     CONNECTORS_PREFIX = "connectors"
     NOTIFICATIONS_PREFIX = "subscribe"
+    DIANNA_PREFIX = "dianna"
     ADMIN_DEAD_LETTER_QUEUE_PREFIX = "admin/dead-letter"
 
 class ScanPath(str, Enum):

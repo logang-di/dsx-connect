@@ -16,7 +16,7 @@ Use it to run one or more connector instances that watch a specific S3 bucket/pr
 
 ## Quick Config Reference
 
-- env.DSXCONNECTOR_ASSET: S3 bucket (optionally with a prefix). Example: `invoices-bucket` or `invoices-bucket/prefix`.
+- env.DSXCONNECTOR_ASSET: S3 bucket (optionally with a prefix). Example: `invoices-bucket` or `invoices-bucket/prefix`. When a prefix is provided, listings start at that sub-root and filters are evaluated relative to it.
 - env.DSXCONNECTOR_FILTER: Optional include/exclude rules under the asset root. Use for prefix scoping too (e.g., `prefix/**`). Follows rsync‑like rules. Examples: `"prefix/**"`, `"**/*.zip,**/*.docx"`, `"-tmp --exclude cache"`.
 - env.DSXCONNECTOR_DISPLAY_NAME: Optional friendly name shown on the dsx-connect UI card (e.g., "AWS S3 Connector").
 - env.DSXCONNECTOR_ITEM_ACTION: What to do with malicious files. One of: `nothing` (default), `delete`, `tag`, `move`, `move_tag`.
@@ -85,7 +85,7 @@ helm install my-connector . -f values-dev-my-asset1.yaml
 Install from OCI and set the required runtime env on the CLI:
 
 ```bash
-helm install aws-s3 oci://registry-1.docker.io/dsxconnect/aws-s3-connector \
+helm install aws-s3 oci://registry-1.docker.io/dsxconnect/aws-s3-connector-chart \
   --version <ver> \
   --set env.DSXCONNECTOR_ASSET=my-bucket \
   --set-string env.DSXCONNECTOR_FILTER="**/*.zip,**/*.docx"
@@ -153,3 +153,29 @@ Examples (paths are relative to `DSXCONNECTOR_ASSET`):
 | "test/2025*/*"                                        | Files in subtrees matching `test/2025*/*` (no recursion)                    |
 | "test/2025*/** -sub2"                                 | Recurse under `test/2025*/**`, excluding any `sub2` subtree                 |
 | "'scan here' -'not here' --exclude 'not here either'" | Quoted tokens for names with spaces                                          |
+
+## Asset vs Filter
+
+- Asset: Absolute base in the repository. No wildcards. For S3, this is `bucket` or `bucket/prefix`. Listings start here and webhooks are scoped here.
+- Filter: Rsync‑like include/exclude rules relative to the asset base. Supports wildcards and exclusions.
+- Equivalences:
+  - `asset=my-bucket`, `filter=prefix1/**`  ≈  `asset=my-bucket/prefix1`, `filter=""`
+  - `asset=my-bucket`, `filter=sub1`       ≈  `asset=my-bucket/sub1`, `filter=""` (common usage)
+  - `asset=my-bucket`, `filter=sub1/*`     ≈  `asset=my-bucket/sub1`, `filter="*"`
+- When to choose which:
+  - Prefer Asset for the stable, exact root of a scan (fast provider prefix narrowing and simpler mental model).
+  - Use Filter for wildcard selection and excludes under that root.
+  - Plain‑English note: If your filter is “complex” (e.g., contains excludes like `-tmp`, or advanced globs beyond simple directory includes), the connector cannot rely on a tight Prefix at the provider. It will list a broader set of objects (sometimes the whole bucket/prefix) and then match/exclude locally, which is slower than starting at an exact asset sub‑root.
+
+## Sharding & Deployment Strategies
+
+- Multiple instances: Run separate releases of the connector to split work across natural subtrees.
+  - Asset-based sharding: set `DSXCONNECTOR_ASSET="bucket/prefix1/sub1"` for instance A, `bucket/prefix1/sub2` for instance B. Use `DSXCONNECTOR_FILTER` only for fine-grained includes/excludes under that sub-root.
+  - Filter-based sharding: set `DSXCONNECTOR_ASSET="bucket"` and use include-only filters per instance (e.g., `prefix1/sub1/**`, `prefix1/sub2/**`).
+- Performance tip: Prefer include-only filters for provider-side prefix narrowing. Adding excludes is supported, but may require broader provider listing with client-side filtering.
+- Examples (two shards):
+  - A: `DSXCONNECTOR_ASSET=my-bucket/prefix1/sub1`, `DSXCONNECTOR_FILTER="**/*.zip"`
+  - B: `DSXCONNECTOR_ASSET=my-bucket/prefix1/sub2`, `DSXCONNECTOR_FILTER="**/*.zip"`
+  Or
+  - A: `DSXCONNECTOR_ASSET=my-bucket`, `DSXCONNECTOR_FILTER="prefix1/sub1/**"`
+  - B: `DSXCONNECTOR_ASSET=my-bucket`, `DSXCONNECTOR_FILTER="prefix1/sub2/**"`

@@ -101,7 +101,7 @@ class AWSS3Client:
         response = self.s3_client.head_object(Bucket=bucket, Key=key)
         return response['ContentLength']
 
-    def keys(self, bucket: str, filter_str: str = ""):
+    def keys(self, bucket: str, base_prefix: str = "", filter_str: str = ""):
         """
         Yield S3 object keys applying DSXCONNECTOR_FILTER.
 
@@ -113,25 +113,45 @@ class AWSS3Client:
 
         seen: set[str] = set()
 
+        # Normalize base_prefix to either '' or 'path/'
+        bp = (base_prefix or "").strip("/")
+        if bp:
+            bp = bp + "/"
+
+        def _rel(key: str) -> str:
+            if not bp:
+                return key
+            if key.startswith(bp):
+                return key[len(bp):]
+            # Shouldn't happen when Prefix=bp is used, but guard anyway
+            return key
+
         def _emit(obj):
             key = obj.get('Key') or obj.get('Prefix')
             if not key or key in seen:
                 return
             if key.endswith('/'):
                 return
-            if filter_str and not relpath_matches_filter(key, filter_str):
+            # Apply filter relative to base_prefix root
+            rel = _rel(key)
+            if filter_str and not relpath_matches_filter(rel, filter_str):
                 return
             seen.add(key)
             yield obj if 'Size' in obj else {'Key': key}
 
         if hints:
             for prefix in sorted(set(hints)):
-                for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+                eff = f"{bp}{prefix}" if bp else prefix
+                for page in paginator.paginate(Bucket=bucket, Prefix=eff):
                     for obj in page.get('Contents', []):
                         for item in _emit(obj):
                             yield item
         else:
-            for page in paginator.paginate(Bucket=bucket):
+            # Narrow to base_prefix if provided; otherwise whole bucket
+            paginate_kwargs = {'Bucket': bucket}
+            if bp:
+                paginate_kwargs['Prefix'] = bp
+            for page in paginator.paginate(**paginate_kwargs):
                 for obj in page.get('Contents', []):
                     for item in _emit(obj):
                         yield item

@@ -249,6 +249,30 @@ class ScanResultWorker(BaseWorker):
                 except Exception as e:
                     dsx_logging.warning(f"[scan_result] notify failed: {e}")
 
+            # Optionally trigger DIANNA analysis on malicious verdicts
+            try:
+                if getattr(cfg.dianna, 'auto_on_malicious', False):
+                    v = getattr(getattr(scan_result, "verdict", None), "verdict", None)
+                    v_norm = str(v or '').lower()
+                    if 'malicious' in v_norm or v_norm in ('bad', 'infected'):
+                        sr = getattr(scan_result, 'scan_request', None)
+                        if sr and getattr(sr, 'connector_url', None) and getattr(sr, 'location', None):
+                            payload = {
+                                "connector": getattr(sr, 'connector', None).model_dump() if getattr(sr, 'connector', None) else None,
+                                "connector_url": sr.connector_url,
+                                "location": sr.location,
+                                "metainfo": getattr(sr, 'metainfo', sr.location),
+                            }
+                            celery_app.send_task(
+                                Tasks.DIANNA_ANALYZE,
+                                args=[payload],
+                                kwargs={},
+                                queue=Queues.ANALYZE,
+                            )
+                            dsx_logging.info("[scan_result] auto DIANNA analysis enqueued")
+            except Exception as e:
+                dsx_logging.warning(f"[scan_result] auto-dianna failed: {e}")
+
         except Exception as e:
             # Don't bubble from extras
             dsx_logging.warning(f"[scan_result] extras wrapper failed: {e}")

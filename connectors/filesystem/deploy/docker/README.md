@@ -11,6 +11,7 @@ This guide shows how to run the Filesystem connector with Docker Compose.
 Use the provided `deploy/docker/docker-compose-filesystem-connector.yaml` as a starting point. Adjust:
 - `DSXCONNECTOR_ASSET` to your mounted scan folder.
 - `DSXCONNECTOR_FILTER` for scoping; see filter rules below.
+ - `DSXCONNECTOR_MONITOR` to `"true"` to enable realtime monitoring (watchfiles) of the asset path; default is `"false"`.
 
 Key settings:
 - Map a scan folder to `/app/scan_folder`.
@@ -25,6 +26,32 @@ Notes:
 - If dsx-connect runs with HTTPS and a private CA, mount the CA and set:
   - `DSXCONNECTOR_VERIFY_TLS=true`
   - `DSXCONNECTOR_CA_BUNDLE=/app/certs/ca.crt`
+
+## SMB/CIFS Shares (Windows file servers)
+
+Many CIFS/SMB mounts on Linux do not emit inotify events for changes made by remote clients. If your share is mounted via `cifs` and you see full scans work but live monitoring does not react when files are dropped from Windows, enable polling:
+
+- Set `DSXCONNECTOR_MONITOR="true"`.
+- Set `DSXCONNECTOR_MONITOR_FORCE_POLLING="true"`.
+- Optionally tune `DSXCONNECTOR_MONITOR_POLL_INTERVAL_MS` (default `1000` ms).
+
+Example docker‑compose env:
+```yaml
+environment:
+  DSXCONNECTOR_MONITOR: "true"
+  DSXCONNECTOR_MONITOR_FORCE_POLLING: "true"
+  DSXCONNECTOR_MONITOR_POLL_INTERVAL_MS: "1000"
+```
+
+Mount options that help stat refresh (won’t fix missing inotify):
+- Use SMB 3.x: `vers=3.0` or `vers=3.1.1`
+- Reduce attribute cache: `actimeo=1`, and consider `cache=strict`
+
+Example:
+```bash
+sudo mount -t cifs //server/share /mnt/share \
+  -o vers=3.1.1,username=USER,password=PASS,actimeo=1,cache=strict,uid=$(id -u),gid=$(id -g)
+```
 
 ## Rsync‑Like Filter Rules
 

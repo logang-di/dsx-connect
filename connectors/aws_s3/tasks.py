@@ -119,6 +119,11 @@ def helm_push_oci(c, repo=None, charts_dir=None, version=None):
     if repo is None:
         import os as _os
         repo = _os.environ.get("HELM_REPO", DEFAULT_HELM_REPO)
+    try:
+        if repo.rstrip('/') in ("oci://registry-1.docker.io/dsxconnect", "oci://index.docker.io/v2/dsxconnect"):
+            print(f"[helm] Warning: HELM_REPO '{repo}' looks like the image repo. Use a separate charts repo (e.g., {DEFAULT_HELM_REPO}).")
+    except Exception:
+        pass
     if charts_dir is None:
         charts_dir = f"connectors/{project_slug}/{_export_folder(version)}"
     helm_push_oci_connector(c, project_slug=project_slug, repo=repo, charts_dir=charts_dir, version=version)

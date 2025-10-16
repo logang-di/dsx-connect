@@ -59,12 +59,49 @@ class SyslogConfig(BaseSettings):
     syslog_server_url: str = "127.0.0.1"
     syslog_server_port: int = 514
     # transport: udp | tcp | tls
-    transport: str = "udp"
+    transport: str = "tcp"
     # TLS options (used when transport == 'tls')
     tls_ca_file: str | None = None
     tls_cert_file: str | None = None
     tls_key_file: str | None = None
     tls_insecure: bool = False
+
+class DiannaConfig(BaseSettings):
+    model_config = SettingsConfigDict(env_nested_delimiter="__")
+    # Base URL of Deep Instinct management console, e.g., https://di.example.com
+    management_url: str = "https://selab-dpa.customers.deepinstinctweb.com"
+    # API token for DIANNA REST API
+    api_token: str | None = None
+    # Verify TLS (set false to skip verification in dev)
+    verify_tls: bool = True
+    # Optional CA bundle path for custom CAs
+    ca_bundle: str | None = None
+    # Chunk size for uploads (bytes)
+    chunk_size: int = 4 * 1024 * 1024
+    # Request timeout (seconds)
+    timeout: int = 60
+    # Auto-enqueue analysis when verdict is malicious
+    auto_on_malicious: bool = False
+
+    # Result polling (after upload finishes)
+    poll_results_enabled: bool = True
+    poll_interval_seconds: int = 5
+    # Maximum time to wait for a final result (seconds)
+    poll_timeout_seconds: int = 900
+
+    # Normalize management_url to include scheme if omitted
+    @model_validator(mode="after")
+    def _normalize_management_url(self):
+        try:
+            if self.management_url:
+                url = str(self.management_url).strip()
+                # If no scheme provided, default to https
+                if not (url.lower().startswith("http://") or url.lower().startswith("https://")):
+                    self.management_url = f"https://{url}"
+        except Exception:
+            # Leave as-is on any parsing error
+            pass
+        return self
 
 
 class CeleryTaskConfig(BaseSettings):
@@ -111,6 +148,7 @@ class DSXConnectConfig(BaseSettings):
     # App Redis (job progress, pubsub). Results/stats DB may use a different Redis via database.loc.
     redis_url: AnyUrl = "redis://localhost:6379/3"
     syslog: SyslogConfig = SyslogConfig()
+    dianna: DiannaConfig = DiannaConfig()
 
     # TLS/SSL for API server
     use_tls: bool = False

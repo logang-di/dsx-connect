@@ -14,6 +14,20 @@ from shared.file_ops import relpath_matches_filter
 config = ConfigManager.reload_config()
 connector_id = config.name
 
+# Derive container and base prefix from asset, supporting both "container" and "container/prefix" forms
+try:
+    raw_asset = (config.asset or "").strip()
+    if "/" in raw_asset:
+        container, prefix = raw_asset.split("/", 1)
+        config.asset_container = container.strip()
+        config.asset_prefix_root = prefix.strip("/")
+    else:
+        config.asset_container = raw_asset
+        config.asset_prefix_root = ""
+except Exception:
+    config.asset_container = config.asset
+    config.asset_prefix_root = ""
+
 # Initialize DSX Connector instance
 connector = DSXConnector(config)
 
@@ -38,7 +52,8 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} configuration: {config}.")
     dsx_logging.info(f"{base.name} startup completed.")
 
-    base.meta_info = f"ABS container: {config.asset}, filter: {config.filter or '(none)'}"
+    prefix_disp = f"/{config.asset_prefix_root}" if getattr(config, 'asset_prefix_root', '') else ""
+    base.meta_info = f"ABS container: {config.asset_container}{prefix_disp}, filter: {config.filter or '(none)'}"
     return base
 
 
@@ -91,13 +106,20 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
             functionality is not supported. (For connectors without full scan support, return an error response.)
     """
     # Enumerate all keys in the container (optionally optimized later) and apply rsync-like filter
+    def _rel(k: str) -> str:
+        bp = (config.asset_prefix_root or "").strip("/")
+        if not bp:
+            return k
+        bp = bp + "/"
+        return k[len(bp):] if k.startswith(bp) else k
+
     count = 0
-    for blob in abs_client.keys(config.asset, filter_str=config.filter):
+    for blob in abs_client.keys(config.asset_container, base_prefix=config.asset_prefix_root, filter_str=config.filter):
         key = blob['Key']
-        # Final guard to ensure exact parity with rsync rules
-        if config.filter and not relpath_matches_filter(key, config.filter):
+        # Final guard with rel path semantics
+        if config.filter and not relpath_matches_filter(_rel(key), config.filter):
             continue
-        full_path = f"{config.asset}/{key}"
+        full_path = f"{config.asset_container}/{key}"
         await connector.scan_file_request(ScanRequestModel(location=key, metainfo=full_path))
         dsx_logging.debug(f"Sent scan request for {full_path}")
         count += 1
@@ -126,34 +148,34 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> ItemAc
             or an error if the action is not implemented.
     """
     file_path = scan_event_queue_info.location
-    if not abs_client.key_exists(config.asset, file_path):
+    if not abs_client.key_exists(config.asset_container, file_path):
         return ItemActionStatusResponse(status=StatusResponseEnum.ERROR, item_action=config.item_action,
                                         message="Item action failed.",
-                                        description=f"File does not exist at {config.asset}: {file_path}")
+                                        description=f"File does not exist at {config.asset_container}: {file_path}")
 
     if config.item_action == ItemActionEnum.DELETE:
-        abs_client.delete_blob(config.asset, file_path)
+        abs_client.delete_blob(config.asset_container, file_path)
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message="File deleted.",
-                                        description=f"File deleted from {config.asset}: {file_path}")
+                                        description=f"File deleted from {config.asset_container}: {file_path}")
     elif config.item_action == ItemActionEnum.MOVE:
         dest_key = f"{config.item_action_move_metainfo}/{file_path}"
-        abs_client.move_blob(config.asset, file_path, config.asset, dest_key)
+        abs_client.move_blob(config.asset_container, file_path, config.asset_container, dest_key)
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message="File moved.",
-                                        description=f"File moved from {config.asset}: {file_path} to {dest_key}")
+                                        description=f"File moved from {config.asset_container}: {file_path} to {dest_key}")
     elif config.item_action == ItemActionEnum.TAG:
-        abs_client.tag_blob(config.asset, file_path, {"Verdict": "Malicious"})
+        abs_client.tag_blob(config.asset_container, file_path, {"Verdict": "Malicious"})
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message="File tagged.",
-                                        description=f"File tagged at {config.asset}: {file_path}")
+                                        description=f"File tagged at {config.asset_container}: {file_path}")
     elif config.item_action == ItemActionEnum.MOVE_TAG:
-        abs_client.tag_blob(config.asset, file_path, {"Verdict": "Malicious"})
+        abs_client.tag_blob(config.asset_container, file_path, {"Verdict": "Malicious"})
         dest_key = f"{config.item_action_move_metainfo}/{file_path}"
-        abs_client.move_blob(config.asset, file_path, config.asset, dest_key)
+        abs_client.move_blob(config.asset_container, file_path, config.asset_container, dest_key)
         return ItemActionStatusResponse(status=StatusResponseEnum.SUCCESS, item_action=config.item_action,
                                         message="File tagged and moved",
-                                        description=f"File moved from {config.asset}: {file_path} to {dest_key} and tagged.")
+                                        description=f"File moved from {config.asset_container}: {file_path} to {dest_key} and tagged.")
 
     return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action,
                                     message="Item action did nothing or not implemented")
@@ -197,7 +219,7 @@ async def read_file_handler(scan_event_queue_info: ScanRequestModel) -> StatusRe
     """
     # Implement file read (if applicable)
     try:
-        file_stream = abs_client.get_blob(config.asset, scan_event_queue_info.location)
+        file_stream = abs_client.get_blob(config.asset_container, scan_event_queue_info.location)
         return StreamingResponse(stream_blob(file_stream), media_type="application/octet-stream")
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))
@@ -213,23 +235,30 @@ async def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    if abs_client.test_connection(config.asset):
+    if abs_client.test_connection(config.asset_container):
         return StatusResponse(status=StatusResponseEnum.SUCCESS,
-                              message=f"Connection to {config.asset} successful.")
-    return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.asset} failed.")
+                              message=f"Connection to {config.asset_container} successful.")
+    return StatusResponse(status=StatusResponseEnum.ERROR, message=f"Connection to {config.asset_container} failed.")
 
 
 @connector.preview
 async def preview_provider(limit: int) -> list[str]:
     items: list[str] = []
     try:
-        for blob in abs_client.keys(config.asset, filter_str=config.filter):
+        def _rel(k: str) -> str:
+            bp = (config.asset_prefix_root or "").strip("/")
+            if not bp:
+                return k
+            bp = bp + "/"
+            return k[len(bp):] if k.startswith(bp) else k
+
+        for blob in abs_client.keys(config.asset_container, base_prefix=config.asset_prefix_root, filter_str=config.filter):
             key = blob.get('Key')
             if not key:
                 continue
-            if config.filter and not relpath_matches_filter(key, config.filter):
+            if config.filter and not relpath_matches_filter(_rel(key), config.filter):
                 continue
-            items.append(f"{config.asset}/{key}")
+            items.append(f"{config.asset_container}/{key}")
             if len(items) >= max(1, limit):
                 break
     except Exception:
@@ -258,7 +287,13 @@ async def webhook_handler(event: dict):
     location = event.get("location") or event.get("blob") or event.get("key")
     if location:
         key = str(location)
-        if relpath_matches_filter(key, config.filter):
+        # Filter is relative to base prefix
+        bp = (config.asset_prefix_root or "").strip("/")
+        bp = (bp + "/") if bp else ""
+        if bp and not key.startswith(bp):
+            return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Webhook processed", description=f"Ignored by base prefix: {key}")
+        rel = key[len(bp):] if bp else key
+        if relpath_matches_filter(rel, config.filter):
             await connector.scan_file_request(ScanRequestModel(location=key, metainfo=key))
             return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Webhook processed", description=f"Scan requested for {key}")
         else:

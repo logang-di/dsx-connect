@@ -41,6 +41,8 @@ class FilesystemConnectorConfig(BaseConnectorConfig):
     # the asset is actually map to folder on the connector's running container/pod, which is mapped to a folder on the host.
     # what we ant to display on the frontend, is the host folder, not the app/scan_folder.
     monitor: bool = False # if true, Connector will monitor location for new or modified files.
+    monitor_force_polling: bool = False  # if true, force polling (useful on SMB/CIFS where inotify is unreliable)
+    monitor_poll_interval_ms: int = 1000  # polling interval when force polling is enabled
 
     # @field_validator("filter")
     # @classmethod

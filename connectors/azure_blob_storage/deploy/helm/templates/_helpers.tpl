@@ -67,3 +67,11 @@ Create the name of the service account to use
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+HTTP route base used by the application for health/ready endpoints.
+Defaults to the DSX connector's logical name, which is different from the chart name.
+*/}}
+{{- define "azure-blob-storage-connector.routeBase" -}}
+{{- default "azure-blob-storage-connector" .Values.routeBase -}}
+{{- end -}}

@@ -9,7 +9,7 @@ This guide shows how to run the Azure Blob Storage connector with Docker Compose
 ## Example docker-compose service
 
 Use the provided `deploy/docker/docker-compose-azure-blob-storage-connector.yaml` as a starting point. Adjust:
-- `DSXCONNECTOR_ASSET` to your container/prefix.
+- `DSXCONNECTOR_ASSET` to your container or container/prefix. If a prefix is provided, listings start at that sub-root and filters are evaluated relative to it.
 - `DSXCONNECTOR_FILTER` for scoping; see filter rules below.
 - Provide `AZURE_STORAGE_CONNECTION_STRING` or appropriate auth env vars.
 

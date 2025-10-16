@@ -22,6 +22,13 @@ and the following API endpoints as applicable:
 - Behavior: recursive monitoring with ~500ms debounce; verifies file readability to avoid partial writes.
 - Enable via `DSXCONNECTOR_MONITOR=true` (see `.dev.env`).
 
+Polling for SMB/CIFS and remote mounts
+- Some CIFS/SMB mounts on Linux don’t emit inotify events for changes by remote clients. In those cases, force polling:
+  - `DSXCONNECTOR_MONITOR=true`
+  - `DSXCONNECTOR_MONITOR_FORCE_POLLING=true`
+  - Optional: `DSXCONNECTOR_MONITOR_POLL_INTERVAL_MS=1000` (default is 1000ms)
+- Helpful CIFS mount options (improve stat freshness but don’t create inotify events): `vers=3.1.1,actimeo=1,cache=strict`.
+
 Tests for monitoring
 - Unit (deterministic): `pytest -q connectors/filesystem/tests/test_filesystem_monitor.py`
   - Simulates a modify event and asserts the webhook → scan path executes (no OS watcher needed).

@@ -1,5 +1,5 @@
 apiVersion: v2
-name: dsx-connect
+name: dsx-connect-chart
 description: A Helm chart for Kubernetes
 type: application
 version: 0.1.0
@@ -19,12 +19,16 @@ dependencies:
   - name: dsx-connect-notification-worker
     version: 0.1.0
     repository: file://charts/dsx-connect-notification-worker
+  - name: dsx-connect-dianna-worker
+    version: 0.1.0
+    repository: file://charts/dsx-connect-dianna-worker
   - name: redis
     version: 0.1.0
     repository: file://charts/redis
-  - name: syslog
+  - name: rsyslog
     version: 0.1.0
-    repository: file://charts/syslog
+    repository: file://charts/rsyslog
+    condition: rsyslog.enabled
   - name: dsxa-scanner
     version: 0.1.0
     repository: file://charts/dsxa-scanner

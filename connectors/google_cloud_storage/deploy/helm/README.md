@@ -85,7 +85,7 @@ kubectl -n default create secret generic gcp-sa \
 
 ## Quick Config Reference
 
-- env.DSXCONNECTOR_ASSET: GCS bucket (optionally with a prefix). Example: `invoices-bucket` or `invoices-bucket/prefix`.
+- env.DSXCONNECTOR_ASSET: GCS bucket (optionally with a prefix). Example: `invoices-bucket` or `invoices-bucket/prefix`. When a prefix is provided, listings start at that sub-root and filters are evaluated relative to it.
 - env.DSXCONNECTOR_FILTER: Optional include/exclude rules under the asset root. Use for prefix scoping too (e.g., `prefix/**`). Follows rsync‑like rules. Examples: `"prefix/**"`, "**/*.zip,**/*.docx", or "-tmp --exclude cache".
 - env.DSXCONNECTOR_DISPLAY_NAME: Optional friendly name shown on the dsx-connect UI card (e.g., "Google Cloud Storage Connector").
 - env.DSXCONNECTOR_ITEM_ACTION: What to do with malicious files. One of: `nothing` (default), `delete`, `tag`, `move`, `move_tag`.
@@ -112,7 +112,7 @@ Install (ensure the GCP Secret exists, or use Workload Identity):
 
 ```bash
 helm install gcs-invoices-dev . \
-  --set env.DSXCONNECTOR_ASSET=my-bucket \
+  --set env.DSXCONNECTOR_ASSET=my-bucket/prefix1 \
   --set-string env.DSXCONNECTOR_FILTER="" \
   --set-string image.tag=<version>
 ```
@@ -151,7 +151,7 @@ helm install my-connector . -f values-dev-my-asset1.yaml
 ### Method 3: OCI Repository + Command-Line Overrides
 
 ```bash
-helm install gcs oci://registry-1.docker.io/dsxconnect/google-cloud-storage-connector \
+helm install gcs oci://registry-1.docker.io/dsxconnect/google-cloud-storage-connector-chart \
   --version <ver> \
   --set env.DSXCONNECTOR_ASSET=my-bucket \
   --set-string env.DSXCONNECTOR_FILTER="**/*.zip,**/*.docx"
@@ -197,6 +197,19 @@ If you enable actions like `tag`, `move`, `move_tag`, or `delete`, grant appropr
 Minimum roles:
 - Tagging (metadata updates): include `storage.objects.update` (e.g., `roles/storage.objectUser`)
 - Move/Delete/Quarantine: include `storage.objects.create`, `storage.objects.delete`, `storage.objects.get` (e.g., `roles/storage.objectAdmin`)
+
+## Asset vs Filter
+
+- Asset: Absolute base in the repository. No wildcards. For GCS, this is `bucket` or `bucket/prefix`. Listings start here and webhooks (if used) should be scoped here.
+- Filter: Rsync‑like include/exclude rules relative to the asset base. Supports wildcards and exclusions.
+- Equivalences:
+  - `asset=my-bucket`, `filter=prefix1/**`  ≈  `asset=my-bucket/prefix1`, `filter=""`
+  - `asset=my-bucket`, `filter=sub1`       ≈  `asset=my-bucket/sub1`, `filter=""` (common usage)
+  - `asset=my-bucket`, `filter=sub1/*`     ≈  `asset=my-bucket/sub1`, `filter="*"`
+- Guidance:
+  - Prefer Asset for the stable, exact root (best provider `prefix` narrowing and clarity).
+  - Use Filter for wildcard selection and excludes under that root.
+  - Plain‑English note: “Complex” filters (e.g., excludes like `-tmp`, or advanced globs beyond simple directory includes) prevent tight provider‑side `prefix` narrowing. The connector will list more broadly (sometimes the whole bucket/prefix) and then match/exclude locally, which is slower than starting from an exact asset sub‑root.
 
 Example values for a quarantining connector that moves files to a destination:
 
@@ -255,3 +268,12 @@ Examples (paths are relative to `DSXCONNECTOR_ASSET`):
 | "test/2025*/*"                                        | Files in subtrees matching `test/2025*/*` (no recursion)                    |
 | "test/2025*/** -sub2"                                 | Recurse under `test/2025*/**`, excluding any `sub2` subtree                 |
 | "'scan here' -'not here' --exclude 'not here either'" | Quoted tokens for names with spaces                                          |
+## Sharding & Deployment Strategies
+
+- Multiple instances: Run separate releases of the connector to split work across natural subtrees.
+  - Asset-based sharding: set `DSXCONNECTOR_ASSET="bucket/prefix1/sub1"` for instance A, `bucket/prefix1/sub2"` for instance B. Use `DSXCONNECTOR_FILTER` only for fine-grained includes/excludes under that sub-root.
+  - Filter-based sharding: set `DSXCONNECTOR_ASSET="bucket"` and use include-only filters per instance (e.g., `prefix1/sub1/**`, `prefix1/sub2/**`).
+- Performance tip: Prefer include-only filters for provider-side prefix narrowing. Adding excludes is supported, but may require broader provider listing with client-side filtering.
+- Examples (two shards):
+  - A: `DSXCONNECTOR_ASSET=my-bucket/prefix1/sub1`, `DSXCONNECTOR_FILTER="**/*.zip"`
+  - B: `DSXCONNECTOR_ASSET=my-bucket/prefix1/sub2`, `DSXCONNECTOR_FILTER="**/*.zip"`

@@ -18,20 +18,69 @@ This guide explains the core configuration concepts and details three deployment
 This umbrella chart deploys the DSX‑Connect stack. Key configuration areas (mirrors `values.yaml`):
 
 1.  **global.env:** Minimal shared env (e.g., `DSXCONNECT_APP_ENV`, `DSXCONNECTOR_API_KEY`, scanner URL override).
+    - DIANNA settings can also be set via the dedicated `global.dianna` block (see below).
 2.  **global.image:** Optional image defaults inherited by subcharts.
 3.  **global.scanner:** Hints for in‑cluster DSXA discovery (service name/port/scheme) when enabled.
 4.  **dsx-connect-api:** API service and TLS settings; component‑specific env.
-5.  **Worker charts:** Scan Request, Verdict Action, Results, Notification (env + Celery concurrency).
+5.  **Worker charts:** Scan Request, Verdict Action, Results, Notification, DIANNA (env + Celery concurrency).
 6.  **redis:** Message broker configuration (enabled by default).
-7.  **syslog:** Optional Syslog service for results.
+7.  **rsyslog:** Optional rsyslog service for results.
 8.  **dsxa-scanner:** Optional single‑pod DSXA for local testing (disabled by default).
 
 ## Quick Reference (most deployments)
 
 - `global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL`: REQUIRED when `dsxa-scanner.enabled=false` (default); set external DSXA endpoint.
+- `global.dianna.*`: Optional Deep Instinct (DIANNA) analysis settings. These map to `DSXCONNECT_DIANNA__*` env vars for API and workers.
 - `dsx-connect-api.tls.enabled` + `dsx-connect-api.tls.secretName`: enable HTTPS for the API; certs mounted at `tls.mountPath`.  Will use self-signed certs if none supplied.
 - `global.image.tag`: pin a specific image version across all components.
 - `dsx-connect-*-worker.celery.concurrency`: adjust worker parallelism per queue.
+- `dsx-connect-dianna-worker`: runs DIANNA analyze tasks on queue `<env>.dsx_connect.analyze.dianna`; scale independently.
+  - Polling controls (wired from `global.dianna`):
+    - `global.dianna.pollResultsEnabled` → `DSXCONNECT_DIANNA__POLL_RESULTS_ENABLED` (default: true)
+    - `global.dianna.pollIntervalSeconds` → `DSXCONNECT_DIANNA__POLL_INTERVAL_SECONDS` (default: 5)
+    - `global.dianna.pollTimeoutSeconds` → `DSXCONNECT_DIANNA__POLL_TIMEOUT_SECONDS` (default: 900)
+
+### DIANNA API Token via Secret (recommended)
+
+For production, source the DIANNA API token from a Kubernetes Secret rather than embedding it in values.
+
+1) Create the Secret (example manifest provided):
+
+   - Copy and edit `di-api-secret.yaml` in this directory (set your namespace and token), then apply:
+
+   ```bash
+   kubectl apply -f dsx_connect/deploy/helm/di-api-secret.yaml
+   ```
+
+   Or create directly via kubectl:
+
+   ```bash
+   kubectl -n <ns> create secret generic di-api \
+     --from-literal=apiToken="$DI_TOKEN"
+   ```
+
+2) Install/upgrade Helm release and pull the token from the Secret at runtime:
+
+   Note: this feeds the token into `global.dianna.apiToken`. Helm will store release values in history; assess this trade‑off for your environment or use a GitOps secret‑management flow.
+
+   ```bash
+   helm upgrade --install dsx dsx_connect/deploy/helm \
+     --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://my-dsxa.example.com/scan/binary/v2 \
+     --set-string global.dianna.managementUrl=https://di.example.com \
+     --set-string global.dianna.apiToken="$(kubectl -n <ns> get secret di-api -o jsonpath='{.data.apiToken}' | base64 -d)" \
+     --set dsx-connect-dianna-worker.enabled=true \
+     --set dsx-connect-dianna-worker.celery.concurrency=2 \
+     --set global.dianna.pollResultsEnabled=true \
+     --set global.dianna.pollIntervalSeconds=5 \
+     --set global.dianna.pollTimeoutSeconds=900 \
+     --set-string global.image.tag=<version>
+   ```
+
+3) Queue name and scaling:
+
+   - Queue defaults to `<DSXCONNECT_APP_ENV>.dsx_connect.analyze.dianna`.
+   - Override with `dsx-connect-dianna-worker.celery.queue` if needed.
+   - Scale parallelism via `dsx-connect-dianna-worker.celery.concurrency`.
 
 ---
 
@@ -109,6 +158,14 @@ This is the most common and recommended method for managing deployments. It invo
        DSXCONNECTOR_API_KEY: "your-prod-api-key"
        # REQUIRED when dsxa-scanner.enabled=false (default): point to your external DSXA
         DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://external-dsxa:5000/scan/binary/v2"
+     dianna:
+       managementUrl: "https://di.example.com"           # DSX management console base URL
+       apiToken: "${DI_TOKEN_FROM_SECRET}"               # Prefer using a Secret + envFrom in production
+       verifyTls: true
+       caBundle: ""                                      # optional path if you mount a custom CA
+       chunkSize: 4194304                                 # bytes
+       timeout: 60                                        # seconds
+       autoOnMalicious: false
      scanner:
        # serviceName: "dsx-connect-dsxa-scanner"  # defaults to "<release>-dsxa-scanner"
        # port: 5000
@@ -127,6 +184,18 @@ This is the most common and recommended method for managing deployments. It invo
        LOG_LEVEL: info
      celery:
        concurrency: 2
+
+   dsx-connect-dianna-worker:
+     enabled: true
+     env:
+       LOG_LEVEL: info
+     celery:
+       # override only if you changed naming; default derives from DSXCONNECT_APP_ENV
+       # queue: "prod.dsx_connect.analyze.dianna"
+       concurrency: 2
+
+  # Example: do not hardcode secrets here in production. Prefer pulling from a
+  # Kubernetes Secret at install time as shown above.
 
    # ... configure other workers, redis, syslog as needed
    ```
@@ -148,6 +217,20 @@ Instead of running `helm` commands manually, you declare the desired state of yo
 This involves storing environment-specific values files (e.g., `values-prod.yaml`) in a separate GitOps repository. The GitOps tool then uses these files to automate Helm deployments, providing a fully auditable and declarative system for managing your application lifecycle.
 
 ---
+## Scan Result Logging
+
+The `dsx-connect-results-worker` component is responsible for logging scan results to syslog.  By default, it sends syslog over TCP to port 514.  
+
+
+This helm chart includes 
+a rsyslog service that can be used to collect scan results within the cluster.  The rsyslog service is enabled 
+by default, but can be disabled by setting `rsyslog.enabled=false` in the `values.yaml` file.  
+
+If you need to change the default configuration or chose to send scan results to other collectors, see the file:
+See the APPENDIX-LOG-COLLECTORS.md file for more information. 
+
+
+---
 
 ## Packaging & Publishing (Helm)
 
@@ -157,7 +240,7 @@ You have a few good options to distribute this umbrella chart so others can inst
   - Package: `inv helm-package` (outputs `dist/charts/dsx-connect-<ver>.tgz`)
   - Login: `helm registry login registry-1.docker.io -u <user>`
   - Push: `inv helm-push-oci --repo=oci://registry-1.docker.io/dsxconnect`
-  - Install: `helm install dsx-connect oci://registry-1.docker.io/dsxconnect/dsx-connect --version <ver> -f values.yaml`
+  - Install: `helm install dsx-connect oci://registry-1.docker.io/dsxconnect/dsx-connect-chart --version <ver> -f values.yaml`
   - Pros: lives alongside container images, easy auth, immutable versions.
 
 ### OCI Install (prewired image tag)
@@ -203,7 +286,7 @@ To override a default environment variable, specify it under the `env` section o
 **Specific Worker Overrides:**
 
 *   **`dsx-connect-results-worker`:**
-    *   `DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL`: `syslog`
+    *   `DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL`: `rsyslog`
     *   `DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT`: `514`
 
 ---
@@ -323,34 +406,3 @@ Tip: In CI, drive the tag with a variable, e.g.
 TAG="$(git describe --tags --always)"
 helm upgrade dsx . --reuse-values --set-string global.image.tag="$TAG"
 ```
-
----
-
-## Appendix: GCP Connector Credentials and Docs
-
-If you plan to deploy the Google Cloud Storage connector, you need credentials unless using GKE Workload Identity.
-
-- Full guide: `connectors/google_cloud_storage/deploy/helm/README.md` (includes SA creation, roles, Secret mounting, and WI).
-
-Quick summary (Service Account key method):
-
-1) Create a GCP service account and grant minimum roles
-   - Read-only scanning: `roles/storage.objectViewer`
-   - Tag/Move/Delete (write ops): `roles/storage.objectAdmin` (or a tighter custom role with `storage.objects.update`, `storage.objects.create`, `storage.objects.delete`, `storage.objects.get`)
-
-2) Create a key and Kubernetes Secret
-   ```bash
-   gcloud iam service-accounts keys create sa.json \
-     --iam-account dsx-gcs-connector@${PROJECT_ID}.iam.gserviceaccount.com
-   kubectl create secret generic gcp-sa --from-file=service-account.json=./sa.json
-   ```
-
-3) Set connector chart values
-   ```yaml
-   gcp:
-     credentialsSecretName: gcp-sa
-   env:
-     DSXCONNECTOR_ASSET: your-bucket
-   ```
-
-For Workload Identity on GKE: omit `gcp.credentialsSecretName` and bind the Kubernetes ServiceAccount to the GCP SA with the required roles.

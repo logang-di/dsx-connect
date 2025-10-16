@@ -16,6 +16,25 @@ global:
     # Results/stats DB URL (redis://... => Redis, anything else => in-memory)
     DSXCONNECT_RESULTS_DB: redis://redis:6379/3
 
+  # DIANNA (Deep Instinct) settings applied to API and workers
+  dianna:
+    # Base URL of Deep Instinct management console, e.g., https://di.example.com
+    managementUrl: ""
+    # API token for DIANNA REST API (use a Secret in production; this values entry is for convenience)
+    apiToken: ""
+    # TLS verification and optional custom CA bundle
+    verifyTls: true
+    caBundle: ""
+    # Upload behavior
+    chunkSize: 4194304   # 4 MiB
+    timeout: 60          # seconds
+    # Automatically enqueue DI analysis when a malicious verdict is observed
+    autoOnMalicious: false
+    # Result polling after upload completes (dianna worker only)
+    pollResultsEnabled: true
+    pollIntervalSeconds: 5
+    pollTimeoutSeconds: 900
+
   # Optional shared image defaults (subcharts fall back to these when set)
   image:
     repository: dsxconnect/dsx-connect
@@ -73,6 +92,7 @@ dsx-connect-results-worker:
   enabled: true
   env:
     LOG_LEVEL: info
+    DSXCONNECT_SYSLOG__TRANSPORT: tcp
   celery:
     # queue: "dev.dsx_connect.scans.result"
     concurrency: 1
@@ -89,6 +109,14 @@ dsx-connect-notification-worker:
     LOG_LEVEL: info
   celery:
     # queue: "dev.dsx_connect.scans.result.notify"
+    concurrency: 1
+
+dsx-connect-dianna-worker:
+  enabled: true
+  env:
+    LOG_LEVEL: info
+  celery:
+    # queue: "dev.dsx_connect.analyze.dianna"
     concurrency: 1
 
 redis:
@@ -115,13 +143,8 @@ redis:
     retries: 5
     startPeriod: 10
 
-syslog:
-  enabled: true
-  image:
-    repository: balabit/syslog-ng
-    tag: latest
-  service:
-    port: 514 # Default syslog port
+rsyslog:
+  enabled: false
 
 ingress:
   enabled: false

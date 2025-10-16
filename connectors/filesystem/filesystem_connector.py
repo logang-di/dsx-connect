@@ -69,7 +69,9 @@ async def start_monitor():
         connector.filesystem_monitor = FilesystemMonitor(
             folder=watch_path,
             filter=config.filter,
-            callback=monitor_callback)
+            callback=monitor_callback,
+            force_polling=bool(getattr(config, 'monitor_force_polling', False)),
+            poll_interval_ms=int(getattr(config, 'monitor_poll_interval_ms', 1000)))
         connector.filesystem_monitor.start()
         dsx_logging.info(f"Monitor set on {watch_path} for new or modified files with filter: {config.filter}")
     else:
@@ -262,14 +264,24 @@ async def repo_check_handler() -> StatusResponse:
     Returns:
         bool: True if the repository connectivity OK, False otherwise.
     """
-    if os.path.exists(config.asset):
+    # Expand '~' and env vars and resolve the path for a reliable existence check
+    try:
+        test_path = pathlib.Path(os.path.expandvars(config.asset)).expanduser()
+        try:
+            test_path = test_path.resolve()
+        except Exception:
+            pass
+    except Exception:
+        test_path = pathlib.Path(str(config.asset))
+
+    if test_path.exists():
         return StatusResponse(
             status=StatusResponseEnum.SUCCESS,
-            message=f"{config.asset} connectivity success.")
+            message=f"{test_path} connectivity success.")
     else:
         return StatusResponse(
             status=StatusResponseEnum.ERROR,
-            message=f"Repo check failed for {config.asset}",
+            message=f"Repo check failed for {test_path}",
             description="")
 
 

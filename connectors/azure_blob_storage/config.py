@@ -37,6 +37,13 @@ class AzureBlobStorageConnectorConfig(BaseConnectorConfig):
     asset: str = "lg-test-01"
     filter: str = ""
 
+    # Derived at startup from `asset`. For Azure, `asset` may be either
+    #   - "container" or
+    #   - "container/prefix"
+    # We keep the raw `asset` for display and derive these for runtime use.
+    asset_container: str | None = None
+    asset_prefix_root: str = ""
+
     class Config:
         env_prefix = "DSXCONNECTOR_"
         env_file = ".env"

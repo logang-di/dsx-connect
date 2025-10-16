@@ -11,6 +11,7 @@ class Queues:
     VERDICT: Final = f"{APP_ENV}.{SERVICE}.scans.verdict"
     RESULT: Final = f"{APP_ENV}.{SERVICE}.scans.result"
     NOTIFICATION: Final = f"{APP_ENV}.{SERVICE}.scans.result.notify"
+    ANALYZE: Final = f"{APP_ENV}.{SERVICE}.analyze.dianna"
 
 
 class Tasks:
@@ -19,6 +20,6 @@ class Tasks:
     VERDICT: Final = "dsx_connect.tasks.scan.verdict"
     RESULT: Final = "dsx_connect.tasks.scan.result"
     NOTIFICATION: Final = "dsx_connect.tasks.scan.result.notify"
-
+    DIANNA_ANALYZE: Final = "dsx_connect.tasks.dianna.analyze"
 
 

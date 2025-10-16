@@ -182,6 +182,18 @@
             font-size: 0.8rem; transition: background-color 0.2s;
         }
         .connector-card button:hover { background: var(--accent-hover); }
+        /* Make copy buttons demure inside connector cards */
+        .connector-card button.job-id-copy {
+            background: transparent;
+            color: var(--text-secondary);
+            padding: 0;
+            border: none;
+            opacity: 0.6;
+        }
+        .connector-card button.job-id-copy:hover {
+            background: transparent;
+            opacity: 0.9;
+        }
         .asset-line, .filter-line {
             white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             max-width: 100%; display: block; font-size: 0.8rem;
@@ -288,7 +300,16 @@
 
     <div style="margin-top: 1.5rem;"></div>
 
-    <h2>Scan Results</h2>
+    <h2>Scan Results <span style="font-weight: normal; color: var(--text-secondary); font-size: 0.9rem;">(most recent 1000)</span></h2>
+    <div style="margin: 0.4rem 0 0.5rem 0; display:flex; align-items:center; gap:0.5rem;">
+        <label for="jobFilter" style="font-size:0.85rem; color: var(--text-secondary);">Filter by job:</label>
+        <select id="jobFilter" style="font-size:0.85rem; padding: 2px 6px;">
+            <option value="">All</option>
+        </select>
+        <button id="jobFilterOpenApi" style="font-size:0.85rem; padding: 2px 8px;" disabled title="Open results API for selected job">Open API</button>
+        <button id="scanResultsClear" style="font-size:0.85rem; padding: 2px 8px;" title="Clear visible results and reset filter">Clear</button>
+    </div>
+    <div id="scanResultsNotice" style="display:none; margin: 0.25rem 0 0.5rem 0; color: var(--text-secondary); font-size: 0.85rem;"></div>
     <div class="scan-results-panel">
         <table class="scan-results" id="scanResultsTable">
             <tbody id="scanResultsBody">
@@ -383,6 +404,12 @@
     const connectorLastSeen = new Map(); // Track when we last saw each connector
     let scanResultsSSE = null;
     let connectorRegistrationSSE = null;
+    const MAX_RESULTS = 1000; // cap rows for performance
+    const seenJobIds = new Set();
+    let currentJobFilter = localStorage.getItem('jobFilter') || '';
+    let jobFocusJobId = '';
+    let jobMeta = {};
+    try { jobMeta = JSON.parse(localStorage.getItem('jobMeta') || '{}'); } catch { jobMeta = {}; }
     // Note: No polling-based summary; progress updates come via scan-result SSE.
 
     // ===== THEME MANAGEMENT =====
@@ -890,6 +917,12 @@ function invokeFullScanByUuid(connectorUuid, scanUrl, connectorName) {
                         rememberActiveJob(jobId, connectorUuid);
                         const noteEl = document.getElementById(`scan-note-${connectorUuid}`);
                         if (noteEl) noteEl.textContent = `Job ${jobId.substring(0,8)}… started`;
+                        // Clear any persisted last-scan note for this connector until this run completes
+                        try {
+                            const raw = localStorage.getItem('lastScansByConnector') || '{}';
+                            const obj = JSON.parse(raw);
+                            if (obj[connectorUuid]) { delete obj[connectorUuid]; localStorage.setItem('lastScansByConnector', JSON.stringify(obj)); }
+                        } catch {}
                         updateActionButtonsByUuid(connectorUuid, 'running', jobId);
                     }
                 } else {
@@ -986,6 +1019,162 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
 
     // removed idx-based setJobIdPill (use setJobIdPillByUuid)
 
+    // Persisted last-scan note per connector
+    function setLastScanNote(connectorUuid, { jobId, processed, durationSecs }) {
+        try {
+            const noteEl = document.getElementById(`scan-note-${connectorUuid}`);
+            if (noteEl) {
+                const durStr = (function fmtDur(s) {
+                    if (s == null || isNaN(s)) return '';
+                    s = Math.max(0, Number(s));
+                    const d = Math.floor(s / 86400); const h = Math.floor((s % 86400) / 3600);
+                    const m = Math.floor((s % 3600) / 60); const sec = Math.floor(s % 60);
+                    return d > 0 ? `${d}d ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
+                                 : `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
+                })(durationSecs);
+                const copyId = `lastscan-copy-${connectorUuid}`;
+                noteEl.innerHTML = `Last scan (${processed}${durStr ? ` / ${durStr}` : ''}):
+                    <code title="${jobId}" style="font-family: var(--font-mono);">${jobId.substring(0,8)}…</code>
+                    <button id="${copyId}" class="job-id-copy" title="Copy job id"><i class=\"far fa-copy\"></i></button>`;
+                setTimeout(() => {
+                    const btn = document.getElementById(copyId);
+                    if (btn) {
+                        btn.onclick = async () => {
+                            try {
+                                if (navigator.clipboard && navigator.clipboard.writeText) {
+                                    await navigator.clipboard.writeText(jobId);
+                                } else {
+                                    const ta = document.createElement('textarea');
+                                    ta.value = jobId; document.body.appendChild(ta); ta.select();
+                                    document.execCommand('copy'); document.body.removeChild(ta);
+                                }
+                                showNotification('Job id copied', 'info');
+                            } catch (e) { showNotification('Copy failed', 'error'); }
+                        };
+                    }
+                }, 0);
+            }
+            const raw = localStorage.getItem('lastScansByConnector') || '{}';
+            const obj = JSON.parse(raw);
+            obj[connectorUuid] = { jobId, processed, durationSecs };
+            localStorage.setItem('lastScansByConnector', JSON.stringify(obj));
+        } catch {}
+    }
+    function loadLastScanNotes() {
+        try {
+            const raw = localStorage.getItem('lastScansByConnector') || '{}';
+            const obj = JSON.parse(raw);
+            Object.entries(obj).forEach(([uuid, info]) => {
+                setLastScanNote(uuid, info || {});
+            });
+        } catch {}
+    }
+
+    // Results filter UI helpers
+    function setResultsNotice(msg = '') {
+        const el = document.getElementById('scanResultsNotice');
+        if (!el) return;
+        if (msg && msg.trim()) {
+            el.textContent = msg;
+            el.style.display = '';
+        } else {
+            el.textContent = '';
+            el.style.display = 'none';
+        }
+    }
+    function ensureJobInFilter(jobId, connectorName) {
+        if (!jobId) return;
+        // Remember connector name (if provided), persist
+        if (connectorName && (!jobMeta[jobId] || !jobMeta[jobId].connectorName)) {
+            jobMeta[jobId] = { ...(jobMeta[jobId] || {}), connectorName };
+            try { localStorage.setItem('jobMeta', JSON.stringify(jobMeta)); } catch {}
+        }
+        const sel = document.getElementById('jobFilter');
+        if (!sel) return;
+        let opt = [...sel.options].find(o => o.value === jobId);
+        const label = jobMeta[jobId] && jobMeta[jobId].connectorName ? `${jobId} (${jobMeta[jobId].connectorName})` : jobId;
+        if (!opt) {
+            opt = document.createElement('option');
+            opt.value = jobId; opt.title = jobId; opt.textContent = label;
+            sel.appendChild(opt);
+        } else {
+            // Update label if improved metadata
+            if (opt.textContent !== label) opt.textContent = label;
+        }
+        if (!seenJobIds.has(jobId)) seenJobIds.add(jobId);
+        if (currentJobFilter) sel.value = currentJobFilter;
+    }
+    function updateOpenApiButtonState() {
+        const btn = document.getElementById('jobFilterOpenApi');
+        const sel = document.getElementById('jobFilter');
+        if (!btn || !sel) return;
+        const jid = sel.value || '';
+        btn.disabled = !jid;
+        btn.onclick = () => {
+            if (!jid) return;
+            const url = `${API_BASE}/scan/results?limit=${MAX_RESULTS}&job_id=${encodeURIComponent(jid)}`;
+            window.open(url, '_blank', 'noopener');
+        };
+    }
+
+    async function applyResultsFilter() {
+        const sel = document.getElementById('jobFilter');
+        if (!sel) return;
+        currentJobFilter = sel.value || '';
+        localStorage.setItem('jobFilter', currentJobFilter);
+        updateOpenApiButtonState();
+        // If a specific job is selected and it differs from current focus, load full results for that job
+        if (currentJobFilter && currentJobFilter !== jobFocusJobId) {
+            jobFocusJobId = currentJobFilter;
+            try {
+                const res = await fetch(`${API_BASE}/scan/results?limit=${MAX_RESULTS}&job_id=${encodeURIComponent(jobFocusJobId)}`);
+                if (res.ok) {
+                    const items = await res.json();
+                    // Clear table and render all items for the job (no trimming while focused)
+                    const body = document.getElementById('scanResultsBody');
+                    body.innerHTML = '';
+                    if (!items || !items.length) {
+                        const tr = document.createElement('tr');
+                        tr.id = 'noResultsRow';
+                        tr.innerHTML = `<td colspan="3" style="text-align: center; color: var(--text-secondary); padding: 1rem; border: none;">No scan results</td>`;
+                        body.appendChild(tr);
+                        // Check if results may have been pruned
+                        try {
+                            const js = await fetch(r.scan.jobs.status(jobFocusJobId));
+                            if (js && js.ok) {
+                                const jd = await js.json();
+                                const proc = Number(jd.processed_count || 0);
+                                if (proc > 0) {
+                                    setResultsNotice('No results returned for this job. Results may have been pruned by retention. For full history, use your syslog/SIEM collectors.');
+                                } else {
+                                    setResultsNotice('');
+                                }
+                            } else {
+                                setResultsNotice('');
+                            }
+                        } catch { setResultsNotice(''); }
+                    } else {
+                        setResultsNotice('');
+                        items.forEach(it => renderScanResult(it));
+                    }
+                }
+            } catch {}
+        } else if (!currentJobFilter) {
+            // Leaving focus mode
+            jobFocusJobId = '';
+        }
+        const body = document.getElementById('scanResultsBody');
+        const rows = body ? [...body.querySelectorAll('tr[data-result-row]')] : [];
+        rows.forEach(tr => {
+            const jid = tr.dataset.jobId || '';
+            tr.style.display = (!currentJobFilter || jid === currentJobFilter) ? '' : 'none';
+            const detail = document.getElementById(tr.dataset.detailId || '');
+            if (detail) detail.style.display = (!currentJobFilter || jid === currentJobFilter) ? (detail.style.display || 'none') : 'none';
+        });
+    }
+    document.addEventListener('change', (e) => {
+        if (e.target && e.target.id === 'jobFilter') applyResultsFilter();
+    });
     function rememberActiveJob(jobId, connectorUuid) {
         try {
             const raw = localStorage.getItem('activeJobs');
@@ -1053,8 +1242,9 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
                     const isStale = lastUpdate && (nowSec - lastUpdate) > 120; // 2 minutes inactivity
 
                     if (isComplete || isStale) {
-                        // On rehydrate, simply clear stale job; leave UI clean without badge/note
+                        // Mark UI done and persist a last-scan note so it remains visible until next scan
                         updateActionButtonsByUuid(uuid, 'done', jobId);
+                        setLastScanNote(uuid, { jobId, processed: proc, durationSecs: (toInt(data.duration_secs, null)) });
                         forgetActiveJob(jobId);
                         continue;
                     }
@@ -1112,8 +1302,12 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
                     </i>
                 </div>
             </h4>
-            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-                UUID: ${conn.uuid.substring(0, 8)}...
+            <div style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 0.75rem; display:flex; align-items:center; gap:4px;">
+                <span>UUID: ${conn.uuid}</span>
+                <button class="job-id-copy" title="Copy connector UUID"
+                        onclick="(async () => { try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText('${conn.uuid}'); } else { const ta=document.createElement('textarea'); ta.value='${conn.uuid}'; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta);} showNotification('Connector UUID copied','info'); } catch(e) { showNotification('Copy failed','error'); } })()">
+                    <i class="far fa-copy"></i>
+                </button>
             </div>
             ${cfg && (cfg.asset_display_name || cfg.asset || cfg.filter || cfg.resolved_asset_base) ? `
                 <div class="asset-line" title="${cfg.asset || cfg.resolved_asset_base || cfg.asset_display_name || ''}"><span class="kv">Asset:</span> ${cfg.asset_display_name || cfg.resolved_asset_base || cfg.asset || 'n/a'}</div>
@@ -1178,6 +1372,15 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
             }
             container.appendChild(newCard);
         }
+        // Re-apply any persisted last-scan note for this connector (card was re-rendered)
+        try {
+            const raw = localStorage.getItem('lastScansByConnector') || '{}';
+            const obj = JSON.parse(raw);
+            const info = obj[uuid];
+            if (info && info.jobId) {
+                setLastScanNote(uuid, info);
+            }
+        } catch {}
         // If still not ready or config missing, schedule one background refresh
         if (!ready || !(cfg && (cfg.asset || cfg.filter || cfg.resolved_asset_base))) {
             setTimeout(async () => {
@@ -1189,7 +1392,18 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
                     const cardsNow = container.querySelectorAll('.connector-card');
                     let targetNow = null;
                     cardsNow.forEach(card => { if (card.dataset.connectorUuid === uuid) targetNow = card; });
-                    if (targetNow) container.replaceChild(refreshed, targetNow);
+                    if (targetNow) {
+                        container.replaceChild(refreshed, targetNow);
+                        // Re-apply persisted last-scan note after refresh
+                        try {
+                            const raw = localStorage.getItem('lastScansByConnector') || '{}';
+                            const obj = JSON.parse(raw);
+                            const info = obj[uuid];
+                            if (info && info.jobId) {
+                                setLastScanNote(uuid, info);
+                            }
+                        } catch {}
+                    }
                 } catch {}
             }, 1200);
         }
@@ -1269,6 +1483,10 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
         const noResultsRow = document.getElementById('noResultsRow');
         if (noResultsRow) noResultsRow.remove();
 
+        const jobId = rec.scan_job_id || (rec.scan_request && rec.scan_request.scan_job_id) || '';
+        const connectorName = rec?.scan_request?.connector?.name || '';
+        ensureJobInFilter(jobId, connectorName);
+
         const verdict = rec.verdict;
         let verdictClass = 'verdict-unknown';
         let verdictIcon = 'fa-exclamation-triangle';
@@ -1293,6 +1511,8 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
         const uniqueId = `expand-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
         const row = document.createElement('tr');
+        row.dataset.resultRow = '1';
+        row.dataset.jobId = jobId;
         row.classList.add('clickable-row');
         row.addEventListener('click', () => toggleDetail(uniqueId));
         row.innerHTML = `
@@ -1314,18 +1534,68 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
         const detailRow = document.createElement('tr');
         detailRow.id = uniqueId;
         detailRow.style.display = 'none';
+        row.dataset.detailId = uniqueId;
+        detailRow.dataset.jobId = jobId;
+        const canAnalyze = (verdict?.verdict || '').toLowerCase() === 'malicious' && rec.scan_request?.connector?.uuid && rec.scan_request?.location;
+        const analyzeBtn = canAnalyze ? `<button id="btn-di-${uniqueId}" class="btn btn-small" style="margin: 6px 0;" title="Analyze with DIANNA">Analyze with DIANNA</button>` : '';
         detailRow.innerHTML = `
             <td colspan="3" class="detail-row-content">
-                <div style="margin-bottom: 6px;">
-                    <strong>Path:</strong>
-                    <span style="white-space: pre-wrap;">${rec.scan_request?.metainfo || '-'}</span>
+                <div style="margin-bottom: 6px; display:flex; justify-content: space-between; align-items: center; gap: 12px;">
+                    <div>
+                        <strong>Path:</strong>
+                        <span style="white-space: pre-wrap;">${rec.scan_request?.metainfo || '-'}</span>
+                    </div>
+                    ${analyzeBtn}
                 </div>
                 <pre>${JSON.stringify(rec.verdict, null, 2)}</pre>
             </td>
         `;
+        if (canAnalyze) {
+            const connectorUuid = String(rec.scan_request.connector.uuid);
+            const location = String(rec.scan_request.location || rec.scan_request.metainfo || '');
+            const metainfo = String(rec.scan_request.metainfo || location);
+            setTimeout(() => {
+                const btn = document.getElementById(`btn-di-${uniqueId}`);
+                if (btn) {
+                    btn.addEventListener('click', async (ev) => {
+                        ev.stopPropagation();
+                        try {
+                            const url = `${API_BASE}/dianna/analyze/${encodeURIComponent(connectorUuid)}`;
+                            const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location, metainfo }) });
+                            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                            const data = await res.json().catch(() => ({}));
+                            showNotification('DIANNA analysis requested', 'success');
+                            console.log('DIANNA task accepted', data);
+                        } catch (e) {
+                            console.error('DIANNA request failed', e);
+                            showNotification('Failed to request DIANNA analysis', 'error');
+                        }
+                    });
+                }
+            }, 0);
+        }
 
         tableBody.prepend(detailRow);
         tableBody.prepend(row);
+
+        // Apply filter visibility
+        if (currentJobFilter && jobId && jobId !== currentJobFilter) {
+            row.style.display = 'none';
+        }
+
+        // Trim to MAX_RESULTS regardless of focus
+        try {
+            const kept = [...tableBody.querySelectorAll('tr[data-result-row]')];
+            if (kept.length > MAX_RESULTS) {
+                const extra = kept.length - MAX_RESULTS;
+                const victims = kept.slice(-extra);
+                victims.forEach(v => {
+                    const did = v.dataset.detailId; const drow = did ? document.getElementById(did) : null;
+                    if (drow && drow.parentNode) drow.parentNode.removeChild(drow);
+                    if (v.parentNode) v.parentNode.removeChild(v);
+                });
+            }
+        } catch {}
     }
 
     function toggleDetail(id) {
@@ -1455,6 +1725,40 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
                 const message = safeParse(event.data);
                 if (isNoise(message)) return;
                 if (!message || typeof message !== 'object') return;
+                // Handle DIANNA analysis notifications (lightweight toast)
+                if (message.type === 'dianna_enqueued') {
+                    const loc = message.location || '(unknown file)';
+                    showNotification(`DIANNA analysis requested: ${loc}`, 'success');
+                    return;
+                }
+                if (message.type === 'dianna_analysis') {
+                    const loc = message.location || '(unknown file)';
+                    const st = String(message.status || '').toUpperCase();
+                    if (st === 'QUEUED') {
+                        showNotification(`DIANNA analysis queued: ${loc}`, 'info');
+                        return;
+                    }
+                    if (st === 'SUCCESS') {
+                        const mal = (message.is_malicious === true) || (message.analysis && message.analysis.isFileMalicious === true);
+                        const tag = mal ? 'warning' : 'success';
+                        const verdictLabel = mal ? 'Malicious' : 'Ready';
+                        showNotification(`DIANNA analysis ${verdictLabel}: ${loc}`, tag);
+                        return;
+                    }
+                    if (st === 'FAILED' || st === 'ERROR') {
+                        const reason = message.error ? String(message.error) : '';
+                        const suffix = reason ? ` (${reason})` : '';
+                        showNotification(`DIANNA analysis failed: ${loc}${suffix}`, 'error');
+                        return;
+                    }
+                    if (st === 'CANCELLED') {
+                        showNotification(`DIANNA analysis cancelled: ${loc}`, 'warning');
+                        return;
+                    }
+                    // Fallback for older worker payloads
+                    showNotification(`DIANNA analysis updated: ${loc}`, 'info');
+                    return;
+                }
                 // Unwrap nested scan_result payloads for rendering
                 const rec = (message && message.scan_result) ? message.scan_result : message;
                 console.log('Received scan result:', rec);
@@ -1508,13 +1812,9 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
                                 updateActionButtonsByUuid(connectorUuid, 'paused', job.job_id);
                             } else if (status === 'completed' || status === 'cancelled') {
                                 updateActionButtonsByUuid(connectorUuid, 'done', job.job_id);
-                                addCompletionBadgeByUuid(connectorUuid, status);
-                                if (noteEl) {
-                                    const proc = Number(job.processed_count || 0);
-                                    const dur = (job.duration_secs != null) ? fmtDur(job.duration_secs) : '';
-                                    const label = status === 'cancelled' ? 'Scan cancelled' : 'Scan complete';
-                                    noteEl.textContent = `${label}: ${proc}${dur ? ` / ${dur}` : ''}`;
-                                }
+                                const proc = Number(job.processed_count || 0);
+                                const durS = (job.duration_secs != null) ? Number(job.duration_secs) : null;
+                                setLastScanNote(connectorUuid, { jobId: job.job_id, processed: proc, durationSecs: durS });
                                 forgetActiveJob(job.job_id);
                             } else if (status) {
                                 // Fallback: if we can infer completion from counts, flip UI immediately
@@ -1525,11 +1825,8 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
                                                : ((job.enqueued_count != null && Number(job.enqueued_count) >= 0) ? Number(job.enqueued_count) : null));
                                 if (tot != null && proc >= tot) {
                                     updateActionButtonsByUuid(connectorUuid, 'done', job.job_id);
-                                    addCompletionBadgeByUuid(connectorUuid, 'completed');
-                                    if (noteEl) {
-                                        const dur = (job.duration_secs != null) ? fmtDur(job.duration_secs) : '';
-                                        noteEl.textContent = `Scan complete: ${proc}${dur ? ` / ${dur}` : ''}`;
-                                    }
+                                    const durS = (job.duration_secs != null) ? Number(job.duration_secs) : null;
+                                    setLastScanNote(connectorUuid, { jobId: job.job_id, processed: proc, durationSecs: durS });
                                     forgetActiveJob(job.job_id);
                                 } else {
                                     updateActionButtonsByUuid(connectorUuid, 'running', job.job_id);
@@ -1705,6 +2002,31 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
 
 
     // ===== INITIALIZATION =====
+    async function prefillResultsOnLoad() {
+        try {
+            const url = currentJobFilter
+                ? `${API_BASE}/scan/results?limit=${MAX_RESULTS}&job_id=${encodeURIComponent(currentJobFilter)}`
+                : `${API_BASE}/scan/results?limit=${MAX_RESULTS}`;
+            const res = await fetch(url);
+            if (res && res.ok) {
+                const items = await res.json();
+                const body = document.getElementById('scanResultsBody');
+                if (body) {
+                    body.innerHTML = '';
+                    if (items && items.length) {
+                        items.forEach(it => renderScanResult(it));
+                        setResultsNotice('');
+                    } else {
+                        const tr = document.createElement('tr');
+                        tr.id = 'noResultsRow';
+                        tr.innerHTML = `<td colspan=\"3\" style=\"text-align: center; color: var(--text-secondary); padding: 1rem; border: none;\">No scan results</td>`;
+                        body.appendChild(tr);
+                    }
+                }
+            }
+        } catch {}
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         const savedTheme = localStorage.getItem('theme') || 'light';
         setTheme(savedTheme);
@@ -1713,6 +2035,48 @@ function addCompletionBadgeByUuid(connectorUuid, status) {
         fetchConfig();
         fetchConnectors();
         initializeSSEConnections();
+        const sel = document.getElementById('jobFilter');
+        if (sel) {
+            sel.value = currentJobFilter;
+            if (currentJobFilter) applyResultsFilter();
+        }
+        loadLastScanNotes();
+        updateOpenApiButtonState();
+        // Prefill results so refresh doesn't show an empty table
+        prefillResultsOnLoad();
+        // Clear button
+        const clearBtn = document.getElementById('scanResultsClear');
+        if (clearBtn) {
+            clearBtn.onclick = () => {
+                try {
+                    // 1) Clear visible results
+                    const body = document.getElementById('scanResultsBody');
+                    if (body) {
+                        body.innerHTML = '';
+                        const tr = document.createElement('tr');
+                        tr.id = 'noResultsRow';
+                        tr.innerHTML = `<td colspan=\"3\" style=\"text-align: center; color: var(--text-secondary); padding: 1rem; border: none;\">No scan results</td>`;
+                        body.appendChild(tr);
+                    }
+                    setResultsNotice('');
+
+                    // 2) Reset job filter state and options (keep only "All")
+                    const sel = document.getElementById('jobFilter');
+                    if (sel) {
+                        // Remove all options after the first
+                        while (sel.options.length > 1) sel.remove(1);
+                        sel.selectedIndex = 0;
+                    }
+                    seenJobIds.clear();
+                    jobMeta = {};
+                    currentJobFilter = '';
+                    jobFocusJobId = '';
+                    try { localStorage.removeItem('jobMeta'); } catch {}
+                    try { localStorage.removeItem('jobFilter'); } catch {}
+                    updateOpenApiButtonState();
+                } catch {}
+            };
+        }
         // Reconnect any active job summary streams after cards render
         setTimeout(rehydrateActiveJobs, 800);
 

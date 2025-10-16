@@ -22,7 +22,7 @@ dsx-connect is comprised of several services:
 * Scan Request, Verdict, Scan Result Queue (and potentially more as the architecture grows) - implemented as Celery/Redis queues.  
 * Scan Request, Verdict and Scan Result Workers - Celery based apps that pull queue items and work on those tasks
 * redis: the broker for queueing tasks
-* syslog: docker deployable syslog server to demonstrate basic syslog functionality
+* rsyslog: docker deployable rsyslog server to demonstrate basic syslog functionality
 
 ### DSX-Connect Architecture Overview
 
@@ -80,7 +80,7 @@ graph TB
     %% External Services
     subgraph "External Services"
         DSXA["fa:fa-shield-alt DSXA Scanner<br/>Malware Analysis Engine<br/>dsxa_scanner:5000"]
-        SYSLOG["fa:fa-file-text Syslog Server<br/>balabit/syslog-ng<br/>Port 514"]
+        SYSLOG["fa:fa-file-text Syslog Server<br/>rsyslog/rsyslog<br/>Port 514/tcp"]
     end
 
     %% Request Flow
@@ -248,11 +248,24 @@ Using your own TLS certificates (production)
 - **Purpose**: Core malware analysis engine
 - **Integration**: HTTP API calls from scan request workers
 
-#### **Syslog Server**
-- **Service**: `balabit/syslog-ng`
-- **Port**: 514
-- **Purpose**: External SIEM integration for security events
-- **Integration**: Results worker sends structured logs
+#### **Log Collector (syslog)**
+- Choice via Compose profiles: use either `syslog-ng` or `rsyslog` (exactly one).
+- Both are configured to emit received logs to container stdout for easy `docker logs` viewing.
+- Ports: internal 514/TCP and 514/UDP inside the Compose network.
+- Integration: Results worker sends JSON events to host `syslog` on port 514 (TCP by default).
+
+Enable one collector (no bind mounts; config is embedded in Compose):
+```bash
+# syslog-ng (writes to stdout)
+docker compose -f docker-compose-dsx-connect-all-services.yaml --profile syslog-ng up -d
+
+# rsyslog (writes to stdout)
+docker compose -f docker-compose-dsx-connect-all-services.yaml --profile rsyslog up -d
+```
+
+Disable collector entirely (stdout only on app containers):
+- Start without either profile; optionally remove or override `DSXCONNECT_SYSLOG__*` env on the results worker to avoid connecting to a collector.
+- You can point to an external collector by setting `DSXCONNECT_SYSLOG__SYSLOG_SERVER_URL` to a hostname outside Compose.
 
 ## Deployment via Docker Compose
 
@@ -270,7 +283,7 @@ In the docker-compose-dsx-connect-all-services.yaml file, note that it will run 
 * **dsx_connect_results_worker** - Celery worker that processes scan results and sends to external systems (syslog, databases)
 * **dsx_connect_notification_worker** - Celery worker that handles real-time notifications and event publishing
 * **redis** - used by celery as a task broker and for pub/sub messaging
-* **syslog** (optional) - Optional syslog container where dsx-connect's results worker will send security events
+* **rsyslog** (optional) - Optional rsyslog container where dsx-connect's results worker will send security events
 
 ### Service Configuration
 
@@ -313,9 +326,10 @@ offloaded to a third party logging/event handler, such as a syslog server or SIE
     - n: retain n records
 
 ##### Defined in the service 'dsx_connect_results_worker' env settings:
-- **DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL:** default 'syslog' - the service defined in the same docker-compose file, otherwise, use the complete URL to a syslog server
-- **DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT:** the port the syslog server is listening on (default: 514)
-- **DSXCONNECT_FRONTEND__URL:** URL for the frontend service (used for notifications)
+- **DSXCONNECT_SYSLOG__SYSLOG_SERVER_URL:** host for the syslog collector; defaults to `syslog` (a network alias provided by the enabled profile). Remove/override to disable.
+- **DSXCONNECT_SYSLOG__SYSLOG_SERVER_PORT:** collector port (default: 514).
+- **DSXCONNECT_SYSLOG__TRANSPORT:** `tcp|udp|tls` (default: tcp).
+- **DSXCONNECT_FRONTEND__URL:** URL for the API service (used for notifications).
 
 #### Log Level
 - **LOG_LEVEL:** each service can be configured to provide console output at their own log levels (debug, info, warning, error)
@@ -382,7 +396,7 @@ Should result in this (replacing the version number with your actual version):
 [+] Running 6/6
 ✔ Network dsx-connect-network                       Created     0.1s
 ✔ Container dsx-connect-redis-1                     Started     0.3s
-✔ Container dsx-connect-syslog-1                    Started     0.3s
+✔ Container dsx-connect-rsyslog-1                   Started     0.3s
 ✔ Container dsx-connect-dsx_connect_api-1           Started     0.4s
 ✔ Container dsx-connect-scan_request_worker-1       Started     0.4s
 ✔ Container dsx-connect-verdict_action_worker-1     Started     0.4s
@@ -407,7 +421,7 @@ Should result in this (replacing the version number with your actual version):
    dsx-connect-results_worker-1            dsxconnect/dsx-connect:latest   "celery -A dsx_conne…"   dsx_connect_results_worker    30 seconds ago   Up 30 seconds
    dsx-connect-notification_worker-1       dsxconnect/dsx-connect:latest   "celery -A dsx_conne…"   dsx_connect_notification_worker   30 seconds ago   Up 30 seconds
    dsx-connect-redis-1                     redis:7-alpine                  "docker-entrypoint.s…"   redis                         30 seconds ago   Up 30 seconds   6379/tcp
-   dsx-connect-syslog-1                    balabit/syslog-ng:latest        "syslog-ng -F"           syslog                        30 seconds ago   Up 30 seconds   514/udp, 601/tcp
+   dsx-connect-rsyslog-1                   rsyslog/rsyslog:v8-stable       "/usr/sbin/rsyslogd -n" rsyslog                       30 seconds ago   Up 30 seconds (healthy) 514/tcp
    ```
 
 5. **Stop the Services:**

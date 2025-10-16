@@ -22,11 +22,17 @@ spec:
         app.kubernetes.io/name: {{ include "aws-s3-connector.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
-      {{- if .Values.tls.enabled }}
+      {{- if or .Values.tls.enabled .Values.dataVolume.enabled }}
       volumes:
+        {{- if .Values.tls.enabled }}
         - name: tls-certs
           secret:
             secretName: {{ .Values.tls.secretName | quote }}
+        {{- end }}
+        {{- if .Values.dataVolume.enabled }}
+        - name: data-dir
+          emptyDir: {}
+        {{- end }}
       {{- end }}
       containers:
         - name: {{ .Chart.Name }}
@@ -92,9 +98,13 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
-          {{- if .Values.tls.enabled }}
           volumeMounts:
+            {{- if .Values.tls.enabled }}
             - name: tls-certs
               mountPath: {{ .Values.tls.mountPath | quote }}
               readOnly: true
-          {{- end }}
+            {{- end }}
+            {{- if .Values.dataVolume.enabled }}
+            - name: data-dir
+              mountPath: {{ .Values.dataVolume.mountPath | quote }}
+            {{- end }}

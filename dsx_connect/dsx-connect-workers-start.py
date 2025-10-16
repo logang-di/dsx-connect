@@ -34,6 +34,7 @@ if __name__ == "__main__":
     print(f"  - {Queues.VERDICT}")
     print(f"  - {Queues.RESULT}")
     print(f"  - {Queues.NOTIFICATION}")
+    print(f"  - {Queues.ANALYZE}")
 
     # Configure and run the Celery worker
     dsx_logging.info("Starting Celery worker for debugging...")
@@ -44,6 +45,6 @@ if __name__ == "__main__":
         "worker",
         "--loglevel=warning",
         "--pool=solo",  # <== allows for running in debugging mode.
-        f"--queues={Queues.REQUEST},{Queues.VERDICT},{Queues.RESULT},{Queues.NOTIFICATION}",  #,{config.celery_app.encrypted_file_queue}
+        f"--queues={Queues.REQUEST},{Queues.VERDICT},{Queues.RESULT},{Queues.NOTIFICATION},{Queues.ANALYZE}",  #,{config.celery_app.encrypted_file_queue}
         "--concurrency=1"
     ])

@@ -27,6 +27,14 @@ env:
   LOG_LEVEL: "debug"
   # Optional friendly display name shown in the dsx-connect UI card
   # DSXCONNECTOR_DISPLAY_NAME: "TrueNAS Connector"
+  # Enable realtime monitoring of the asset path for new/modified files
+  # Set to "true" to watch and enqueue on changes (default: false)
+  DSXCONNECTOR_MONITOR: "false"
+  # For SMB/CIFS or remote mounts where inotify doesn't fire,
+  # force polling to detect changes reliably (default: false)
+  DSXCONNECTOR_MONITOR_FORCE_POLLING: "false"
+  # Polling interval in milliseconds (effective when force polling is enabled)
+  DSXCONNECTOR_MONITOR_POLL_INTERVAL_MS: "1000"
   DSXCONNECTOR_TLS_CERTFILE: "/app/certs/tls.crt"
   DSXCONNECTOR_TLS_KEYFILE: "/app/certs/tls.key"
   # Outbound TLS verification to dsx-connect
@@ -44,6 +52,7 @@ env:
   DSXCONNECTOR_ASSET: "/app/scan_folder"
   DSXCONNECTOR_FILTER: ""                     # optional filter expression
   DSXCONNECTOR_SCAN_BY_PATH: "False"
+  DSXCONNECTOR_DATA_DIR: "/app/data"
 
 scanVolume:
   enabled: false
@@ -54,6 +63,10 @@ scanVolume:
   hostPath: ""        # Node path for development only (e.g., /mnt/data)
   readOnly: false
   subPath: ""         # Optional subPath within the volume
+
+dataVolume:
+  enabled: true
+  mountPath: "/app/data"
 
 command:
   - "python"

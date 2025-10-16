@@ -19,6 +19,7 @@ from dsx_connect.taskworkers.celery_app import celery_app
 from dsx_connect.taskworkers.errors import MalformedScanRequest, DsxaClientError, DsxaServerError, DsxaTimeoutError, \
     ConnectorClientError, ConnectorServerError, ConnectorConnectionError
 from dsx_connect.taskworkers.names import Tasks, Queues
+import redis  # lightweight sync client for quick job-state checks
 from shared.dsx_logging import dsx_logging
 from shared.routes import ConnectorAPI
 
@@ -38,6 +39,44 @@ class ScanRequestWorker(BaseWorker):
             scan_request = ScanRequestModel.model_validate(scan_request_dict)
         except ValidationError as e:
             raise MalformedScanRequest(f"Invalid scan request: {e}") from e
+
+        # 1a. Respect job pause/cancel (best-effort): quick sync Redis check
+        job_id = getattr(scan_request, "scan_job_id", None)
+        if job_id:
+            try:
+                cfg = get_config()
+                r = redis.Redis.from_url(str(cfg.redis_url), decode_responses=True)
+                key = f"dsxconnect:job:{job_id}"
+                paused, cancelled = r.hmget(key, "paused", "cancel")
+            except redis.RedisError:
+                paused = cancelled = None
+            # Act on flags if present
+            if cancelled == "1":
+                dsx_logging.info(f"[scan_request:{self.request.id}] Job {job_id} cancelled; dropping task")
+                return "CANCELLED"
+            if paused == "1":
+                # Reschedule without consuming Celery retry budget.
+                # We enqueue an identical task with a short delay and return.
+                try:
+                    import random
+                    delay = 5 + random.randint(0, 5)  # small jitter to avoid herd on resume
+                    async_result = celery_app.send_task(
+                        Tasks.REQUEST,
+                        args=[scan_request_dict],
+                        kwargs={"scan_request_task_id": scan_request_task_id or self.request.id},
+                        queue=Queues.REQUEST,
+                        countdown=delay,
+                    )
+                    dsx_logging.info(
+                        f"[scan_request:{self.request.id}] Job {job_id} paused; rescheduled as {async_result.id} in {delay}s"
+                    )
+                except Exception as e:
+                    # If re-enqueue fails, fall back to a light retry (once) without blowing up the task
+                    dsx_logging.warning(
+                        f"[scan_request:{self.request.id}] Pause re-enqueue failed: {e}; backing off 5s"
+                    )
+                    raise self.retry(countdown=5)
+                return "PAUSED"
 
         # 2. Read file from connector
         file_bytes = self.read_file_from_connector(scan_request)
