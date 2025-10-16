@@ -86,7 +86,8 @@ class SharePointClient:
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client_session is None:
             limits = httpx.Limits(max_connections=20, max_keepalive_connections=10)
-            self._client_session = httpx.AsyncClient(verify=self._verify, timeout=30.0, limits=limits)
+            # Enable HTTP/2 for better multiplexing against Graph, reuse connections
+            self._client_session = httpx.AsyncClient(verify=self._verify, timeout=30.0, limits=limits, http2=True)
         return self._client_session
 
     async def aclose(self):
@@ -168,7 +169,8 @@ class SharePointClient:
         client = await self._get_client()
         h = await self._headers()
         # slim payload and prefer larger pages
-        headers = {**h, "Prefer": "odata.maxpagesize=200"}
+        page_size = max(1, int(getattr(self._cfg, 'sp_graph_page_size', 200) or 200))
+        headers = {**h, "Prefer": f"odata.maxpagesize={page_size}", "Accept": "application/json;odata.metadata=none"}
         select = "$select=id,name,folder,parentReference"
         if path and path != "/":
             from urllib.parse import quote
@@ -223,7 +225,7 @@ class SharePointClient:
             # treat as item id
             url = f"{GRAPH_BASE}/drives/{self._drive_id}/items/{identifier}/content"
         # return the full Response so caller can stream
-        resp = await client.get(url, headers=h, follow_redirects=True)
+        resp = await client.get(url, headers={**h, "Accept": "application/json;odata.metadata=none"}, follow_redirects=True)
         if resp.status_code >= 400:
             raise RuntimeError(f"Graph download failed: {resp.status_code}")
         return resp
@@ -234,7 +236,7 @@ class SharePointClient:
         h = await self._headers()
         from urllib.parse import quote
         url = f"{GRAPH_BASE}/drives/{self._drive_id}/root:/{quote(path.strip('/'))}:/content"
-        resp = await client.put(url, headers=h, content=content)
+        resp = await client.put(url, headers={**h, "Accept": "application/json;odata.metadata=none"}, content=content)
         if resp.status_code >= 400:
             raise RuntimeError(f"Graph upload failed: {resp.status_code}")
         return resp.json()
@@ -244,7 +246,7 @@ class SharePointClient:
         client = await self._get_client()
         h = await self._headers()
         url = f"{GRAPH_BASE}/drives/{self._drive_id}/items/{item_id}?$select=id,name,parentReference,webUrl"
-        resp = await client.get(url, headers=h)
+        resp = await client.get(url, headers={**h, "Accept": "application/json;odata.metadata=none"})
         if resp.status_code == 404:
             return None
         if resp.status_code >= 400:
@@ -279,7 +281,7 @@ class SharePointClient:
         client = await self._get_client()
         h = await self._headers()
         url = f"{GRAPH_BASE}/drives/{self._drive_id}/root:/{path.strip('/')}"
-        resp = await client.get(url, headers=h)
+        resp = await client.get(url, headers={**h, "Accept": "application/json;odata.metadata=none"})
         if resp.status_code == 404:
             return None
         if resp.status_code >= 400:
@@ -288,18 +290,18 @@ class SharePointClient:
 
     async def _create_folder(self, parent_path: str, name: str) -> Dict[str, Any]:
         await self._ensure_site_and_drive()
-        async with await self._client() as client:
-            h = await self._headers()
-            parent_path_norm = parent_path.strip('/')
-            base = f"{GRAPH_BASE}/drives/{self._drive_id}/root"
-            if parent_path_norm:
-                base = f"{base}:/{parent_path_norm}:"
-            url = f"{base}/children"
-            body = {"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": "replace"}
-            resp = await client.post(url, headers={**h, "Content-Type": "application/json"}, json=body)
-            if resp.status_code >= 400:
-                raise RuntimeError(f"Graph create folder failed: {resp.status_code}")
-            return resp.json()
+        client = await self._get_client()
+        h = await self._headers()
+        parent_path_norm = parent_path.strip('/')
+        base = f"{GRAPH_BASE}/drives/{self._drive_id}/root"
+        if parent_path_norm:
+            base = f"{base}:/{parent_path_norm}:"
+        url = f"{base}/children"
+        body = {"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": "replace"}
+        resp = await client.post(url, headers={**h, "Content-Type": "application/json", "Accept": "application/json;odata.metadata=none"}, json=body)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Graph create folder failed: {resp.status_code}")
+        return resp.json()
 
     async def ensure_folder(self, folder_path: str) -> Dict[str, Any]:
         """Ensure a nested folder path exists; return its driveItem resource."""
@@ -346,13 +348,13 @@ class SharePointClient:
         body: Dict[str, Any] = {"parentReference": {"id": parent_id}}
         if new_name:
             body["name"] = new_name
-        async with await self._client() as client:
-            h = await self._headers()
-            url = f"{GRAPH_BASE}/drives/{self._drive_id}/items/{item_id}"
-            resp = await client.patch(url, headers={**h, "Content-Type": "application/json"}, json=body)
-            if resp.status_code >= 400:
-                raise RuntimeError(f"Graph move failed: {resp.status_code}")
-            return resp.json()
+        client = await self._get_client()
+        h = await self._headers()
+        url = f"{GRAPH_BASE}/drives/{self._drive_id}/items/{item_id}"
+        resp = await client.patch(url, headers={**h, "Content-Type": "application/json", "Accept": "application/json;odata.metadata=none"}, json=body)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Graph move failed: {resp.status_code}")
+        return resp.json()
 
     async def test_connection(self) -> bool:
         try:
@@ -413,3 +415,53 @@ class SharePointClient:
         sub_parts = parts[site_idx + 3:] if drive_name else []
         drive_path = "/".join(sub_parts)
         return host, site_path, drive_name, drive_path
+
+    # ---------------------- delta enumeration ----------------------
+    async def iter_files_delta(self) -> AsyncIterator[Dict[str, Any]]:
+        """
+        Enumerate all items in the drive using Graph delta.
+
+        This flattens the hierarchy and is generally faster than recursive children listing.
+        For a full scan, we yield only non-deleted items and attach a synthetic 'path' derived
+        from parentReference.path + name for UI display and filtering.
+        """
+        await self._ensure_site_and_drive()
+        client = await self._get_client()
+        h = await self._headers()
+        page_size = max(1, int(getattr(self._cfg, 'sp_graph_page_size', 200) or 200))
+        headers = {**h, "Prefer": f"odata.maxpagesize={page_size}", "Accept": "application/json;odata.metadata=none"}
+        select = "$select=id,name,file,folder,parentReference,lastModifiedDateTime,eTag,webUrl"
+        url = f"{GRAPH_BASE}/drives/{self._drive_id}/root/delta?{select}"
+        while url:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code >= 400:
+                detail = None
+                try:
+                    detail = resp.text
+                except Exception:
+                    pass
+                raise RuntimeError(f"Graph delta failed: {resp.status_code} body={detail}")
+            data = resp.json()
+            for it in data.get("value", []):
+                # Skip deletions for full-scan enumeration
+                if it.get("deleted"):
+                    continue
+                # parentReference.path is like '/drive/root:/sub/folder'
+                pref = (it.get("parentReference") or {})
+                p = pref.get("path") or ""
+                if p.startswith("/drive/root:"):
+                    p = p[len("/drive/root:"):]
+                name = it.get("name") or ""
+                rel_path = (p.strip('/') + "/" + name).strip('/') if p else name
+                if rel_path:
+                    it = {**it, "path": rel_path}
+                yield it
+            next_url = data.get("@odata.nextLink")
+            if next_url:
+                url = next_url
+                continue
+            # If only a deltaLink is present, there are no more pages for this scan
+            delta_link = data.get("@odata.deltaLink")
+            if delta_link:
+                break
+            url = None

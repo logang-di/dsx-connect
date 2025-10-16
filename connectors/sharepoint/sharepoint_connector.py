@@ -165,7 +165,7 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
     """
     # Iterate files and enqueue scan requests
     try:
-        base_path = config.resolved_asset_base or (config.asset or "")
+        base_path = (config.resolved_asset_base or (config.asset or "")).strip('/')
         # Avoid double-filtering: when resolved_asset_base already applies FILTER,
         # don't apply config.filter again during enqueue.
         eff_filter = "" if config.resolved_asset_base else (config.filter or "")
@@ -178,13 +178,30 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
                 dsx_logging.debug(f"Enqueuing scan request for item {item_id}")
                 await connector.scan_file_request(ScanRequestModel(location=item_id, metainfo=metainfo))
 
-        async for item in sp_client.iter_files_recursive(base_path):
+        # Choose enumeration strategy: delta (fast) or recursive (baseline)
+        use_delta = bool(getattr(config, 'sp_use_delta_for_scan', False))
+        async def iter_items():
+            if use_delta:
+                async for it in sp_client.iter_files_delta():
+                    yield it
+            else:
+                async for it in sp_client.iter_files_recursive(base_path):
+                    yield it
+
+        async for item in iter_items():
             if item.get("folder"):
                 continue
-            # Determine a repository-relative path to apply the filter
-            item_path = item.get("path") or item.get("name") or ""
-            rel = item_path.strip('/')
-            if eff_filter and not relpath_matches_filter(rel, eff_filter):
+            # Determine a repository-relative path to apply filters
+            item_path = (item.get("path") or item.get("name") or "").strip('/')
+            if base_path:
+                # For delta-based enumeration, filter by base_path prefix
+                if not item_path.startswith(base_path.rstrip('/') + "/") and item_path != base_path:
+                    continue
+                # Strip base_path so eff_filter applies on the remainder
+                rel_for_filter = item_path[len(base_path):].lstrip('/')
+            else:
+                rel_for_filter = item_path
+            if eff_filter and not relpath_matches_filter(rel_for_filter, eff_filter):
                 continue
             item_id = item.get("id")
             metainfo = item_path
@@ -195,7 +212,7 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
         if tasks:
             await asyncio.gather(*tasks)
         count = len(tasks)
-        dsx_logging.info(f"Full scan enqueued {count} item(s) (asset_base='{config.resolved_asset_base or (config.asset or '')}', filter='{config.filter or ''}')")
+        dsx_logging.info(f"Full scan enqueued {count} item(s) (asset_base='{config.resolved_asset_base or (config.asset or '')}', filter='{config.filter or ''}', mode={'delta' if use_delta else 'recursive'})")
         return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.', description=f"enqueued={count}")
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))

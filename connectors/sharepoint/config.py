@@ -52,6 +52,10 @@ class SharepointConnectorConfig(BaseConnectorConfig):
     sp_ca_bundle: Optional[str] = Field(default=None, description="Optional CA bundle path for certificate verification")
     sp_log_token_claims: bool = Field(default=False, description="Log decoded OAuth token claims once (no raw token)")
 
+    # Performance tuning
+    sp_graph_page_size: int = Field(default=200, description="Preferred Graph page size (odata.maxpagesize)")
+    sp_use_delta_for_scan: bool = Field(default=False, description="Use Graph drive delta for full-scan enumeration")
+
     ### Connector specific configuration
 
     class Config:
