@@ -38,7 +38,7 @@ async def test_token_acquisition_and_list(monkeypatch):
             return httpx.Response(200, json={"id": "site-id"})
         if url == f"{GRAPH_BASE}/sites/site-id/drive":
             return httpx.Response(200, json={"id": "drive-id"})
-        if url == f"{GRAPH_BASE}/drives/drive-id/root/children":
+        if url.startswith(f"{GRAPH_BASE}/drives/drive-id/root/children"):
             return httpx.Response(200, json={"value": [{"id": "1", "name": "a.txt"}]})
         return httpx.Response(404)
 

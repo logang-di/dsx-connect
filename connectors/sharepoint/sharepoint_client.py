@@ -13,6 +13,7 @@ from connectors.sharepoint.config import SharepointConnectorConfig
 
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+SPO_API = "https://{host}/sites/{site}/_api"
 
 
 class SharePointClient:
@@ -30,6 +31,9 @@ class SharePointClient:
         self._msal_app: Optional[msal.ConfidentialClientApplication] = None
         self._access_token: Optional[str] = None
         self._token_expiry_ts: float = 0.0
+        # Separate token cache for SharePoint REST resource (SPO)
+        self._spo_access_token: Optional[str] = None
+        self._spo_token_expiry_ts: float = 0.0
         self._site_id: Optional[str] = None
         self._drive_id: Optional[str] = None
         self._claims_logged: bool = False
@@ -98,6 +102,29 @@ class SharePointClient:
     async def _headers(self) -> Dict[str, str]:
         tok = await self._get_token()
         return {"Authorization": f"Bearer {tok}"}
+
+    async def _get_spo_token(self) -> str:
+        """Acquire token for SharePoint REST (resource: https://{tenant}.sharepoint.com/.default)."""
+        now = time.time()
+        if self._spo_access_token and now < (self._spo_token_expiry_ts - 60):
+            return self._spo_access_token
+        self._ensure_msal_app()
+        scope = f"https://{self._cfg.sp_hostname}/.default"
+        def _acquire():
+            return self._msal_app.acquire_token_for_client(scopes=[scope])
+        result = await asyncio.to_thread(_acquire)
+        if "access_token" not in result:
+            raise RuntimeError(f"Failed to acquire SPO token: {result.get('error_description') or result}")
+        self._spo_access_token = result["access_token"]
+        self._spo_token_expiry_ts = now + float(result.get("expires_in", 3600))
+        return self._spo_access_token
+
+    async def _headers_spo(self) -> Dict[str, str]:
+        tok = await self._get_spo_token()
+        return {
+            "Authorization": f"Bearer {tok}",
+            "Accept": "application/json;odata=nometadata",
+        }
 
     # ---------------------- discovery ----------------------
     async def _ensure_site_and_drive(self):
@@ -465,3 +492,82 @@ class SharePointClient:
             if delta_link:
                 break
             url = None
+
+    # ---------------------- REST (SharePoint Online) helpers ----------------------
+    _digest_cache: dict[str, tuple[str, float]] = {}
+
+    def _spo_url(self, site_path: str, suffix: str) -> str:
+        return f"https://{self._cfg.sp_hostname}/sites/{site_path.strip('/')}/{suffix.lstrip('/')}"
+
+    async def _get_request_digest(self, site_path: str) -> str:
+        ttl = int(getattr(self._cfg, 'sp_digest_ttl_s', 1500) or 1500)
+        key = site_path.strip('/') or 'root'
+        now = time.time()
+        cached = self._digest_cache.get(key)
+        if cached and now < cached[1]:
+            return cached[0]
+        client = await self._get_client()
+        headers = await self._headers_spo()
+        url = self._spo_url(site_path, "_api/contextinfo")
+        resp = await client.post(url, headers=headers)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"SPO contextinfo failed: {resp.status_code}")
+        data = resp.json()
+        digest = data.get("FormDigestValue") or data.get("d", {}).get("GetContextWebInformation", {}).get("FormDigestValue")
+        if not digest:
+            raise RuntimeError("SPO contextinfo missing FormDigestValue")
+        self._digest_cache[key] = (digest, now + ttl)
+        return digest
+
+    async def iter_list_items_rest(self, list_guid: str, view_xml: Optional[str] = None, row_limit: int = 5000) -> AsyncIterator[Dict[str, Any]]:
+        """Yield items from a SharePoint list using RenderListDataAsStream (fast, shaped rows)."""
+        site_path = self._cfg.sp_site_path
+        client = await self._get_client()
+        headers = await self._headers_spo()
+        digest = await self._get_request_digest(site_path)
+        url = self._spo_url(site_path, f"_api/web/Lists(guid'{list_guid}')/RenderListDataAsStream")
+        # Default view XML if none provided: order by ID asc with RowLimit
+        if not view_xml:
+            view_xml = f"<View><Query><OrderBy><FieldRef Name='ID' Ascending='TRUE'/></OrderBy></Query><RowLimit>{row_limit}</RowLimit></View>"
+        payload = {
+            "parameters": {
+                "__metadata": {"type": "SP.RenderListDataParameters"},
+                "RenderOptions": 2,
+                "ViewXml": view_xml,
+            }
+        }
+        next_pos: Optional[str] = None
+        while True:
+            body = payload.copy()
+            if next_pos:
+                # Paged token from previous response
+                body["parameters"]["Paging"] = {"ListItemCollectionPositionNext": next_pos}
+            resp = await client.post(
+                url,
+                headers={**headers, "Content-Type": "application/json;odata=verbose", "X-RequestDigest": digest},
+                json=body,
+            )
+            if resp.status_code >= 400:
+                raise RuntimeError(f"SPO RenderListDataAsStream failed: {resp.status_code}")
+            data = resp.json()
+            rows = data.get("Row") or data.get("ListData", {}).get("Row") or []
+            for r in rows:
+                yield r
+            next_pos = data.get("ListData", {}).get("PositionInfo") or data.get("NextHref") or None
+            if not next_pos:
+                break
+
+    @staticmethod
+    def drive_path_from_filereF(file_ref: str, site_path: str) -> str:
+        """Convert a SharePoint FileRef to a drive-relative path (strip '/sites/<site>/<library>/')."""
+        p = file_ref or ""
+        p = p.replace("\\", "/")
+        parts = [seg for seg in p.split('/') if seg]
+        # Expect ['sites', site, library, ...]
+        try:
+            idx = next(i for i, seg in enumerate(parts) if seg.lower() in {"sites", "teams"})
+        except StopIteration:
+            return "/".join(parts)
+        # library at idx+2, remainder from idx+3
+        rel_parts = parts[idx + 3 :]
+        return "/".join(rel_parts)

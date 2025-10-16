@@ -179,14 +179,28 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
                 await connector.scan_file_request(ScanRequestModel(location=item_id, metainfo=metainfo))
 
         # Choose enumeration strategy: delta (fast) or recursive (baseline)
+        provider_mode = (getattr(config, 'sp_provider_mode', 'graph') or 'graph').lower()
         use_delta = bool(getattr(config, 'sp_use_delta_for_scan', False))
         async def iter_items():
-            if use_delta:
-                async for it in sp_client.iter_files_delta():
-                    yield it
+            if provider_mode == 'spo_rest' and getattr(config, 'sp_list_id', None):
+                # REST mode: enumerate list rows
+                async for row in sp_client.iter_list_items_rest(config.sp_list_id, row_limit=int(getattr(config, 'sp_rest_row_limit', 5000) or 5000)):
+                    # Prefer FileRef when present (document libraries), else build a simple path from Title/ID
+                    file_ref = row.get("FileRef") or row.get("FileRef.urlencoded") or row.get("ServerUrl")
+                    if file_ref:
+                        drive_path = SharePointClient.drive_path_from_filereF(str(file_ref), config.sp_site_path)
+                        yield {"id": drive_path, "path": drive_path}
+                    else:
+                        name = row.get("FileLeafRef") or row.get("Title") or f"item-{row.get('ID')}"
+                        yield {"id": str(row.get("ID")), "path": str(name)}
             else:
-                async for it in sp_client.iter_files_recursive(base_path):
-                    yield it
+                # Graph modes
+                if use_delta:
+                    async for it in sp_client.iter_files_delta():
+                        yield it
+                else:
+                    async for it in sp_client.iter_files_recursive(base_path):
+                        yield it
 
         async for item in iter_items():
             if item.get("folder"):
@@ -203,16 +217,18 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
                 rel_for_filter = item_path
             if eff_filter and not relpath_matches_filter(rel_for_filter, eff_filter):
                 continue
-            item_id = item.get("id")
+            # In REST mode we use drive path as identifier to avoid a per-item resolve round-trip.
+            identifier = item.get("id") if provider_mode != 'spo_rest' else item_path
             metainfo = item_path
-            tasks.append(asyncio.create_task(enqueue(item_id, metainfo)))
+            tasks.append(asyncio.create_task(enqueue(identifier, metainfo)))
             if limit and len(tasks) >= limit:
                 break
 
         if tasks:
             await asyncio.gather(*tasks)
         count = len(tasks)
-        dsx_logging.info(f"Full scan enqueued {count} item(s) (asset_base='{config.resolved_asset_base or (config.asset or '')}', filter='{config.filter or ''}', mode={'delta' if use_delta else 'recursive'})")
+        mode_desc = 'spo_rest' if provider_mode == 'spo_rest' else ('delta' if use_delta else 'recursive')
+        dsx_logging.info(f"Full scan enqueued {count} item(s) (asset_base='{config.resolved_asset_base or (config.asset or '')}', filter='{config.filter or ''}', mode={mode_desc})")
         return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.', description=f"enqueued={count}")
     except Exception as e:
         return StatusResponse(status=StatusResponseEnum.ERROR, message=str(e))

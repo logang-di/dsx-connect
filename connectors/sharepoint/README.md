@@ -41,7 +41,7 @@ INFO:     Application startup complete.
 
 Leave `config.py` alone — it contains sane defaults. During development, override via:
 
-- `.devenv` file next to `config.py` (not included in releases)
+- `.dev.env` file next to `config.py` (not included in releases)
   - Example:
     - `DSXCONNECTOR_USE_TLS=false`
     - `DSXCONNECTOR_TLS_CERTFILE=../framework/deploy/certs/dev.localhost.crt`

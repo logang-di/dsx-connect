@@ -55,6 +55,10 @@ class SharepointConnectorConfig(BaseConnectorConfig):
     # Performance tuning
     sp_graph_page_size: int = Field(default=200, description="Preferred Graph page size (odata.maxpagesize)")
     sp_use_delta_for_scan: bool = Field(default=False, description="Use Graph drive delta for full-scan enumeration")
+    sp_provider_mode: str = Field(default="graph", description="Provider mode: graph | spo_rest | mixed")
+    sp_rest_row_limit: int = Field(default=5000, description="Row limit for REST RenderListDataAsStream")
+    sp_list_id: Optional[str] = Field(default=None, description="List GUID for REST mode (e.g., a large custom list or Documents list)")
+    sp_digest_ttl_s: int = Field(default=1500, description="Cache TTL for SharePoint request digests")
 
     ### Connector specific configuration
 
