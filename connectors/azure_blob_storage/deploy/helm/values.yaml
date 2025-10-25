@@ -20,12 +20,14 @@ service:
   type: ClusterIP
   port: 80
 
+auth:
+  enabled: false
+  keyIdKey: HMAC_KEY_ID
+  secretKey: HMAC_SECRET
+  clockSkewSeconds: 60
+
 tls:
   enabled: false
-  port: 443
-  # The name of the k8s secret that contains the TLS certificate and key
-  secretName: ""
-  mountPath: "/app/certs"
 
 env:
   LOG_LEVEL: "debug"
@@ -48,9 +50,22 @@ env:
   DSXCONNECTOR_FILTER: ""  # define filters on the asset, such as sub folders, prefixes, etc.... To be interpreted by the Connector
   DSXCONNECTOR_DATA_DIR: "/app/data"
 
-  # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
-  # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
-  DSXCONNECTOR_API_KEY: ""
+  # API key removed (use JWT/HMAC flows)
+
+ingressWebhook:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+networkPolicy:
+  enabled: false
+  allowFrom: []
+
+dsxConnectEnrollment:
+  secretName: ""
+  key: ENROLLMENT_TOKEN
 
 dataVolume:
   enabled: true

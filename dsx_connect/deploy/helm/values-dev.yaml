@@ -9,20 +9,10 @@
 global:
   # Minimal, common env most users need to touch. Everything else is set in templates with sane defaults.
   env:
-    DSXCONNECT_APP_ENV: dev
-    DSXCONNECTOR_API_KEY: api-key-NOT-FOR-PRODUCTION
     # For in-cluster DSXA (dsxa-scanner.enabled=true), keep this empty so templates compute the service URL.
     DSXCONNECT_SCANNER__SCAN_BINARY_URL: ""
 
-  # DIANNA (Deep Instinct) settings for dev
-  dianna:
-    managementUrl: ""
-    apiToken: ""
-    verifyTls: false
-    caBundle: ""
-    chunkSize: 4194304
-    timeout: 60
-    autoOnMalicious: false
+  # DIANNA settings moved to dsx-connect-dianna-worker.dianna
 
   # Optional shared image defaults (subcharts fall back to these when set)
   image:
@@ -48,9 +38,7 @@ dsx-connect-api:
     port: 80
   tls:
     enabled: false
-    port: 443
     secretName: ""
-    mountPath: "/app/certs"
   env:
     LOG_LEVEL: debug
 
@@ -60,7 +48,7 @@ dsx-connect-scan-request-worker:
   env:
     LOG_LEVEL: debug
   celery:
-    # queue computed from DSXCONNECT_APP_ENV in template unless overridden here
+    # Queue defaults to "dev.dsx_connect.scans.request"; override if sharing a broker
     # queue: "dev.dsx_connect.scans.request"
     # Concurrency = Celery workers per pod. Combine with replicaCount for total parallelism.
     concurrency: 1
@@ -80,6 +68,7 @@ dsx-connect-results-worker:
   replicaCount: 1
   env:
     LOG_LEVEL: debug
+    DSX_WORKER_ROLE: results
     DSXCONNECT_SYSLOG__TRANSPORT: tcp
   celery:
     # queue: "dev.dsx_connect.scans.result"

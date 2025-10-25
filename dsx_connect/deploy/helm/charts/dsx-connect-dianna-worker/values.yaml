@@ -11,7 +11,7 @@ env:
   LOG_LEVEL: debug
 
 celery:
-  # queue computed from DSXCONNECT_APP_ENV in template unless overridden here
+  # Queue defaults to "dev.dsx_connect.analyze.dianna"; override if sharing a broker
   # queue: "dev.dsx_connect.analyze.dianna"
   concurrency: 1
 
@@ -22,3 +22,16 @@ hpa:
   maxReplicas: 5
   targetCPUUtilizationPercentage: 80
   # targetMemoryUtilizationPercentage: 80
+
+# DIANNA (Deep Instinct) settings for this worker only
+dianna:
+  managementUrl: ""
+  apiToken: ""
+  verifyTls: true
+  caBundle: ""
+  chunkSize: 4194304
+  timeout: 60
+  autoOnMalicious: false
+  pollResultsEnabled: true
+  pollIntervalSeconds: 5
+  pollTimeoutSeconds: 900

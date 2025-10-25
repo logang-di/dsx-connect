@@ -1,113 +1,126 @@
-# Repository Guidelines
+# Connector ↔ dsx-connect Authentication (Enrollment + HMAC)
 
-## Project Structure & Modules
-- `dsx_connect/`: Core FastAPI app, Celery workers, config, and release tasks.
-- `connectors/<name>/`: Connector services (e.g., `aws_s3`, `filesystem`) with their own `CONNECTOR_VERSION` and deploy assets.
-- `shared/`: Common utilities used by core and connectors.
-- `scripts/`: Stack orchestration helpers (`stack-up.sh`, `stack-down.sh`, `stack-status.sh`).
-- `tests/`: Pytest suite; collects `test_*.py` and skips vendor/`dist`.
-- `dist/`: Bundled Docker Compose exports and release artifacts.
+This document describes the current authentication model for securing traffic between connectors and the dsx-connect API using a single bootstrap enrollment secret and per‑connector HMAC. It replaces the legacy API key path and avoids long‑lived “connector tokens”.
 
-## Build, Test, Run
-- Python 3.12. Create a venv and install: `python -m venv .venv && source .venv/bin/activate && pip install -r dsx_connect/requirements.txt`.
-- Lint: `ruff check .` (target `py312` via `ruff.toml`).
-- Test: `pytest -q` (configured by `pytest.ini`).
-- Run API (dev): `uvicorn dsx_connect.app.dsx_connect_api:app --host 0.0.0.0 --port 8586`.
-- Run workers (dev): `celery -A dsx_connect.taskworkers.celery_app worker -l INFO`.
-- Bundles and releases (Invoke at repo root): `inv bundle`, `inv bundle-usetls`, `inv release-core`, `inv release-connectors --only=aws_s3,filesystem`, `inv release-all`, `inv helm-release`.
-- Local stack from a bundle: `make up|down|status` (uses `scripts/stack-*.sh`; auto-detects latest `dist/dsx-connect-*`). Connector compose files follow `docker-compose-<connector>-connector.yaml` inside bundle subfolders.
+## Goals
+- Single on/off toggle per environment.
+- Simple bootstrap: a single enrollment token lets a connector register and receive per‑connector HMAC credentials.
+- All subsequent dsx-connect ↔ connector calls use DSX‑HMAC (both directions).
+- Safe rotation story for enrollment tokens and HMAC reprovisioning.
+- Kubernetes‑friendly: secrets at install time, re‑use across upgrades.
 
-## Coding Style & Naming
-- 4-space indent, f-strings, add type hints where practical.
-- Names: `snake_case` (functions/modules), `PascalCase` (classes), `UPPER_CASE` (constants).
-- Versions: core `DSX_CONNECT_VERSION` in `dsx_connect/version.py`; connector `CONNECTOR_VERSION` in `connectors/<name>/version.py`.
+## Modes and Toggles
+- `DSXCONNECT_AUTH__ENABLED`: `true|false` (default: `false`).
+  - When `false`, all auth checks are disabled (useful for local/dev).
+  - When `true`, the system enforces HMAC auth on connector‑only endpoints.
 
-## Testing Guidelines
-- Framework: Pytest; files `test_*.py`. Exclusions for vendor, `dist`, venvs are set in `pytest.ini`.
-- Add focused tests for new modules and bug fixes; keep tests fast.
+## Server (dsx-connect) Configuration
+- `DSXCONNECT_AUTH__ENROLLMENT_TOKEN` or `DSXCONNECT_AUTH__ENROLLMENT_TOKENS` (CSV): one or more bootstrap secrets accepted by the API for initial registration.
+- Optional JWT settings remain available but are not required for connector flows (HMAC is used after bootstrap).
 
-## Commit & Pull Requests
-- Commits: Imperative subject, optional scope (e.g., `core:`, `connector:aws_s3`).
-- PRs: Clear description, linked issues, repro steps, and any screenshots/logs. Ensure `ruff` and `pytest` pass.
+Recommendation: source enrollment tokens from Kubernetes Secrets and rotate with CSV overlap.
 
-## Security & Configuration
-- Do not commit secrets. Use env files (e.g., `dsx_connect/.dev.env`) or compose/Helm values.
-- TLS: Prefer `inv bundle-usetls` for local HTTPS; status script supports `DSXCONNECT_USE_TLS` and CA bundles.
-- Production TLS: terminate at the load balancer; use `inv bundle-usetls` only for local self-signed development.
+## Connector Configuration
+- `DSXCONNECT_ENROLLMENT_TOKEN` (required when auth enabled): bootstrap secret used once at registration.
+- The connector stores returned HMAC credentials (key id + secret) in memory and uses them for DSX‑HMAC signing.
+- No persistent connector tokens are used; no secrets are written to disk by the connector.
 
-## Next Steps
-- Improve “full scan” UX: estimate counts up front, persist job progress, and support pause/cancel via Celery revoke + job state checks.
+## Bootstrap & Runtime Flow
+1) Startup: connector calls `POST /dsx-connect/api/v1/connectors/register` with header `X-Enrollment-Token: <bootstrap>` and the usual registration payload.
+2) Server validates the enrollment token and completes registration.
+3) Server provisions per‑connector HMAC credentials, stores them in Redis, and responds with:
+   ```json
+   { "connector_uuid": "...", "hmac_key_id": "...", "hmac_secret": "...", "status": "success", ... }
+   ```
+4) Both directions use DSX‑HMAC for all subsequent calls:
+   - dsx-connect → connector (private): signed with the connector’s HMAC.
+   - connector → dsx-connect (connector‑only endpoints): signed with the connector’s HMAC.
+5) Webhook/Event: connector `POST /webhook_event` remains public but must validate provider signatures (e.g., Azure/GitHub) and should be exposed via Ingress only for that path.
 
-## Superlog (Scan-Result Logging) Roadmap
-- Scope and separation: Use superlog only for operational scan-result events sent to SIEMs/receivers. Keep application/runtime logs on stdlib/console; do not route app logs through superlog.
-- Event model: Define a stable `scan_result` event schema in superlog (job_id, scan_request_task_id, connector, location, verdict, threat, action, timestamps). Provide a helper `LogEvent.from_scan_result(...)` to build events from `ScanResultModel`.
-- Destinations: Support pluggable outputs behind config: syslog (UDP/TCP/TLS), Splunk HEC, CloudWatch Logs, Azure Sentinel (DCR). Keep each destination small, with retries/backoff and bounded buffers. Start with syslog UDP and TLS.
-- Formatters: Default to compact JSON for SIEMs. Keep RFC5424/syslog formatter available for environments that require it. Avoid mixing console formatting into superlog.
-- Configuration: Add `DSXCONNECT_SUPERLOG__ENABLED` and `DSXCONNECT_SUPERLOG__DESTINATIONS` (CSV: syslog,splunk,cloudwatch,sentinel). Provide nested settings for each (host/port/facility/transport for syslog; url/token for Splunk; group/stream/region for CloudWatch; DCE/DCR/stream for Sentinel). Maintain compatibility with existing `DSXCONNECT_SYSLOG__*` when only syslog is enabled.
-- Initialization: Build the scan-result log chain once per Celery worker process in `worker_process_init` using config. Expose a small accessor (e.g., `get_scan_result_chain()`); have the scan-result worker emit via this chain instead of direct syslog calls. Keep failures non-retriable for the task path.
-- Backpressure and failure handling: For network failures, use short timeouts, exponential backoff, and bounded queues. Drop oldest or sample if buffers fill; always log a warning to console with task/job context.
-- Security/PII: Provide field filtering/masking hooks (e.g., redact PII, truncate large paths). Ensure tokens/keys only come from env/secret stores and are never logged.
-- Testing: Unit tests for formatters and acceptance filters; destination stubs with captured payloads; a UDP syslog test server for integration; config parsing tests per destination. Keep tests fast and hermetic.
-- Migration: Keep `shared/log_chain.py` as a thin adapter temporarily, forwarding to superlog when enabled; deprecate once consumers switch. Document env var mapping and rollout steps.
+## Protected Endpoints (when enabled)
+- Connector private endpoints require DSX‑HMAC from dsx‑connect:
+  - `POST /full_scan`
+  - `POST /read_file`
+  - `PUT /item_action`
+  - `GET /repo_check`, `GET /estimate`, `GET /config`
+- dsx-connect connector‑only endpoints require DSX‑HMAC from the connector (or enrollment token as an admin escape hatch):
+  - `POST /scan/request`
+  - `POST /scan/jobs/{job_id}/enqueue_done`
+  - `DELETE /connectors/unregister/{uuid}`
+- Health/read endpoints (e.g., `/healthz`, `/readyz`) may remain open; secure them via NetworkPolicy/Ingress if desired.
 
-## Current Status (UI + Workers)
-- Event-driven progress: The UI no longer polls for job summaries. Progress and completion come from the scan-results SSE stream only.
-- Buttons lifecycle: Cards flip to Pause/Cancel when a job starts, and revert to Full Scan on completion/cancel. A counts-based fallback flips immediately when processed >= total even before a final status frame.
-- Final summary: On completion, the note shows “Scan complete: <processed> / <duration>”.
-- Job id UX: Each running card shows a small job id pill next to the buttons with a copy-to-clipboard button. The pill survives button re-renders and hides on completion.
-- Rehydrate on refresh: On load, the UI verifies any “active” jobs once via GET `/dsx-connect/api/v1/scan/jobs/{job_id}`. Completed/stale jobs are cleared so buttons return to Full Scan. No background polling is used.
-- Version badge: The header shows `vX.Y.Z` (hidden in dev/unknown). `/meta` endpoint added; UI falls back to `/version` if `/meta` is unavailable.
+## HMAC Details
+- Header: `Authorization: DSX-HMAC key_id=<kid>, ts=<unix>, nonce=<b64>, sig=<b64>`
+- Canonical string: `METHOD|PATH?QUERY|ts|nonce|<body>` (where `<body>` is raw bytes).
+- Server verifies: known `key_id`, clock skew, signature equality (constant‑time), and nonce freshness (best‑effort).
+- Per‑connector secrets are generated on registration and stored in Redis under `config:<connector_uuid>`; a key‑id index maps `key_id` → `connector_uuid` for inbound lookups.
 
-### Completion and totals (2025-09-12)
-- SSE payload now carries `enqueued_total`, `enqueued_count`, and `enqueue_done` in the `job` summary.
-- Server sets `status=completed` in the SSE event when any reliable total is known and `processed_count >= total`.
-- UI displays total as `total` (expected_total), else `enqueued_total`, else `enqueued_count`, and flips to Full Scan when processed reaches that value.
-- Connectors POST `/scan/jobs/{job_id}/enqueue_done` with `enqueued_total` at the end of enqueue, enabling accurate completion without polling.
+## Helm & Secrets (Kubernetes)
+- dsx‑connect chart:
+  - Set enrollment via Secret/env:
+    - `DSXCONNECT_AUTH__ENROLLMENT_TOKEN` (single) or `DSXCONNECT_AUTH__ENROLLMENT_TOKENS` (CSV for rotation).
+  - Auth toggle: `DSXCONNECT_AUTH__ENABLED=true` to enforce HMAC.
+- Connector charts:
+  - `dsxConnectEnrollment`: reference the same enrollment Secret and set `DSXCONNECT_ENROLLMENT_TOKEN`.
+  - `auth.enabled`: controls HMAC verification on connector private endpoints.
+  - Expose only `/webhook_event` via Ingress; add NetworkPolicies to allow ingress only from dsx-connect and your Ingress controller.
 
-## Backend updates required
-- Connectors: On full-scan completion of enqueue, connectors now POST `/dsx-connect/api/v1/scan/jobs/{job_id}/enqueue_done` with `{ enqueued_total }` to enable accurate completion.
-- Workers: The scan-result worker marks a job `completed` when `processed_count >= (enqueued_total or expected_total)` and stamps `finished_at` (no polling assumptions). Restart Celery workers after pulling these changes.
+### Secret Generation Options
+- Provide enrollment tokens explicitly via values (recommended for GitOps with external secret management).
+- Or, on first install, generate a strong random `ENROLLMENT_TOKEN` and store it; rotate with CSV overlap when needed.
 
-### Observability / debugging
-- Notify worker logs: `notify.scan_result job=<id> status=<s> processed=<n> total=<n|None> duration=<sec>`
-- Completion logs: `job.complete job=<id> processed=<n> total=<n> finished_at=<ts>`
-- Connector logs enqueue done: `enqueue_done posted job=<id> enqueued_total=<n> status=<code>`
-- API can log SSE frames with `DSX_LOG_SSE_EVENTS=1`.
-- Raw job state: `GET /dsx-connect/api/v1/scan/jobs/{job_id}/raw` returns the Redis hash and TTL.
+## Local Dev / Docker Compose
+- Auth disabled by default (`DSXCONNECT_AUTH__ENABLED=false`).
+- To try auth locally:
+  - dsx‑connect API: set `DSXCONNECT_AUTH__ENABLED=true` and `DSXCONNECT_AUTH__ENROLLMENT_TOKEN`.
+  - Connector: set `DSXCONNECT_ENROLLMENT_TOKEN` to match.
 
-## Manual steps to validate
-- Restart services:
-  - API: `uvicorn dsx_connect.app.dsx_connect_api:app --host 0.0.0.0 --port 8586`
-  - Workers: `celery -A dsx_connect.taskworkers.celery_app worker -l INFO`
-  - Connectors (to enable `enqueue_done` signaling)
-- Hard refresh the UI.
-- Trigger Full Scan and observe: Pause/Cancel appears, progress updates via events, and buttons revert to Full Scan with a final summary on completion.
+## Rotation
+- Enrollment token: support multiple tokens via CSV (`DSXCONNECT_AUTH__ENROLLMENT_TOKENS`) to allow overlap; update connector secrets and roll.
+- HMAC reprovisioning: re‑register the connector (or add an admin endpoint) to mint a new key/secret pair and update Redis; connector will receive new creds.
 
-## Known/observed
-- If a reverse proxy strips `X-Job-Id`, the UI extracts `job_id` from the response description as a fallback.
-- If a connector is down (`readyz` 502), the card may not refresh immediately. Once the connector is reachable and scan events flow, the card reconciles state.
-- Pause/Resume: Endpoints are wired, but pause UX/state reconciliation remains WIP and will be revisited.
+## Error Semantics
+- Missing/invalid DSX‑HMAC: `401` (brief reason; no token challenges).
+- Enrollment token invalid on register: `401`.
 
-## Connector Scaling TODOs (Kubernetes)
-- Stage 1 — Scale read_file throughput:
-  - Add `replicaCount` support and examples in each connector Helm chart (already present; document usage).
-  - Recommend 2–4 Uvicorn workers per pod for higher in‑pod concurrency.
-  - Keep connectors stateless; no external locks or Redis usage inside connectors.
+## Swagger & UI Notes
+- Swagger remains available for docs. “Try it out” will not work for connector‑only protected endpoints because DSX‑HMAC secrets are not exposed to the browser (by design).
+- Use curl/Postman with HMAC from a trusted environment to test protected endpoints, or disable auth in dev.
+- Frontend (user) auth is separate from connector auth. In production, front dsx‑connect with an Ingress that enforces user authentication (e.g., OIDC via oauth2‑proxy). UI users never use enrollment or HMAC.
 
-- Stage 2 — Autoscale connectors:
-  - Provide an HPA example per connector (CPU/Memory based) in Helm values.
-  - Optional: KEDA examples to scale on dsx‑connect queue depth or HTTP RPS (still connector‑agnostic).
-  - Document resource requests/limits and per‑pod concurrency guardrails.
+## Rollout Plan
+1) Add auth enrollment to dsx‑connect and connector charts (disabled by default).
+2) Implement per‑connector HMAC provisioning at registration and enforce DSX‑HMAC on both directions.
+3) Enable in non‑prod: set enrollment secrets and `DSXCONNECT_AUTH__ENABLED=true`.
+4) Monitor logs and tighten which endpoints enforce auth.
+5) Enable in production.
 
-- Stage 3 — Prevent duplicate Full Scans (enforce in dsx‑connect):
-  - In dsx‑connect API, before forwarding a Full Scan request, check active job state for the target connector/asset.
-  - If a scan is active, return 409 (or 202) with `{ message: "Full scan already running", job_id }`.
-  - UI already calls once; this closes the gap for direct API callers without coupling connectors to dsx‑connect internals.
+## Security Notes
+- Keep enrollment tokens limited in scope (connector→dsx‑connect only); rotate periodically with CSV overlap.
+- DSX‑HMAC ties authentication to the exact request (method/path/body); secrets are per‑connector and can be reprovisioned.
 
-- Sharding (follow‑on, optional):
-  - Accept per‑request `filter_override` plus `shard_label` to run multiple parallel slices when natural prefixes exist.
-  - For massive namespaces without natural prefixes, document “Single‑Lister, Multi‑Processor” (one pod lists, workers process) and inventory‑driven scans (S3/GCS/Azure inventories) as future strategies.
+## Current State Summary
+- Removed: legacy API key path and any `DSXCONNECTOR_API_KEY` wiring in charts/compose.
+- Removed: global outbound HMAC config; per‑connector HMAC is auto‑provisioned at registration.
+- Removed: JWT requirement for connector flows; no connector tokens are used after bootstrap.
+- Helm (dsx‑connect): `auth.enabled` and `auth.enrollment.{key,value}` only; charts create an enrollment Secret when `value` is set.
+- Helm (connectors): `auth.enabled` (HMAC verify) and `dsxConnectEnrollment.secretName/key` for the bootstrap token; ingress/network policy templates limit public exposure to the webhook path.
 
-- Documentation:
-  - Add a “Scaling Connectors on Kubernetes” guide covering replicas, HPA, and the Full Scan limiter behavior.
-  - Keep Docker/Compose examples as single‑service demos; steer production users to Helm.
+## Recent Activity (Summary)
+- Finalized auth model: single enrollment token + per‑connector HMAC used in both directions after registration (no connector Bearer/JWT).
+- Server changes:
+  - Provision per‑connector HMAC on register, store in Redis, return `hmac_key_id`/`hmac_secret` in response.
+  - Added inbound DSX‑HMAC verifier for connector→dsx‑connect endpoints (e.g., `/scan/request`, `enqueue_done`, `unregister`).
+- Connector changes:
+  - On register, capture returned HMAC creds at runtime; sign all calls to dsx‑connect with DSX‑HMAC.
+  - Enforce DSX‑HMAC on private connector routes when `auth.enabled=true`.
+- Helm changes:
+  - Simplified dsx‑connect auth values to just `auth.enabled` + `auth.enrollment.{key,value}`; removed outboundHmac and JWT settings.
+  - Connector charts use `dsxConnectEnrollment` and `auth.enabled`; added Ingress (webhook‑only) and NetworkPolicy templates.
+  - Moved DIANNA config from `global.dianna` to `dsx-connect-dianna-worker.dianna` (managementUrl/token per worker);
+    updated DI worker template to read `.Values.dianna` and docs to favor values files + Secrets over CLI.
+- Docs:
+  - AGENTS.md and DSXAUTHENTICATION.md reflect Enrollment+HMAC; added Appendix with DSX‑HMAC curl examples.
+  - dsx‑connect Helm README: added ToC, new Authentication section, enrollment via Secret, namespace notes, Method 1/2 combined TLS+Auth+DI examples; removed Quick Reference; consolidated into Full Configuration Parameters.
+- Cleanup:
+  - Removed legacy OAuth pieces, global outbound HMAC, and API key model/mentions.

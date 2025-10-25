@@ -12,7 +12,7 @@ spec:
       protocol: TCP
       name: http
     {{- if .Values.tls.enabled }}
-    - port: {{ .Values.tls.port }}
+    - port: 443
       targetPort: https
       protocol: TCP
       name: https

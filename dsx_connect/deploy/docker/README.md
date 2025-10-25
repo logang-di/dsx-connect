@@ -292,7 +292,7 @@ Where there is a common set of configurations used by two or more services, envi
 defined in the x-common-env area: 
 ```yaml
 x-common-env: &common-env
-  DSXCONNECTOR_API_KEY: api-key-NOT-FOR-PRODUCTION
+  # API key removed (use JWT/HMAC)
   DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://dsxa_scanner:5000/scan/binary/v2"
   DSXCONNECT_TASKQUEUE__BROKER: "redis://redis:6379/0"
   DSXCONNECT_TASKQUEUE__BACKEND: "redis://redis:6379/0"

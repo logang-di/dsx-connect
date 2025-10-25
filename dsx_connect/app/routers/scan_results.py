@@ -139,6 +139,15 @@ async def get_job_status_raw(job_id: str, request: Request) -> dict:
     description="Mark that a job has finished enqueueing items; optionally set enqueued_total.",
 )
 async def mark_job_enqueue_done(job_id: str, request: Request, payload: dict | None = None) -> dict:
+    # Auth: require connector bearer when enabled
+    try:
+        from dsx_connect.app.auth_hmac_inbound import require_dsx_hmac_inbound
+        await require_dsx_hmac_inbound(request)
+    except Exception as e:
+        # propagate FastAPI HTTPException if raised
+        if isinstance(e, HTTPException):
+            raise
+        raise
     r = getattr(request.app.state, "redis", None)
     if r is None:
         raise HTTPException(status_code=503, detail="job_store_unavailable")

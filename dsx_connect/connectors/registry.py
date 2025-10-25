@@ -243,6 +243,16 @@ class ConnectorsRegistry:
         Returns True if connector is healthy, False if unresponsive.
         """
         try:
+            # Enrich with HMAC creds when available so auth-enabled connectors accept health checks
+            try:
+                vals = await self._r.hmget(ConnectorKeys.config(str(model.uuid)), "hmac_key_id", "hmac_secret")
+                kid = vals[0].decode() if vals and isinstance(vals[0], (bytes, bytearray)) else (vals[0] if vals else None)
+                sec = vals[1].decode() if vals and isinstance(vals[1], (bytes, bytearray)) else (vals[1] if vals else None)
+                if kid and sec:
+                    setattr(model, "hmac_key_id", kid)
+                    setattr(model, "hmac_secret", sec)
+            except Exception:
+                pass
             async with get_async_connector_client(model) as client:
                 # Use a short timeout for health checks
                 response = await asyncio.wait_for(

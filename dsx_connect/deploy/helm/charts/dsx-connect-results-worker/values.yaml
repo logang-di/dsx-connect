@@ -11,7 +11,7 @@ env:
   LOG_LEVEL: debug
 
 celery:
-  # queue computed from DSXCONNECT_APP_ENV in template unless overridden here
+  # Queue defaults to "dev.dsx_connect.scans.result"; override if sharing a broker
   # queue: "dev.dsx_connect.scans.result"
   concurrency: 1
 

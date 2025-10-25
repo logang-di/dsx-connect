@@ -2,8 +2,8 @@
 
 Choose one deployment method:
 
-- Docker Compose: see `deploy/docker/README.md`
-- Helm (Kubernetes): see `deploy/helm/README.md`
+- Docker Compose: see `deploy/docker/DEPLOYMENT_GUIDE_DOCKER.md`
+- Helm (Kubernetes): see `deploy/helm/DEPLOYMENT_GUIDE_K8S.md`
 
 Note on assets and prefixes: set `DSXCONNECTOR_ASSET` to `container` or `container/prefix`. When a prefix is provided, listings start at that sub-root and filters are evaluated relative to it. See the Sharding & Deployment Strategies appendix in each deployment README for examples.
 

@@ -15,12 +15,32 @@ service:
   type: ClusterIP
   port: 80
 
+auth:
+  enabled: false
+  # Reference an existing Secret containing DSXCONNECTOR_AUTH__HMAC_KEY_ID and DSXCONNECTOR_AUTH__HMAC_SECRET
+  keyIdKey: HMAC_KEY_ID
+  secretKey: HMAC_SECRET
+  clockSkewSeconds: 60
+
+ingressWebhook:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+networkPolicy:
+  enabled: false
+  # Allowed sources for connector API (internal). Configure namespace/pod selectors as needed.
+  allowFrom: []  # e.g., [{ namespaceSelector: { matchLabels: { name: ingress-nginx } } }]
+
+dsxConnectEnrollment:
+  # Optional: reference a Secret providing DSXCONNECT_ENROLLMENT_TOKEN for JWT bootstrap with dsx-connect
+  secretName: ""
+  key: ENROLLMENT_TOKEN
+
 tls:
   enabled: false
-  port: 443
-  # The name of the k8s secret that contains the TLS certificate and key
-  secretName: ""
-  mountPath: "/app/certs"
 
 env:
   LOG_LEVEL: "debug"

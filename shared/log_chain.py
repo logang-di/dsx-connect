@@ -131,7 +131,8 @@ def init_syslog_handler(syslog_host: str = "localhost", syslog_port: int = 514,
 
         dsx_logging.info(f"Initialized syslog handler for {syslog_host}:{syslog_port} transport={transport}")
     except Exception as e:
-        dsx_logging.error(f"Failed to initialize syslog handler: {e}")
+        # Use warning to avoid alarming non-results workers or dev environments without a collector
+        dsx_logging.warning(f"Syslog handler not initialized: {e}")
 
 
 def log_verdict_chain(

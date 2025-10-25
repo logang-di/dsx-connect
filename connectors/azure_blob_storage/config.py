@@ -44,6 +44,12 @@ class AzureBlobStorageConnectorConfig(BaseConnectorConfig):
     asset_container: str | None = None
     asset_prefix_root: str = ""
 
+    # Performance tuning
+    # Max concurrent scan_file_request enqueues during full scan
+    scan_concurrency: int = Field(default=10, description="Max concurrent scan_file_request enqueues during full scan")
+    # Optional page size hint for Azure list_blobs pagination
+    list_page_size: int | None = Field(default=1000, description="Preferred Azure list_blobs page size (results_per_page)")
+
     class Config:
         env_prefix = "DSXCONNECTOR_"
         env_file = ".env"

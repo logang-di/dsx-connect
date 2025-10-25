@@ -11,7 +11,26 @@ from shared.models.connector_models import ScanRequestModel, ItemActionEnum, Con
     ConnectorStatusEnum
 from shared.dsx_logging import dsx_logging
 from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
-from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback
+# Optional dependency: filesystem monitor (dev/local convenience). Fallback to no-op stubs if unavailable.
+try:
+    from filesystem_monitor import FilesystemMonitor, FilesystemMonitorCallback
+except Exception:
+    class FilesystemMonitorCallback:  # type: ignore
+        def __init__(self):
+            pass
+        def file_modified_callback(self, file_path: pathlib.Path):
+            pass
+
+    class FilesystemMonitor:  # type: ignore
+        def __init__(self, folder: pathlib.Path, filter: str, callback: FilesystemMonitorCallback,
+                     force_polling: bool = False, poll_interval_ms: int = 1000):
+            self.folder = folder
+            self.filter = filter
+            self.callback = callback
+            self.force_polling = force_polling
+            self.poll_interval_ms = poll_interval_ms
+        def start(self):
+            dsx_logging.info("FilesystemMonitor not installed; monitor disabled.")
 from shared.async_ops import run_async
 from connectors.filesystem.config import ConfigManager
 from connectors.filesystem.version import CONNECTOR_VERSION

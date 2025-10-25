@@ -2,8 +2,8 @@
 
 Choose one deployment method:
 
-- Docker Compose: see `deploy/docker/README.md`
-- Helm (Kubernetes): see `deploy/helm/README.md`
+- Docker Compose: see `deploy/docker/DEPLOYMENT_GUIDE_DOCKER.md`
+- Helm (Kubernetes): see `deploy/helm/DEPLOYMENT_GUIDE_K8S.md`
 
 Local builds: `deploy/docker/Dockerfile` and `deploy/docker/requirements.txt` are provided for building images locally (e.g., with `docker build`).
 

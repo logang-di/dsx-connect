@@ -15,25 +15,11 @@ spec:
       labels:
         {{- include "dsx-connect-api.selectorLabels" . | nindent 8 }}
     spec:
-      {{- if or .Values.tls.enabled .Values.dataVolume.enabled }}
+      {{- if .Values.tls.enabled }}
       volumes:
-        {{- if .Values.tls.enabled }}
         - name: tls-certs
           secret:
-            secretName: {{ .Values.tls.secretName }}
-        {{- end }}
-        {{- if .Values.dataVolume.enabled }}
-        - name: app-data
-          {{- if .Values.dataVolume.existingClaim }}
-          persistentVolumeClaim:
-            claimName: {{ .Values.dataVolume.existingClaim | quote }}
-          {{- else if .Values.dataVolume.hostPath }}
-          hostPath:
-            path: {{ .Values.dataVolume.hostPath | quote }}
-          {{- else }}
-          emptyDir: {}
-          {{- end }}
-        {{- end }}
+            secretName: {{ printf "%s-tls" (include "dsx-connect-api.fullname" .) }}
       {{- end }}
       containers:
         - name: dsx-connect-api
@@ -45,15 +31,15 @@ spec:
             "--host", "0.0.0.0",
             "--port", "{{ .Values.service.port }}"
             {{- if .Values.tls.enabled }},
-            "--ssl-keyfile", "{{ .Values.tls.mountPath }}/tls.key",
-            "--ssl-certfile", "{{ .Values.tls.mountPath }}/tls.crt"
+            "--ssl-keyfile", "/app/certs/tls.key",
+            "--ssl-certfile", "/app/certs/tls.crt"
             {{- end }}
           ]
           ports:
             - containerPort: {{ .Values.service.port }}
               name: http
             {{- if .Values.tls.enabled }}
-            - containerPort: {{ .Values.tls.port }}
+            - containerPort: 443
               name: https
             {{- end }}
           env:
@@ -65,8 +51,6 @@ spec:
             {{- $di := (default (dict) $.Values.global.dianna) }}
             - name: DSXCONNECT_APP_ENV
               value: {{ $env.DSXCONNECT_APP_ENV | default "dev" | quote }}
-            - name: DSXCONNECTOR_API_KEY
-              value: {{ $env.DSXCONNECTOR_API_KEY | default "api-key-NOT-FOR-PRODUCTION" | quote }}
             - name: DSXCONNECT_SCANNER__SCAN_BINARY_URL
               value: {{ $env.DSXCONNECT_SCANNER__SCAN_BINARY_URL | default (printf "%s://%s:%d/scan/binary/v2" $scheme $svc $port) | quote }}
             - name: DSXCONNECT_WORKERS__BROKER
@@ -88,6 +72,15 @@ spec:
             {{- if .managementUrl }}
             - name: DSXCONNECT_DIANNA__MANAGEMENT_URL
               value: {{ .managementUrl | quote }}
+            {{- end }}
+            {{- if .Values.auth.enabled }}
+            - name: DSXCONNECT_AUTH__ENABLED
+              value: "true"
+            - name: DSXCONNECT_AUTH__ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ printf "%s-auth-enrollment" (include "dsx-connect-api.fullname" .) | quote }}
+                  key: {{ .Values.auth.enrollment.key | quote }}
             {{- end }}
             {{- if .apiToken }}
             - name: DSXCONNECT_DIANNA__API_TOKEN
@@ -116,24 +109,17 @@ spec:
             {{- end }}
             {{- with $env }}
             {{- range $key, $value := . }}
-            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECTOR_API_KEY" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__LOC" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL")) }}
+            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__LOC" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL")) }}
             - name: {{ $key }}
               value: "{{ $value }}"
             {{- end }}
             {{- end }}
             {{- end }}
-          {{- if or .Values.tls.enabled .Values.dataVolume.enabled }}
+          {{- if .Values.tls.enabled }}
           volumeMounts:
-            {{- if .Values.tls.enabled }}
             - name: tls-certs
-              mountPath: {{ .Values.tls.mountPath | quote }}
+              mountPath: "/app/certs"
               readOnly: true
-            {{- end }}
-            {{- if .Values.dataVolume.enabled }}
-            - name: app-data
-              mountPath: "/app/data"
-              readOnly: false
-            {{- end }}
           {{- end }}
           livenessProbe:
             httpGet:

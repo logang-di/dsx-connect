@@ -10,8 +10,7 @@ from random import random
 from typing import Any
 from contextlib import asynccontextmanager
 from fastapi.encoders import jsonable_encoder
-from fastapi import FastAPI, APIRouter, Request, BackgroundTasks, Depends, HTTPException, Security
-from fastapi.security.api_key import APIKeyHeader
+from fastapi import FastAPI, APIRouter, Request, BackgroundTasks, Depends, HTTPException
 from typing import Callable, Awaitable, Optional
 
 from starlette.responses import StreamingResponse, JSONResponse, Response
@@ -23,39 +22,16 @@ from shared.routes import DSXConnectAPI, ConnectorAPI, service_url, API_PREFIX_V
      format_route
 from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from shared.dsx_logging import dsx_logging
-from shared.models.connector_api_key import APIKeySettings
 from connectors.framework.connector_id import get_or_create_connector_uuid
 import httpx
 from shared.routes import ConnectorAPI
+from connectors.framework.auth_hmac import require_dsx_hmac
 
 # Context variable to propagate a scan job id during full_scan
 _SCAN_JOB_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("scan_job_id", default=None)
 _SCAN_ENQ_COUNTER: contextvars.ContextVar[int] = contextvars.ContextVar("scan_enq_counter", default=0)
 
-# Read API key if available from environment settings (via Pydantic's BaseSettings).
-# An empty or unset DSXCONNECTOR_API_KEY means no API key enforcement is desired.
-api_key_setting = APIKeySettings()
-dsx_logging.info(
-    f"Using API key for authorization: {'True' if api_key_setting.api_key else 'False. Configure DSXCONNECTOR_API_KEY environment setting.'}")
-
-# specify header name for api keys
-API_KEY_NAME = "x-api-key"
-api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
-
-
-async def validate_api_key(api_key: Optional[str] = Security(api_key_header)):
-    """
-    Validate the provided API key against the configured value.  When no API key
-    has been configured (i.e. DSXCONNECTOR_API_KEY is empty or unset),
-    this function accepts any value and does not enforce authentication.
-    """
-    expected = api_key_setting.api_key or None
-    # If no API key is configured, skip enforcement
-    if not expected:
-        return
-    # If key is missing or mismatched, raise 403
-    if not api_key or api_key != expected:
-        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+# Legacy API key auth removed; HMAC verification now guards private routes when enabled.
 
 
 
@@ -116,6 +92,10 @@ class DSXConnector:
         uuid = get_or_create_connector_uuid()
         dsx_logging.debug(f"Logical connector {self.connector_id} using UUID: {uuid}")
         self.scan_request_count = 0
+        # JWT enrollment + short-lived access token for dsx-connect auth
+        self._enrollment_token: str | None = os.getenv("DSXCONNECT_ENROLLMENT_TOKEN") or None
+        self._access_token: str | None = None
+        self._access_expiry_ts: int | None = None
 
         # clean up URL if needed
         self.dsx_connect_url = str(connector_config.dsx_connect_url).rstrip('/')
@@ -294,6 +274,38 @@ class DSXConnector:
                 pass
         self._hb_task = None
 
+    # ---- Auth helpers (dsx-connect API) ----
+    def _apply_access_token(self, data: dict | None):
+        try:
+            if isinstance(data, dict) and data.get("access_token"):
+                self._access_token = data.get("access_token")
+                exp_in = int(data.get("expires_in") or 0)
+                import time as _t
+                self._access_expiry_ts = int(_t.time()) + max(0, exp_in - 5)
+        except Exception:
+            pass
+
+    def _auth_headers(self) -> dict:
+        if self._access_token:
+            return {"Authorization": f"Bearer {self._access_token}"}
+        return {}
+
+    async def _ensure_access_token(self):
+        if not self._enrollment_token:
+            return
+        import time as _t
+        now = int(_t.time())
+        if self._access_token and self._access_expiry_ts and now < self._access_expiry_ts:
+            return
+        try:
+            async with httpx.AsyncClient(verify=self._httpx_verify, timeout=10.0) as client:
+                url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.CONNECTORS_PREFIX, "token")
+                r = await client.post(url, headers={"X-Enrollment-Token": self._enrollment_token})
+                if r.status_code == 200:
+                    self._apply_access_token(r.json())
+        except Exception:
+            pass
+
     async def _heartbeat_loop(self) -> None:
         """Periodically (re)register to refresh presence TTL in dsx-connect."""
         interval = max(5, int(getattr(self, "HEARTBEAT_INTERVAL_SECONDS", 60)))
@@ -399,7 +411,14 @@ class DSXConnector:
         try:
             async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.SCAN_PREFIX, ScanPath.REQUEST)
-                resp = await client.post(url, json=jsonable_encoder(scan_request))
+                payload = jsonable_encoder(scan_request)
+                try:
+                    import json as _json
+                    content = _json.dumps(payload, separators=(",", ":")).encode()
+                except Exception:
+                    content = None
+                hdrs = self._dsx_hmac_headers("POST", url, content)
+                resp = await client.post(url, json=payload, headers=hdrs or None)
             resp.raise_for_status()
             self.scan_request_count += 1
             return StatusResponse(**resp.json())
@@ -424,9 +443,21 @@ class DSXConnector:
         try:
             async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.CONNECTORS_PREFIX, ConnectorPath.REGISTER_CONNECTORS)
-                resp = await client.post(url, json=jsonable_encoder(conn_model))
-            resp.raise_for_status()
-            return StatusResponse(**resp.json())
+                headers = {"X-Enrollment-Token": self._enrollment_token} if self._enrollment_token else None
+                resp = await client.post(url, json=jsonable_encoder(conn_model), headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+            self._apply_access_token(data if isinstance(data, dict) else None)
+            try:
+                if isinstance(data, dict):
+                    kid = data.get("hmac_key_id")
+                    sec = data.get("hmac_secret")
+                    if kid and sec:
+                        from connectors.framework.auth_hmac import set_runtime_hmac_credentials
+                        set_runtime_hmac_credentials(kid, sec)
+            except Exception:
+                pass
+            return StatusResponse(**data)
         except httpx.HTTPStatusError as e:
             msg = f"HTTP {e.response.status_code} during connector registration"
             dsx_logging.error(msg, exc_info=True)
@@ -478,7 +509,8 @@ class DSXConnector:
                           format_route(ConnectorPath.UNREGISTER_CONNECTORS, connector_uuid=uuid_str))
         try:
             async with httpx.AsyncClient(verify=self._httpx_verify) as client:
-                resp = await client.delete(url)
+                hdrs = self._dsx_hmac_headers("DELETE", url, None)
+                resp = await client.delete(url, headers=hdrs or None)
             if resp.status_code == 204:
                 return StatusResponse(status=StatusResponseEnum.SUCCESS, message="Unregistered",
                                       description=f"Removed {self.connector_running_model.url} : {self.connector_running_model.uuid}")
@@ -502,6 +534,7 @@ class DSXConnector:
         try:
             async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.CONNECTION_TEST)
+                # no HMAC needed; public health
                 resp = await client.get(url)
             resp.raise_for_status()
             return resp.json()
@@ -511,7 +544,7 @@ class DSXConnector:
 
 class DSXAConnectorRouter(APIRouter):
     def __init__(self, connector: DSXConnector):
-        super().__init__(prefix=f"/{connector.connector_running_model.name}", dependencies=[Depends(validate_api_key)])
+        super().__init__(prefix=f"/{connector.connector_running_model.name}")
         self._connector = connector
 
         self.get("/", description="Connector status and availability")(self.home)
@@ -520,11 +553,15 @@ class DSXAConnectorRouter(APIRouter):
 
         self.put(route_path(ConnectorAPI.ITEM_ACTION.value),
                  description="Perform an action on an item",
-                 response_model=ItemActionStatusResponse)(self.put_item_action)
+                 response_model=ItemActionStatusResponse,
+                 dependencies=[Depends(require_dsx_hmac)],
+                 )(self.put_item_action)
 
         self.post(route_path(ConnectorAPI.FULL_SCAN.value),
                   description="Initiate a full scan",
-                  response_model=StatusResponse)(self.post_full_scan)
+                  response_model=StatusResponse,
+                  dependencies=[Depends(require_dsx_hmac)],
+                  )(self.post_full_scan)
 
         self.post(route_path(ConnectorAPI.READ_FILE.value),
                   description="Request a file from the connector",
@@ -533,20 +570,28 @@ class DSXAConnectorRouter(APIRouter):
                       200: {"content": {"application/octet-stream": {}}},
                       404: {"content": {"application/json": {}}},
                       501: {"content": {"application/json": {}}},
-                  })(self.post_read_file)
+                  },
+                  dependencies=[Depends(require_dsx_hmac)],
+                  )(self.post_read_file)
 
         self.get(route_path(ConnectorAPI.REPO_CHECK.value),
-                 description="Check repository connectivity")(self.get_repo_check)
+                 description="Check repository connectivity",
+                 dependencies=[Depends(require_dsx_hmac)],
+                 )(self.get_repo_check)
 
         # Optional estimation endpoint: returns count preflight if supported by connector.
         self.get(route_path(ConnectorAPI.ESTIMATE.value),
-                 description="Estimate item count (exact or unknown)")(self.get_estimate)
+                 description="Estimate item count (exact or unknown)",
+                 dependencies=[Depends(require_dsx_hmac)],
+                 )(self.get_estimate)
 
         self.post(route_path(ConnectorAPI.WEBHOOK_EVENT.value),
                  description="Handle inbound webhook")(self.post_handle_webhook_event)
 
         self.get(route_path(ConnectorAPI.CONFIG.value),
-                 description="Connector configuration")(self.get_config)
+                 description="Connector configuration",
+                 dependencies=[Depends(require_dsx_hmac)],
+                 )(self.get_config)
         # Register FastAPI events
         # self.on_event("startup")(self.on_startup_event)
         # self.on_event("shutdown")(self.on_shutdown_event)
@@ -614,7 +659,13 @@ class DSXAConnectorRouter(APIRouter):
                     payload: dict[str, Any] = {}
                     if enq_total >= 0:
                         payload = {"enqueued_total": enq_total}
-                    resp = await client.post(url, json=payload)
+                    try:
+                        import json as _json
+                        content = _json.dumps(payload, separators=(",", ":")).encode() if payload else None
+                    except Exception:
+                        content = None
+                    hdrs = self._dsx_hmac_headers("POST", url, content)
+                    resp = await client.post(url, json=payload, headers=hdrs or None)
                     dsx_logging.info(f"enqueue_done posted job={job_id} enqueued_total={enq_total} status={resp.status_code}")
             except Exception:
                 pass
@@ -748,3 +799,14 @@ class DSXAConnectorRouter(APIRouter):
         if self._connector.config_handler:
             return await self._connector.config_handler(self._connector.connector_running_model)
         return self._connector.connector_running_model
+
+    def _dsx_hmac_headers(self, method: str, url: str, body: bytes | None) -> dict[str, str] | None:
+        """Build DSX-HMAC headers for outbound connector calls when creds are available."""
+        try:
+            from connectors.framework.auth_hmac import build_outbound_auth_header
+            header = build_outbound_auth_header(method, url, body)
+        except Exception:
+            header = None
+        if header:
+            return {"Authorization": header}
+        return None

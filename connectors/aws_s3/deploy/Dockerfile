@@ -1,5 +1,12 @@
-ARG PY_BASE_IMAGE=python:3.12-slim
+ARG PY_BASE_IMAGE=python:3.12-slim-bookworm
 FROM ${PY_BASE_IMAGE}
+
+# Keep base crypto up to date (addresses OpenSSL CVEs flagged by scanners)
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       openssl \
+       ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user
 RUN useradd -m appuser
@@ -11,6 +18,7 @@ ARG PIP_INDEX_URL
 ARG PIP_EXTRA_INDEX_URL
 ENV PIP_INDEX_URL=${PIP_INDEX_URL}
 ENV PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}
+ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

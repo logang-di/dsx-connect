@@ -1,3 +1,4 @@
+import asyncio
 from starlette.responses import StreamingResponse
 
 from connectors.azure_blob_storage.azure_blob_storage_client import AzureBlobClient
@@ -113,20 +114,41 @@ async def full_scan_handler(limit: int | None = None) -> StatusResponse:
         bp = bp + "/"
         return k[len(bp):] if k.startswith(bp) else k
 
-    count = 0
-    for blob in abs_client.keys(config.asset_container, base_prefix=config.asset_prefix_root, filter_str=config.filter):
+    concurrency = max(1, int(getattr(config, 'scan_concurrency', 10) or 10))
+    sem = asyncio.Semaphore(concurrency)
+    tasks: list[asyncio.Task] = []
+    enq_count = 0
+
+    async def enqueue(key: str, full_path: str):
+        async with sem:
+            await connector.scan_file_request(ScanRequestModel(location=key, metainfo=full_path))
+            dsx_logging.debug(f"Sent scan request for {full_path}")
+
+    page_size = getattr(config, 'list_page_size', None)
+    for blob in abs_client.keys(config.asset_container, base_prefix=config.asset_prefix_root, filter_str=config.filter, page_size=page_size):
         key = blob['Key']
         # Final guard with rel path semantics
         if config.filter and not relpath_matches_filter(_rel(key), config.filter):
             continue
         full_path = f"{config.asset_container}/{key}"
-        await connector.scan_file_request(ScanRequestModel(location=key, metainfo=full_path))
-        dsx_logging.debug(f"Sent scan request for {full_path}")
-        count += 1
-        if limit and count >= limit:
+        tasks.append(asyncio.create_task(enqueue(key, full_path)))
+        enq_count += 1
+
+        # Batch-gather to bound memory and provide steady backpressure
+        if len(tasks) >= 200:
+            await asyncio.gather(*tasks)
+            tasks.clear()
+        if limit and enq_count >= limit:
             break
-    dsx_logging.info(f"Full scan enqueued {count} item(s) (asset={config.asset}, filter='{config.filter or ''}')")
-    return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.', description=f"enqueued={count}")
+
+    if tasks:
+        await asyncio.gather(*tasks)
+        tasks.clear()
+
+    dsx_logging.info(
+        f"Full scan enqueued {enq_count} item(s) (asset={config.asset}, filter='{config.filter or ''}', concurrency={concurrency}, page_size={page_size or 'default'})"
+    )
+    return StatusResponse(status=StatusResponseEnum.SUCCESS, message='Full scan invoked and scan requests sent.', description=f"enqueued={enq_count}")
 
 
 @connector.item_action

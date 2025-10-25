@@ -4,6 +4,29 @@ This Helm chart deploys the DSX‑Connect stack (API + workers + Redis + optiona
 
 This guide explains the core configuration concepts and details three deployment methods, from a quick local test to a production-grade GitOps workflow.
 
+## Contents
+
+- [Prerequisites](#prerequisites)
+- [Core Configuration Concepts](#core-configuration-concepts)
+- [Authentication Support](#authentication-support)
+  - [Enrollment Token via Secret (optional, but recommended)](#enrollment-token-via-secret-optional-but-recommended)
+  - [DIANNA API Token via Secret (required if DIANNA workers enabled)](#dianna-api-token-via-secret-required-if-dianna-workers-enabled)
+- [Concurrency and Replicas](#concurrency-and-replicas)
+- [Deployment Methods](#deployment-methods)
+  - [Method 1: Quick Start (Command-Line Overrides)](#method-1-quick-start-command-line-overrides)
+  - [Production Install (recommended flags)](#production-install-recommended-flags)
+  - [Method 2: Standard Deployment (Custom Values File)](#method-2-standard-deployment-custom-values-file)
+  - [Method 3: Production-Grade Deployment (GitOps & CI/CD)](#method-3-production-grade-deployment-gitops--cicd)
+- [Scan Result Logging](#scan-result-logging)
+- [Packaging & Publishing (Helm)](#packaging--publishing-helm)
+- [Advanced Configuration: Overriding Default Environment Variables](#advanced-configuration-overriding-default-environment-variables)
+- [Client Trust and CA Bundles](#client-trust-and-ca-bundles)
+- [Verifying the Deployment](#verifying-the-deployment)
+- [Full Configuration Parameters](#full-configuration-parameters)
+- [Minimal configuration](#minimal-configuration)
+- [Optional: Example DSXA Scanner](#optional-example-dsxa-scanner)
+- [Image Version Overrides](#image-version-overrides)
+
 ## Prerequisites
 
 - Kubernetes 1.19+ (a local cluster like Colima or Minikube is recommended for development).
@@ -17,7 +40,7 @@ This guide explains the core configuration concepts and details three deployment
 
 This umbrella chart deploys the DSX‑Connect stack. Key configuration areas (mirrors `values.yaml`):
 
-1.  **global.env:** Minimal shared env (e.g., `DSXCONNECT_APP_ENV`, `DSXCONNECTOR_API_KEY`, scanner URL override).
+1.  **global.env:** Minimal shared env (e.g., DSXA endpoint, Redis overrides).
     - DIANNA settings can also be set via the dedicated `global.dianna` block (see below).
 2.  **global.image:** Optional image defaults inherited by subcharts.
 3.  **global.scanner:** Hints for in‑cluster DSXA discovery (service name/port/scheme) when enabled.
@@ -27,23 +50,59 @@ This umbrella chart deploys the DSX‑Connect stack. Key configuration areas (mi
 7.  **rsyslog:** Optional rsyslog service for results.
 8.  **dsxa-scanner:** Optional single‑pod DSXA for local testing (disabled by default).
 
-## Quick Reference (most deployments)
+ 
 
-- `global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL`: REQUIRED when `dsxa-scanner.enabled=false` (default); set external DSXA endpoint.
-- `global.dianna.*`: Optional Deep Instinct (DIANNA) analysis settings. These map to `DSXCONNECT_DIANNA__*` env vars for API and workers.
-- `dsx-connect-api.tls.enabled` + `dsx-connect-api.tls.secretName`: enable HTTPS for the API; certs mounted at `tls.mountPath`.  Will use self-signed certs if none supplied.
-- `global.image.tag`: pin a specific image version across all components.
-- `dsx-connect-*-worker.celery.concurrency`: adjust worker parallelism per queue.
-- `dsx-connect-*-worker.replicaCount`: number of identical pods for that worker.
-- `dsx-connect-dianna-worker`: runs DIANNA analyze tasks on queue `<env>.dsx_connect.analyze.dianna`; scale independently.
-  - Polling controls (wired from `global.dianna`):
-    - `global.dianna.pollResultsEnabled` → `DSXCONNECT_DIANNA__POLL_RESULTS_ENABLED` (default: true)
-    - `global.dianna.pollIntervalSeconds` → `DSXCONNECT_DIANNA__POLL_INTERVAL_SECONDS` (default: 5)
-    - `global.dianna.pollTimeoutSeconds` → `DSXCONNECT_DIANNA__POLL_TIMEOUT_SECONDS` (default: 900)
+<!-- Quick Reference removed; see Full Configuration Parameters below for canonical settings. -->
 
-### DIANNA API Token via Secret (recommended)
+## Authentication Support
 
-For production, source the DIANNA API token from a Kubernetes Secret rather than embedding it in values.
+### Enrollment Token via Secret (optional, but recommended)
+
+Use an enrollment token to bootstrap connector registration. After registration, HMAC authenticates both directions.
+
+Option A (recommended): apply the provided Secret manifest and reference it implicitly
+
+1) Copy and edit `dsx_connect/deploy/helm/auth-enrollment-secret.yaml` (set your namespace and token), then apply:
+
+```bash
+kubectl apply -f dsx_connect/deploy/helm/auth-enrollment-secret.yaml
+```
+
+2) Enable auth in values without embedding the token:
+
+```yaml
+dsx-connect-api:
+  auth:
+    enabled: true
+    enrollment:
+      key: ENROLLMENT_TOKEN
+      # value: ""   # leave empty to use the external Secret created above
+```
+
+Option B (demo only): embed the token so the chart creates the Secret for you
+
+```yaml
+dsx-connect-api:
+  auth:
+    enabled: true
+    enrollment:
+      key: ENROLLMENT_TOKEN
+      value: "<strong-random>"
+```
+
+Connector charts:
+- Set `auth.enabled=true` to verify HMAC on private routes.
+- Provide the same token to connectors via `dsxConnectEnrollment.secretName/key` to set `DSXCONNECT_ENROLLMENT_TOKEN`.
+- Expose only `/webhook_event` via Ingress; use NetworkPolicies to allow traffic from dsx‑connect and your ingress controller.
+
+
+Notes:
+- Swagger remains available for docs; “Try it out” will not work for HMAC‑protected connector endpoints.
+- Frontend (user) auth is separate (recommend an Ingress with OIDC/oauth2‑proxy in production).
+
+### DIANNA API Token via Secret (required if DIANNA workers enabled)
+
+For production, source the DIANNA API token from a Kubernetes Secret rather than embedding it in values or passing it on the CLI.
 
 1) Create the Secret (example manifest provided):
 
@@ -60,30 +119,38 @@ For production, source the DIANNA API token from a Kubernetes Secret rather than
      --from-literal=apiToken="$DI_TOKEN"
    ```
 
-2) Install/upgrade Helm release and pull the token from the Secret at runtime:
+2) Configure values (preferred) and install:
 
-   Note: this feeds the token into `global.dianna.apiToken`. Helm will store release values in history; assess this trade‑off for your environment or use a GitOps secret‑management flow.
+   Set DIANNA values in a values file (avoid passing secrets on the CLI). Most defaults are reasonable; typically you only set `managementUrl` and enable the DI worker.
+
+   ```yaml
+   # values-dianna.yaml
+   dsx-connect-dianna-worker:
+     dianna:
+       managementUrl: "https://di.example.com"
+       # apiToken: "${DI_TOKEN_FROM_SECRET}"  # provided by Secret management workflow
+     enabled: true
+     celery:
+       concurrency: 2
+   ```
+
+   Install:
 
    ```bash
    helm upgrade --install dsx dsx_connect/deploy/helm \
+     -f dsx_connect/deploy/helm/values.yaml \
+     -f values-dianna.yaml \
      --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://my-dsxa.example.com/scan/binary/v2 \
-     --set-string global.dianna.managementUrl=https://di.example.com \
-     --set-string global.dianna.apiToken="$(kubectl -n <ns> get secret di-api -o jsonpath='{.data.apiToken}' | base64 -d)" \
-     --set dsx-connect-dianna-worker.enabled=true \
-     --set dsx-connect-dianna-worker.celery.concurrency=2 \
-     --set global.dianna.pollResultsEnabled=true \
-     --set global.dianna.pollIntervalSeconds=5 \
-     --set global.dianna.pollTimeoutSeconds=900 \
      --set-string global.image.tag=<version>
    ```
 
 3) Queue name and scaling:
 
-   - Queue defaults to `<DSXCONNECT_APP_ENV>.dsx_connect.analyze.dianna`.
-   - Override with `dsx-connect-dianna-worker.celery.queue` if needed.
+   - Queue defaults to `dev.dsx_connect.analyze.dianna` (prefix derived automatically).
+   - Override with `dsx-connect-dianna-worker.celery.queue` if you run multiple isolated environments against the same Redis broker.
   - Scale parallelism via `dsx-connect-dianna-worker.celery.concurrency`.
 
-### Notes on Concurrency and Replicas
+## Concurrency and Replicas
 
 Workers scale with two knobs. Use them together for best results:
 
@@ -119,41 +186,90 @@ Guidance:
 
 This chart is flexible. The following methods show how to deploy it, from a simple test to a production-grade workflow.
 
+Note on namespaces: the examples below assume the `default` namespace. If you deploy to a different namespace, add `-n <namespace>` to your `kubectl` and `helm upgrade --install` commands, and create Secrets in that namespace.
+
 ### Method 1: Quick Start (Command-Line Overrides)
 
 This method is best for quick, temporary deployments, like for local testing. It uses the `--set` flag to provide configuration directly on the command line.
 
 **1. Create the TLS Certificate Secret (if enabling TLS):**
-   If you plan to enable TLS for the `dsx-connect-api` server, create your TLS secret first.
+   If you plan to enable TLS for the `dsx-connect-api` server, create a TLS Secret named after the component: `<release>-dsx-connect-api-tls`.
    ```bash
-   kubectl create secret tls my-dsx-connect-api-tls --cert=tls.crt --key=tls.key
+   # Example for release name "dsx" (namespace default)
+   kubectl create secret tls dsx-dsx-connect-api-tls --cert=tls.crt --key=tls.key
    ```
 
-**2. Deploy the Stack:**
+**2. (Optional) Create the Enrollment Token Secret (if enabling Authentication):**
+   Apply the provided auth enrollment secret manifest (edit namespace/token first). The chart expects a Secret named `<release>-dsx-connect-api-auth-enrollment`.
+   ```bash
+   # Example for release name "dsx": the Secret name must be dsx-dsx-connect-api-auth-enrollment
+   kubectl apply -f dsx_connect/deploy/helm/auth-enrollment-secret.yaml
+   ```
+
+**3. (Optional) Create the DIANNA API Secret (if enabling DI workers):**
+   Apply the provided DI secret manifest (edit token/namespace first):
+   ```bash
+   kubectl apply -f dsx_connect/deploy/helm/di-api-secret.yaml
+   ```
+
+**4. Deploy the Stack:**
    *   **Simplest deployment: deploys DSXA scanner and dsx-connect on the same cluster:**
         Development mode deployment with a local DSXA scanner.  Use the `values-dev.yaml` (or copy it) to set deploy dsx-connect with a dsxa-scanner.  
         You can change the values in `values-dev.yaml` to match your environment,
         but, overriding values in the command line allows for flexible deployment.  In this case the only 
         setting that needs to be set is global.image.tag.
        ```bash 
-       helm upgrade --install dsx . -f values-dev.yaml --set-string global.image.tag=0.2.82
+       helm upgrade --install dsx . -n <namespace> -f values-dev.yaml --set-string global.image.tag=0.2.82
        ```
 
    *   **Using an external DSX/A Scanner, HTTP deployment:**
         In this case, using the values.yaml (the default), DSXA scanner is not deployed, so the scan binary URL must be set. 
         You can either edit the values.yaml, or copy it and edit, or simply pass in settings on the helm arguments:
        ```bash
-       helm upgrade --install dsx -f values.yaml --set-string global.image.tag=0.2.82
+       helm upgrade --install dsx -n <namespace> -f values.yaml --set-string global.image.tag=0.2.82
          --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=http://my-dsxa-url:5000/scan/binary/v2
        ```
 
    *   **For a TLS-enabled deployment:**
        ```bash
-       helm upgrade --install dsx . \
+       helm upgrade --install dsx . -n <namespace> \
          --set-string
          --set dsx-connect-api.tls.enabled=true \
          --set dsx-connect-api.tls.secretName=my-dsx-connect-api-tls \
          --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://my-dsxa.example.com/scan/binary/v2
+
+   *   **For an Authentication-enabled (enrollment) deployment:**
+       ```bash
+       helm upgrade --install dsx . -n <namespace> \
+         --set-string global.image.tag=0.2.82 \
+         --set dsx-connect-api.auth.enabled=true
+       ```
+
+   *   **For a DIANNA-enabled deployment:**
+       ```bash
+       helm upgrade --install dsx . -n <namespace> \
+         --set-string global.image.tag=0.2.82 \
+         --set dsx-connect-dianna-worker.enabled=true \
+         --set-string dsx-connect-dianna-worker.dianna.managementUrl=https://di.example.com
+       ```
+
+   *   **Combined TLS + Authentication + DIANNA (CLI):**
+       ```bash
+       # Pre-create the required secrets
+       kubectl apply -f dsx_connect/deploy/helm/auth-enrollment-secret.yaml
+       kubectl apply -f dsx_connect/deploy/helm/di-api-secret.yaml
+       kubectl create secret tls my-dsx-connect-api-tls --cert=tls.crt --key=tls.key
+
+       # Install with TLS + Auth + DIANNA enabled
+       helm upgrade --install dsx . \
+         --set-string global.image.tag=0.2.82 \
+         --set-string global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL=https://external-dsxa.example.com/scan/binary/v2 \
+         --set dsx-connect-api.tls.enabled=true \
+         --set dsx-connect-api.tls.secretName=my-dsx-connect-api-tls \
+         --set dsx-connect-api.auth.enabled=true \
+         --set dsx-connect-dianna-worker.enabled=true \
+         --set-string dsx-connect-dianna-worker.dianna.managementUrl=https://di.example.com
+       ```
        ```
 
 ### Production Install (recommended flags)
@@ -172,10 +288,18 @@ helm upgrade --install dsx dsx_connect/deploy/helm \
 This is the most common and recommended method for managing deployments. It involves creating a dedicated values file for each instance of the connector.
 
 **1. Create the Required Secrets:**
-   If enabling TLS for the API, create your TLS secret.
-   ```bash
-   kubectl create secret tls my-dsx-connect-api-tls --cert=tls.crt --key=tls.key
-   ```
+   - TLS (if enabling HTTPS for the API):
+     ```bash
+     kubectl create secret tls my-dsx-connect-api-tls --cert=tls.crt --key=tls.key
+     ```
+   - Enrollment token (if enabling Authentication):
+     ```bash
+     kubectl apply -f dsx_connect/deploy/helm/auth-enrollment-secret.yaml
+     ```
+   - DIANNA API token (if enabling DI workers):
+     ```bash
+     kubectl apply -f dsx_connect/deploy/helm/di-api-secret.yaml
+     ```
 
 **2. Create a Custom Values File:**
    Create a new file, for example `my-dsx-connect-values.yaml`, to hold your configuration.
@@ -185,10 +309,8 @@ This is the most common and recommended method for managing deployments. It invo
 
    global:
      env:
-       DSXCONNECT_APP_ENV: prod
-       DSXCONNECTOR_API_KEY: "your-prod-api-key"
        # REQUIRED when dsxa-scanner.enabled=false (default): point to your external DSXA
-        DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://external-dsxa:5000/scan/binary/v2"
+       DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://external-dsxa:5000/scan/binary/v2"
      dianna:
        managementUrl: "https://di.example.com"           # DSX management console base URL
        apiToken: "${DI_TOKEN_FROM_SECRET}"               # Prefer using a Secret + envFrom in production
@@ -206,6 +328,11 @@ This is the most common and recommended method for managing deployments. It invo
      tls:
        enabled: true
        secretName: "my-dsx-connect-api-tls"
+     auth:
+       enabled: true
+       enrollment:
+         key: ENROLLMENT_TOKEN
+         # value: ""  # leave empty when providing Secret via auth-enrollment-secret.yaml
      env:
        LOG_LEVEL: info
 
@@ -221,8 +348,8 @@ This is the most common and recommended method for managing deployments. It invo
      env:
        LOG_LEVEL: info
      celery:
-       # override only if you changed naming; default derives from DSXCONNECT_APP_ENV
-       # queue: "prod.dsx_connect.analyze.dianna"
+       # override only if you changed naming; default queue prefix is "dev"
+       # queue: "custom-prefix.dsx_connect.analyze.dianna"
        concurrency: 2
 
   # Example: do not hardcode secrets here in production. Prefer pulling from a
@@ -236,6 +363,60 @@ This is the most common and recommended method for managing deployments. It invo
    ```bash
    helm install dsx-connect . -f my-dsx-connect-values.yaml
    ```
+
+#### Example: Combined TLS + Authentication + DIANNA values (production)
+
+```yaml
+# values-prod.yaml
+global:
+  env:
+    DSXCONNECT_SCANNER__SCAN_BINARY_URL: "https://external-dsxa.example.com/scan/binary/v2"
+  dianna:
+    managementUrl: "https://di.example.com"
+    # apiToken is typically provided via a Secret (see di-api-secret.yaml)
+    apiToken: "${DI_TOKEN_FROM_SECRET}"
+    verifyTls: true
+    chunkSize: 4194304
+    timeout: 60
+    autoOnMalicious: false
+
+dsx-connect-api:
+  tls:
+    enabled: true
+    secretName: "my-dsx-connect-api-tls"
+  auth:
+    enabled: true
+    enrollment:
+      key: ENROLLMENT_TOKEN
+      # value: ""  # leave empty; provide Secret via auth-enrollment-secret.yaml
+  env:
+    LOG_LEVEL: info
+
+dsx-connect-scan-request-worker:
+  enabled: true
+  env:
+    LOG_LEVEL: info
+  celery:
+    concurrency: 2
+
+dsx-connect-dianna-worker:
+  enabled: true
+  env:
+    LOG_LEVEL: info
+  celery:
+    concurrency: 2
+```
+
+Install:
+
+```bash
+kubectl apply -f dsx_connect/deploy/helm/auth-enrollment-secret.yaml
+kubectl apply -f dsx_connect/deploy/helm/di-api-secret.yaml
+kubectl create secret tls my-dsx-connect-api-tls --cert=tls.crt --key=tls.key
+
+helm upgrade --install dsx . -f values-prod.yaml \
+  --set-string global.image.tag=<version>
+```
 
 ### Method 3: Production-Grade Deployment (GitOps & CI/CD)
 
@@ -302,8 +483,7 @@ To override a default environment variable, specify it under the `env` section o
 
 **Commonly Overridden Variables (and their defaults):**
 
-*   **`DSXCONNECT_APP_ENV`**: `dev` (used for Celery queue naming)
-*   **`DSXCONNECTOR_API_KEY`**: `api-key-NOT-FOR-PRODUCTION`
+*   API keys removed (use JWT/HMAC flows instead)
 *   **`DSXCONNECT_SCANNER__SCAN_BINARY_URL`**: REQUIRED when `dsxa-scanner.enabled=false` (the default). If you enable `dsxa-scanner`, templates compute `http(s)://<release>-dsxa-scanner:<port>/scan/binary/v2` using `global.scanner`.
 *   **`DSXCONNECT_WORKERS__BROKER`**: `redis://redis:6379/5`
 *   **`DSXCONNECT_WORKERS__BACKEND`**: `redis://redis:6379/6`
@@ -340,7 +520,7 @@ It is important to understand that even with `verify=false`, the connection is s
     ```
 
 3.  **Configure the Client's Helm Chart:**
-    Refer to the client's (e.g., `connectors/azure_blob_storage/deploy/helm/README.md`) documentation for how to configure its `DSXCONNECTOR_CA_BUNDLE` and `DSXCONNECTOR_VERIFY_TLS` settings to trust this CA.
+    Refer to the client's (e.g., `connectors/azure_blob_storage/deploy/helm/DEVELOPER_README.md`) documentation for how to configure its `DSXCONNECTOR_CA_BUNDLE` and `DSXCONNECTOR_VERIFY_TLS` settings to trust this CA.
 
 ---
 
@@ -363,6 +543,21 @@ After deploying with any method, you can check the status of your release.
 
 For a full list of configurable parameters for all subcharts, see the `values.yaml` file.
 
+Commonly tuned values (by component):
+
+- Global
+  - `global.image.tag`: pin a specific image tag for all components.
+  - `global.env.DSXCONNECT_SCANNER__SCAN_BINARY_URL`: REQUIRED when `dsxa-scanner.enabled=false` (external DSXA).
+  - `dsx-connect-dianna-worker.dianna.*`: DIANNA settings for the DI worker; map directly to `DSXCONNECT_DIANNA__*` env.
+- API
+  - `dsx-connect-api.tls.enabled`: enable HTTPS for the API. Certs are loaded from Secret `<release>-dsx-connect-api-tls` and mounted at `/app/certs`; HTTPS listens on 443.
+  - `dsx-connect-api.auth.enabled` + `dsx-connect-api.auth.enrollment.{key,value}`: enable HMAC auth and set enrollment token.
+- Workers
+  - `dsx-connect-*-worker.celery.concurrency`: per‑worker parallelism inside a pod.
+  - `dsx-connect-*-worker.replicaCount`: number of pods (horizontal scale/HA).
+- DIANNA
+  - `dsx-connect-dianna-worker`: set `enabled`, `celery.concurrency`, and the `dianna.*` values for this worker.
+
 ```
 ## Minimal configuration
 
@@ -371,8 +566,6 @@ For most deployments you only need to set a few environment values once, at the 
 ```
 global:
   env:
-    DSXCONNECT_APP_ENV: dev
-    DSXCONNECTOR_API_KEY: api-key-NOT-FOR-PRODUCTION
     # Optional: only set if pointing to an external DSXA; otherwise dsx-connect auto-points to the in-cluster DSXA service when enabled.
     # DSXCONNECT_SCANNER__SCAN_BINARY_URL: "http://<external-dsxa-host>:5000/scan/binary/v2"
 ```

@@ -1,0 +1,56 @@
+site_name: DSX-Connect
+site_description: Modular, scalable file scanning orchestration with pluggable connectors
+repo_url: https://github.com/your-org/dsx-connect
+theme:
+  name: material
+  logo: assets/dsx-connect-icon.svg
+  favicon: assets/dsx-connect-icon.svg
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.path
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+nav:
+  - Home: index.md
+  - Overview: overview.md
+  - Operations:
+      - Connector State KV: operations/kv-state.md
+  - Connectors:
+      - Index: connectors/index.md
+      - M365 Email (Design): connectors/m365-email.md
+      - Filesystem (Overview): connectors/filesystem.md
+  - Deployment:
+      - dsx-connect (Core): deployment/docker/dsx-connect.md
+      - Docker Quickstart: deployment/docker/quickstart.md
+      - Docker Guides (per connector):
+          - AWS S3: deployment/docker/aws-s3.md
+          - Azure Blob Storage: deployment/docker/azure-blob.md
+          - Filesystem: deployment/docker/filesystem.md
+          - Google Cloud Storage: deployment/docker/google-cloud-storage.md
+          - SharePoint: deployment/docker/sharepoint.md
+          - M365 Email: deployment/docker/m365-mail.md
+  - Reference:
+      - Assets & Filters: reference/assets-and-filters.md
+      - Filters (Details): reference/filters.md
+plugins:
+  - search
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+extra_javascript:
+  - https://unpkg.com/mermaid@10.9.1/dist/mermaid.min.js

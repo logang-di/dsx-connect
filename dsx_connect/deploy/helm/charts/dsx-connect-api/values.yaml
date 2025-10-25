@@ -13,9 +13,6 @@ service:
 
 tls:
   enabled: false
-  port: 443
-  secretName: ""
-  mountPath: /app/certs
 
 resources: {}
 

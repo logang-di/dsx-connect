@@ -127,7 +127,7 @@ class AzureBlobClient:
 
 
 
-    def keys(self, container: str, base_prefix: str = "", filter_str: str = ""):
+    def keys(self, container: str, base_prefix: str = "", filter_str: str = "", page_size: int | None = None):
         """
         Yield blob keys from a container applying DSXCONNECTOR_FILTER rules.
 
@@ -163,18 +163,73 @@ class AzureBlobClient:
                 seen.add(key)
                 yield {'Key': key, 'Size': getattr(blob, 'size', None)}
 
+            def _iter_list(name_starts_with: str | None = None):
+                if page_size and page_size > 0:
+                    # Try various SDK signatures for page sizing across azure-core/storage versions
+                    if name_starts_with:
+                        try:
+                            pages = container_client.list_blobs(name_starts_with=name_starts_with).by_page(page_size=page_size)
+                            for page in pages:
+                                for blob in page:
+                                    yield blob
+                            return
+                        except TypeError:
+                            pass
+                        try:
+                            pages = container_client.list_blobs(name_starts_with=name_starts_with).by_page(results_per_page=page_size)
+                            for page in pages:
+                                for blob in page:
+                                    yield blob
+                            return
+                        except TypeError:
+                            pass
+                        try:
+                            # Some versions accept results_per_page on list_blobs directly
+                            for blob in container_client.list_blobs(name_starts_with=name_starts_with, results_per_page=page_size):
+                                yield blob
+                            return
+                        except TypeError:
+                            pass
+                    else:
+                        try:
+                            pages = container_client.list_blobs().by_page(page_size=page_size)
+                            for page in pages:
+                                for blob in page:
+                                    yield blob
+                            return
+                        except TypeError:
+                            pass
+                        try:
+                            pages = container_client.list_blobs().by_page(results_per_page=page_size)
+                            for page in pages:
+                                for blob in page:
+                                    yield blob
+                            return
+                        except TypeError:
+                            pass
+                        try:
+                            for blob in container_client.list_blobs(results_per_page=page_size):
+                                yield blob
+                            return
+                        except TypeError:
+                            pass
+                else:
+                    if name_starts_with:
+                        for blob in container_client.list_blobs(name_starts_with=name_starts_with):
+                            yield blob
+                    else:
+                        for blob in container_client.list_blobs():
+                            yield blob
+
             if hints:
                 for prefix in sorted(set(hints)):
                     eff = f"{bp}{prefix}" if bp else prefix
-                    for blob in container_client.list_blobs(name_starts_with=eff):
+                    for blob in _iter_list(name_starts_with=eff):
                         for item in _emit(blob):
                             yield item
             else:
-                if bp:
-                    it = container_client.list_blobs(name_starts_with=bp)
-                else:
-                    it = container_client.list_blobs()
-                for blob in it:
+                start = bp if bp else None
+                for blob in _iter_list(name_starts_with=start):
                     for item in _emit(blob):
                         yield item
         except Exception as e:

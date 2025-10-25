@@ -15,12 +15,14 @@ service:
   type: ClusterIP
   port: 80
 
+auth:
+  enabled: false
+  keyIdKey: HMAC_KEY_ID
+  secretKey: HMAC_SECRET
+  clockSkewSeconds: 60
+
 tls:
   enabled: false
-  port: 443
-  # The name of the k8s secret that contains the TLS certificate and key
-  secretName: ""
-  mountPath: "/app/certs"
 
 env:
   LOG_LEVEL: "debug"
@@ -41,6 +43,21 @@ env:
   DSXCONNECTOR_ASSET: ""                      # bucket name
   DSXCONNECTOR_FILTER: ""                     # optional prefixes, etc.
   DSXCONNECTOR_DATA_DIR: "/app/data"
+
+ingressWebhook:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+networkPolicy:
+  enabled: false
+  allowFrom: []
+
+dsxConnectEnrollment:
+  secretName: ""
+  key: ENROLLMENT_TOKEN
 
 dataVolume:
   enabled: true

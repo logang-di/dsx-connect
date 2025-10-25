@@ -33,7 +33,6 @@ services:
 
       # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
       # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
-      #DSXCONNECTOR_API_KEY: "api-key-NOT-FOR-PRODUCTION"
 
       # SharePoint auth and target
       DSXCONNECTOR_SP_TENANT_ID: "${SP_TENANT_ID}"

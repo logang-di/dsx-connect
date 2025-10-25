@@ -1,0 +1,48 @@
+image:
+  repository: dsxconnect/m365-mail-connector
+  pullPolicy: IfNotPresent
+  tag: ""
+
+service:
+  type: ClusterIP
+  port: 80
+
+auth:
+  enabled: false
+  keyIdKey: HMAC_KEY_ID
+  secretKey: HMAC_SECRET
+  clockSkewSeconds: 60
+
+dsxConnectEnrollment:
+  secretName: ""
+  key: ENROLLMENT_TOKEN
+
+tls:
+  enabled: false
+
+env:
+  LOG_LEVEL: "debug"
+  # DSXCONNECTOR_DSX_CONNECT_URL: "http://dsx-connect-api"
+  # Graph auth
+  # DSXCONNECTOR_TENANT_ID: ""
+  # DSXCONNECTOR_CLIENT_ID: ""
+  # DSXCONNECTOR_CLIENT_SECRET: ""
+  # Optional actions/policy
+  # DSXCONNECTOR_ENABLE_ACTIONS: "false"
+  # DSXCONNECTOR_ACTION_MOVE_FOLDER: "Quarantine"
+  # DSXCONNECTOR_SUBJECT_TAG_PREFIX: "[Malicious] "
+  # DSXCONNECTOR_BANNER_HTML: "<div>Attachment removed by security policy.</div>"
+
+workers: 1
+replicaCount: 1
+
+ingressWebhook:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+networkPolicy:
+  enabled: false
+  allowFrom: []

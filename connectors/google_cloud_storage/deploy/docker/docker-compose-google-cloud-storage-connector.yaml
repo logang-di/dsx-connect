@@ -30,12 +30,14 @@ services:
       DSXCONNECTOR_FILTER: ""  # rsync-like include/exclude patterns; leave empty to scan all
 
       DSXCONNECTOR_DATA_DIR: "/app/data"
+        # These definitions are for simple docker compose deployments. Proper production
+        # deployments should use deployment mechanisms such as helm charts/k8s and secret managers.
       GOOGLE_APPLICATION_CREDENTIALS: /app/creds/gcp-sa.json
       GOOGLE_CLOUD_PROJECT: your-project-id
 
         # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
         # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
-      DSXCONNECTOR_API_KEY: ""
+      # API key removed (use JWT/HMAC)
     networks:
       dsx-network:
         aliases:

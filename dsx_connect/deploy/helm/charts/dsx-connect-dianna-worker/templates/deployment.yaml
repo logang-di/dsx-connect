@@ -44,11 +44,9 @@ spec:
             {{ $svc := default (printf "%s-dsxa-scanner" $.Release.Name) $scanner.serviceName }}
             {{ $port := default 5000 $scanner.port }}
             {{ $scheme := default "http" $scanner.scheme }}
-            {{- $di := (default (dict) $.Values.global.dianna) }}
+            {{- $di := (default (dict) .Values.dianna) }}
             - name: DSXCONNECT_APP_ENV
               value: {{ $env.DSXCONNECT_APP_ENV | default "dev" | quote }}
-            - name: DSXCONNECTOR_API_KEY
-              value: {{ $env.DSXCONNECTOR_API_KEY | default "api-key-NOT-FOR-PRODUCTION" | quote }}
             - name: DSXCONNECT_SCANNER__SCAN_BINARY_URL
               value: {{ $env.DSXCONNECT_SCANNER__SCAN_BINARY_URL | default (printf "%s://%s:%d/scan/binary/v2" $scheme $svc $port) | quote }}
             - name: DSXCONNECT_WORKERS__BROKER
@@ -110,7 +108,7 @@ spec:
             {{- end }}
             {{- with $env }}
             {{- range $key, $value := . }}
-            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECTOR_API_KEY" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL" "DSXCONNECT_DIANNA__MANAGEMENT_URL" "DSXCONNECT_DIANNA__API_TOKEN" "DSXCONNECT_DIANNA__VERIFY_TLS" "DSXCONNECT_DIANNA__CA_BUNDLE" "DSXCONNECT_DIANNA__CHUNK_SIZE" "DSXCONNECT_DIANNA__TIMEOUT" "DSXCONNECT_DIANNA__AUTO_ON_MALICIOUS" "DSXCONNECT_DIANNA__POLL_RESULTS_ENABLED" "DSXCONNECT_DIANNA__POLL_INTERVAL_SECONDS" "DSXCONNECT_DIANNA__POLL_TIMEOUT_SECONDS")) }}
+            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL" "DSXCONNECT_DIANNA__MANAGEMENT_URL" "DSXCONNECT_DIANNA__API_TOKEN" "DSXCONNECT_DIANNA__VERIFY_TLS" "DSXCONNECT_DIANNA__CA_BUNDLE" "DSXCONNECT_DIANNA__CHUNK_SIZE" "DSXCONNECT_DIANNA__TIMEOUT" "DSXCONNECT_DIANNA__AUTO_ON_MALICIOUS" "DSXCONNECT_DIANNA__POLL_RESULTS_ENABLED" "DSXCONNECT_DIANNA__POLL_INTERVAL_SECONDS" "DSXCONNECT_DIANNA__POLL_TIMEOUT_SECONDS")) }}
             - name: {{ $key }}
               value: "{{ $value }}"
             {{- end }}

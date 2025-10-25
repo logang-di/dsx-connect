@@ -46,19 +46,7 @@ spec:
                 echo 'waiting for rsyslog...'; sleep 2;
               done
       {{- end }}
-      {{- if .Values.dataVolume.enabled }}
-      volumes:
-        - name: app-data
-          {{- if .Values.dataVolume.existingClaim }}
-          persistentVolumeClaim:
-            claimName: {{ .Values.dataVolume.existingClaim | quote }}
-          {{- else if .Values.dataVolume.hostPath }}
-          hostPath:
-            path: {{ .Values.dataVolume.hostPath | quote }}
-          {{- else }}
-          emptyDir: {}
-          {{- end }}
-      {{- end }}
+      
       containers:
         - name: dsx-connect-results-worker
           image: "{{ default .Values.image.repository $.Values.global.image.repository }}:{{ coalesce .Values.image.tag $.Values.global.image.tag .Chart.AppVersion }}"
@@ -74,23 +62,16 @@ spec:
             "-Q", "{{ $queue }}",
             "--concurrency", "{{ .Values.celery.concurrency }}"
           ]
-          {{- if .Values.dataVolume.enabled }}
-          volumeMounts:
-            - name: app-data
-              mountPath: "/app/data"
-              readOnly: false
-          {{- end }}
+          
           env:
             {{ $env := merge (default (dict) $.Values.global.env) (default (dict) .Values.env) }}
             {{ $scanner := default (dict) $.Values.global.scanner }}
             {{ $svc := default (printf "%s-dsxa-scanner" $.Release.Name) $scanner.serviceName }}
             {{ $port := default 5000 $scanner.port }}
             {{ $scheme := default "http" $scanner.scheme }}
-            {{- $di := (default (dict) $.Values.global.dianna) }}
+            {{- $di := (dict) }}
             - name: DSXCONNECT_APP_ENV
               value: {{ $env.DSXCONNECT_APP_ENV | default "dev" | quote }}
-            - name: DSXCONNECTOR_API_KEY
-              value: {{ $env.DSXCONNECTOR_API_KEY | default "api-key-NOT-FOR-PRODUCTION" | quote }}
             - name: DSXCONNECT_SCANNER__SCAN_BINARY_URL
               value: {{ $env.DSXCONNECT_SCANNER__SCAN_BINARY_URL | default (printf "%s://%s:%d/scan/binary/v2" $scheme $svc $port) | quote }}
             - name: DSXCONNECT_WORKERS__BROKER
@@ -144,7 +125,7 @@ spec:
             {{- end }}
             {{- with $env }}
             {{- range $key, $value := . }}
-            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECTOR_API_KEY" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT")) }}
+            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_URL" "DSXCONNECT_SCAN_RESULT_TASK_WORKER__SYSLOG_SERVER_PORT")) }}
             - name: {{ $key }}
               value: "{{ $value }}"
             {{- end }}

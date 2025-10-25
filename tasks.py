@@ -5,6 +5,7 @@ from pathlib import Path
 from invoke import task, Exit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re as _re
+## Note: test-related imports and tasks have been moved to test-tasks.py
 
 # ---------- Edit me ----------
 # Explicit, human-edited list of connectors (folder names under ./connectors)
@@ -15,7 +16,7 @@ CONNECTORS_CONFIG = [
     {"name": "filesystem", "enabled": True},
     {"name": "google_cloud_storage", "enabled": True},
     {"name": "sharepoint", "enabled": True},
-    #{"name": "icap_passthrough", "enabled": True},
+    {"name": "m365_mail", "enabled": False}
 ]
 # ---------- /Edit me ----------
 
@@ -308,6 +309,9 @@ def release_connectors(
     if errors:
         bad = ", ".join([f"{n}:{code}" for n, code in errors])
         raise Exit(f"Some releases failed: {bad}", code=1)
+
+
+## Note: test tasks moved to test-tasks.py. Use: invoke -c test-tasks <task>
 
 
 @task(pre=[generate_manifest])

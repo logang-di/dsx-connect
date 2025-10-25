@@ -53,9 +53,6 @@ services:
       DSXCONNECTOR_DATA_DIR: "/app/data"
 
       DSXCONNECTOR_ASSET_DISPLAY_NAME: *scan-folder
-      # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
-      # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
-      DSXCONNECT_BOOTSTRAP_API_KEY: ""
     networks:
       dsx-network:
         aliases:

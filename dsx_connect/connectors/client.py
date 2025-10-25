@@ -9,8 +9,8 @@ try:  # pragma: no cover - conditional import to support monkeypatch+reload in t
 except NameError:  # pragma: no cover
     import httpx
 
-from dsx_connect.config import APP_ENV, get_auth_config   # <- use DSX app env, not AuthConfig.app_env
-from dsx_connect.security.hmac import make_hmac_header
+from dsx_connect.config import get_config
+from shared.auth.hmac import make_hmac_header
 from shared.routes import service_url
 
 HttpMethod = Literal["GET","POST","PUT","PATCH","DELETE"]
@@ -22,8 +22,7 @@ _sync_lock = threading.Lock()
 _async_lock = asyncio.Lock()
 
 # Resolve environment once (it's a small helper over get_config())
-DEV = APP_ENV == "dev"
-_AUTH = get_auth_config()  # kept in case you later want defaults from auth settings
+_CFG = get_config()
 
 def _signed_headers(
         url: str,
@@ -31,15 +30,10 @@ def _signed_headers(
         body: bytes,
         key_id: Optional[str],
         secret: Optional[str],
-        dev: bool,
 ) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    if dev:
-        return headers
-
-    # In prod, require per-connector credentials (or inject your fallback here)
     if not key_id or not secret:
-        raise RuntimeError("Missing connector HMAC credentials")
+        return headers
 
     # Path + optional query for signature
     from urllib.parse import urlsplit
@@ -51,12 +45,26 @@ def _signed_headers(
 
 def _conn_parts(conn: Union[str, Any]) -> Tuple[str, Optional[str], Optional[str]]:
     if isinstance(conn, str):
+        # No global fallback; HMAC creds are provisioned per-connector
         return conn, None, None
-    return (
-        getattr(conn, "url", conn),
-        getattr(conn, "hmac_key_id", None),
-        getattr(conn, "hmac_secret", None),
-    )
+    # Prefer explicit per-connector creds when present; else fallback to global outbound
+    url = getattr(conn, "url", conn)
+    key_id = getattr(conn, "hmac_key_id", None)
+    secret = getattr(conn, "hmac_secret", None)
+    # Fallback: if missing, try to look up from Redis by connector UUID (server-side provisioning)
+    if (not key_id or not secret) and hasattr(conn, "uuid") and getattr(conn, "uuid", None):
+        try:
+            import redis  # sync client
+            from dsx_connect.messaging.connector_keys import ConnectorKeys
+            r = redis.Redis.from_url(str(get_config().redis_url), decode_responses=True)
+            hm = r.hgetall(ConnectorKeys.config(str(getattr(conn, "uuid"))))
+            if isinstance(hm, dict):
+                key_id = key_id or hm.get("hmac_key_id")
+                secret = secret or hm.get("hmac_secret")
+        except Exception:
+            pass
+    # Keys are expected to be provisioned per-connector at registration
+    return (url, key_id, secret)
 
 
 @asynccontextmanager
@@ -79,7 +87,7 @@ async def get_async_connector_client(conn):
             else:
                 full_url = base_url
             body = b"" if json_body is None else json.dumps(json_body, separators=(",", ":")).encode()
-            hdrs = _signed_headers(full_url, method, body, key_id, secret, DEV)
+            hdrs = _signed_headers(full_url, method, body, key_id, secret)
             if headers:
                 hdrs.update(headers)
             # Since full_url already contains params (if any), do not also pass params to httpx
@@ -134,7 +142,7 @@ def get_connector_client(conn):
             else:
                 full_url = base_url
             body = b"" if json_body is None else json.dumps(json_body, separators=(",", ":")).encode()
-            hdrs = _signed_headers(full_url, method, body, key_id, secret, DEV)
+            hdrs = _signed_headers(full_url, method, body, key_id, secret)
             if headers:
                 hdrs.update(headers)
             return http.request(method, full_url, content=(body or None), headers=hdrs)

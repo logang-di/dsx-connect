@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from redis.exceptions import ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
 
 from shared.dsx_logging import dsx_logging
+from dsx_connect.app.auth_hmac_inbound import require_dsx_hmac_inbound
 from shared.routes import (API_PREFIX_V1, DSXConnectAPI, ScanPath,
                            api_path, Action, route_name, route_path)
 from shared.models.connector_models import ScanRequestModel
@@ -40,6 +41,8 @@ async def post_scan_request(
         request: Request,
         idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
         job_name: Optional[str] = Header(default=None, alias="X-Job-Name")) -> StatusResponse:
+    # Perform HMAC check outside the broad try so auth failures propagate as 401
+    await require_dsx_hmac_inbound(request)
     try:
         dsx_logging.debug(f"Queuing scan task {scan_request_info.location}")
 
@@ -145,6 +148,19 @@ async def post_scan_request(
             description="Failed to queue scan task",
             message=str(e),
         )
+
+
+# Lightweight protected endpoint for HMAC verification that does not enqueue to Celery
+@router.post(
+    route_path(DSXConnectAPI.SCAN_PREFIX.value, "auth_check"),
+    name=route_name(DSXConnectAPI.SCAN_PREFIX, ScanPath.REQUEST, Action.HEALTH),
+    description="Verify DSX-HMAC signing without hitting Celery.",
+    status_code=200,
+    response_model=StatusResponse,
+)
+async def post_scan_auth_check(request: Request) -> StatusResponse:
+    await require_dsx_hmac_inbound(request)
+    return StatusResponse(status=StatusResponseEnum.SUCCESS, message="auth_ok", description="HMAC verified")
 
 
 @router.get(

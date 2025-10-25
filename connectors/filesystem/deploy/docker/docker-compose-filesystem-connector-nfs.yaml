@@ -57,7 +57,7 @@ services:
       DSXCONNECTOR_ASSET_DISPLAY_NAME: "/mnt/fileshare/scanshare"
       # This is definition is for docker compose deployments for dev, demos, POVs, and testing. Proper production
       # deployments should use deployment mechanisms (helm charts/k8s) where API Keys can be defined as secrets
-      DSXCONNECT_BOOTSTRAP_API_KEY: ""
+      # Bootstrap API key removed (use JWT enrollment)
     networks:
       dsx-network:
         aliases:

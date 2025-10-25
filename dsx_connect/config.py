@@ -17,7 +17,7 @@ class AppEnv(str, Enum):
 
 
 class AuthConfig(BaseSettings):
-
+    enabled: bool = False
     enrollment_token: str = "dev-enroll"
 
     jwt_secret: str = "dev-change-me"
@@ -167,6 +167,8 @@ class DSXConnectConfig(BaseSettings):
     redis_url: AnyUrl = "redis://localhost:6379/3"
     syslog: SyslogConfig = SyslogConfig()
     dianna: DiannaConfig = DiannaConfig()
+
+    # Outbound HMAC provisioned per-connector at registration; no global required
 
     # TLS/SSL for API server
     use_tls: bool = False

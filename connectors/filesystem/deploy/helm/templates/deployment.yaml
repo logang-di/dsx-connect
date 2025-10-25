@@ -37,7 +37,7 @@ spec:
         {{- if .Values.tls.enabled }}
         - name: tls-certs
           secret:
-            secretName: {{ .Values.tls.secretName | quote }}
+            secretName: {{ printf "%s-tls" (include "filesystem-connector.fullname" .) | quote }}
         {{- end }}
         {{- if .Values.scanVolume.enabled }}
         - name: scan-data
@@ -68,21 +68,44 @@ spec:
             - "{{ $workers }}"
           args:
             - "--port"
-            - "{{- if .Values.tls.enabled -}}{{ .Values.tls.port }}{{- else -}}{{ .Values.service.port }}{{- end -}}"
+            - "{{- if .Values.tls.enabled -}}443{{- else -}}{{ .Values.service.port }}{{- end -}}"
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
             {{- if .Values.tls.enabled }}
             - name: https
-              containerPort: {{ .Values.tls.port }}
+              containerPort: 443
               protocol: TCP
             {{- end }}
           env:
             - name: DSXCONNECTOR_USE_TLS
               value: {{ .Values.tls.enabled | quote }}
+            {{- if .Values.dsxConnectEnrollment.secretName }}
+            - name: DSXCONNECT_ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dsxConnectEnrollment.secretName | quote }}
+                  key: {{ .Values.dsxConnectEnrollment.key | quote }}
+            {{- end }}
+            - name: DSXCONNECTOR_AUTH__ENABLED
+              value: {{ .Values.auth.enabled | quote }}
+            - name: DSXCONNECTOR_AUTH__CLOCK_SKEW_SECONDS
+              value: {{ .Values.auth.clockSkewSeconds | quote }}
+            {{- if .Values.auth.secretName }}
+            - name: DSXCONNECTOR_AUTH__HMAC_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.secretName | quote }}
+                  key: {{ .Values.auth.keyIdKey | quote }}
+            - name: DSXCONNECTOR_AUTH__HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.secretName | quote }}
+                  key: {{ .Values.auth.secretKey | quote }}
+            {{- end }}
             - name: DSXCONNECTOR_CONNECTOR_URL
-              value: "{{- if .Values.tls.enabled }}https://{{ else }}http://{{ end }}{{ include "filesystem-connector.fullname" . }}:{{- if .Values.tls.enabled }}{{ .Values.tls.port }}{{ else }}{{ .Values.service.port }}{{ end }}"
+              value: "{{- if .Values.tls.enabled }}https://{{ else }}http://{{ end }}{{ include "filesystem-connector.fullname" . }}:{{- if .Values.tls.enabled }}443{{ else }}{{ .Values.service.port }}{{ end }}"
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: DSXCONNECTOR_ASSET
@@ -101,7 +124,7 @@ spec:
           volumeMounts:
             {{- if .Values.tls.enabled }}
             - name: tls-certs
-              mountPath: {{ .Values.tls.mountPath | quote }}
+              mountPath: "/app/certs"
               readOnly: true
             {{- end }}
             {{- if .Values.scanVolume.enabled }}

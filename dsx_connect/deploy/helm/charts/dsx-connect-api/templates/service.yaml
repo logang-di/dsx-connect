@@ -9,8 +9,8 @@ spec:
   type: {{ .Values.service.type }}
   ports:
     {{- if .Values.tls.enabled }}
-    - port: {{ .Values.tls.port }}
-      targetPort: {{ .Values.tls.port }}
+    - port: 443
+      targetPort: 443
       protocol: TCP
       name: https
     {{- else }}

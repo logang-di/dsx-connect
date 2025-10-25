@@ -1,0 +1,7 @@
+apiVersion: v2
+name: m365-mail-connector
+description: Helm chart for the DSX-Connect M365 Mail Connector
+type: application
+version: 0.1.0
+appVersion: 0.1.0
+

@@ -1,0 +1,20 @@
+version: "3.9"
+services:
+  m365_mail_connector:
+    image: dsxconnect/m365-mail-connector:latest
+    command: ["python","-m","connectors.m365_mail.start","--host","0.0.0.0","--port","8597","--workers","1"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=debug
+      # Enrollment for dsx-connect bootstrap
+      # - DSXCONNECT_ENROLLMENT_TOKEN=change-me
+      # dsx-connect URL (internal or external)
+      - DSXCONNECTOR_DSX_CONNECT_URL=http://dsx-connect-api
+      # Graph auth (set via env or secrets)
+      # - DSXCONNECTOR_TENANT_ID=
+      # - DSXCONNECTOR_CLIENT_ID=
+      # - DSXCONNECTOR_CLIENT_SECRET=
+    ports:
+      - "8597:8597"
+    restart: unless-stopped
+

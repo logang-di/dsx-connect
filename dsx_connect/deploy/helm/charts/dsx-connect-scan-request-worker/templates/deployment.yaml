@@ -44,11 +44,9 @@ spec:
             {{ $svc := default (printf "%s-dsxa-scanner" $.Release.Name) $scanner.serviceName }}
             {{ $port := default 5000 $scanner.port }}
             {{ $scheme := default "http" $scanner.scheme }}
-            {{- $di := (default (dict) $.Values.global.dianna) }}
+            {{- $di := (dict) }}
             - name: DSXCONNECT_APP_ENV
               value: {{ $env.DSXCONNECT_APP_ENV | default "dev" | quote }}
-            - name: DSXCONNECTOR_API_KEY
-              value: {{ $env.DSXCONNECTOR_API_KEY | default "api-key-NOT-FOR-PRODUCTION" | quote }}
             - name: DSXCONNECT_SCANNER__SCAN_BINARY_URL
               value: {{ $env.DSXCONNECT_SCANNER__SCAN_BINARY_URL | default (printf "%s://%s:%d/scan/binary/v2" $scheme $svc $port) | quote }}
             - name: DSXCONNECT_WORKERS__BROKER
@@ -98,7 +96,7 @@ spec:
             {{- end }}
             {{- with $env }}
             {{- range $key, $value := . }}
-            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECTOR_API_KEY" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL")) }}
+            {{- if not (has $key (list "DSXCONNECT_APP_ENV" "DSXCONNECT_SCANNER__SCAN_BINARY_URL" "DSXCONNECT_WORKERS__BROKER" "DSXCONNECT_WORKERS__BACKEND" "DSXCONNECT_REDIS_URL" "DSXCONNECT_RESULTS_DB" "DSXCONNECT_DATABASE__RETAIN" "DSXCONNECT_RESULTS_DB__RETAIN" "PYTHONUNBUFFERED" "LOG_LEVEL")) }}
             - name: {{ $key }}
               value: "{{ $value }}"
             {{- end }}
