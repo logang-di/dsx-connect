@@ -37,8 +37,8 @@ This document describes a new connector, `m365-mail-connector`, that scans Micro
   - For resource data in notifications: cert + `includeResourceData=true` subscriptions.
 
 ## Configuration (examples)
-- Tenant / App creds: `tenant_id`, `client_id`, `client_secret` or client cert.
-- Scope of mailboxes: explicit UPN list, security group, or all users.
+- Tenant / App creds: `M365_TENANT_ID`, `M365_CLIENT_ID`, `M365_CLIENT_SECRET` (or client cert).
+- Scope of mailboxes: explicit UPN list via `M365_MAILBOX_UPNS` (comma-separated), security group, or all users.
 - Subscription management: renewal interval, includeResourceData.
 - Processing policy: max attachment size, allowed types, referenceAttachments policy.
 - Item actions policy: `move`, `delete`, `tag`, `nothing`.

@@ -14,7 +14,8 @@ Use `connectors/sharepoint/deploy/docker/docker-compose-sharepoint-connector.yam
 
 | Variable | Description |
 | --- | --- |
-| `DSXCONNECTOR_DSX_CONNECT_URL` | dsx‑connect base URL (use `http://dsx-connect-api:8586` on the shared Docker network). |
+| `DSXCONNECTOR_DSX_CONNECT_URL` | dsx-connect base URL (use `http://dsx-connect-api:8586` on the shared Docker network). |
+| `DSXCONNECTOR_CONNECTOR_URL` | Callback URL dsx-connect uses to reach the connector (defaults to the service name inside the Docker network). |
 | `DSXCONNECTOR_ASSET` | SharePoint scope, e.g., full site URL or doc library/folder path. |
 | `DSXCONNECTOR_FILTER` | Optional rsync‑style include/exclude rules relative to the asset. |
 | `DSXCONNECTOR_ITEM_ACTION` | What to do on malicious verdicts (`nothing`, `delete`, `move`, `move_tag`). Set to `move`/`move_tag` to relocate files after verdict. |
@@ -48,3 +49,6 @@ docker compose -f connectors/sharepoint/deploy/docker/docker-compose-sharepoint-
 - `DSXCONNECTOR_TLS_CERTFILE` / `DSXCONNECTOR_TLS_KEYFILE`: Paths to the mounted certificate and key when TLS is enabled.
 - `DSXCONNECTOR_VERIFY_TLS`: Keep `true` (default) to verify dsx-connect’s certificate; set to `false` only for local dev.
 - `DSXCONNECTOR_CA_BUNDLE`: Optional CA bundle path when verifying dsx-connect with a private CA.
+
+## Webhook Exposure
+If you expose SharePoint webhook callbacks or other HTTP endpoints outside Docker, tunnel or publish the host port mapped to `8640` (compose default when ports are enabled). Keep `DSXCONNECTOR_CONNECTOR_URL` pointing to the Docker-network URL (e.g., `http://sharepoint-connector:8640`) so dsx-connect can reach the container internally.

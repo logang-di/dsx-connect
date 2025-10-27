@@ -14,7 +14,8 @@ Use `connectors/google_cloud_storage/deploy/docker/docker-compose-google-cloud-s
 
 | Variable | Description |
 | --- | --- |
-| `DSXCONNECTOR_DSX_CONNECT_URL` | dsx‑connect base URL (use `http://dsx-connect-api:8586` on the shared Docker network). |
+| `DSXCONNECTOR_DSX_CONNECT_URL` | dsx-connect base URL (use `http://dsx-connect-api:8586` on the shared Docker network). |
+| `DSXCONNECTOR_CONNECTOR_URL` | Callback URL dsx-connect uses to reach the connector (defaults to the service name inside the Docker network). |
 | `DSXCONNECTOR_ASSET` | Target bucket or `bucket/prefix` to scope listings. |
 | `DSXCONNECTOR_FILTER` | Optional rsync‑style include/exclude rules relative to the asset. |
 | `DSXCONNECTOR_ITEM_ACTION` | What to do on malicious verdicts (`nothing`, `delete`, `move`, `move_tag`). Use `move`/`move_tag` to relocate objects after verdict. |
@@ -44,3 +45,6 @@ docker compose -f connectors/google_cloud_storage/deploy/docker/docker-compose-g
 - `DSXCONNECTOR_TLS_CERTFILE` / `DSXCONNECTOR_TLS_KEYFILE`: Paths to the mounted certificate and key when TLS is enabled.
 - `DSXCONNECTOR_VERIFY_TLS`: Keep `true` (default) to verify dsx-connect’s certificate; set to `false` only for local dev.
 - `DSXCONNECTOR_CA_BUNDLE`: Optional CA bundle path when verifying dsx-connect with a private CA.
+
+## Webhook Exposure
+For external callbacks into the connector, expose or tunnel the host port mapped to `8630` (compose default). Upstream systems should hit that public address. Internally, set `DSXCONNECTOR_CONNECTOR_URL` to the Docker-service URL (e.g., `http://google-cloud-storage-connector:8630`) so dsx-connect can reach the container.

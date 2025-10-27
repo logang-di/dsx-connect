@@ -15,6 +15,7 @@ Use `connectors/filesystem/deploy/docker/docker-compose-filesystem-connector.yam
 | Variable | Description |
 | --- | --- |
 | `DSXCONNECTOR_DSX_CONNECT_URL` | dsx-connect base URL (e.g., `http://dsx-connect-api:8586` on the shared Docker network). |
+| `DSXCONNECTOR_CONNECTOR_URL` | Callback URL dsx-connect uses to reach the connector (defaults to the service name inside the Docker network). |
 | `DSXCONNECTOR_ASSET` | Always `/app/scan_folder` inside the container; bind your host/NAS path to this mount. |
 | `DSXCONNECTOR_FILTER` | Optional rsync-style rules evaluated relative to `/app/scan_folder`. |
 | `DSXCONNECTOR_ITEM_ACTION` | What to do on malicious verdicts (`nothing`, `delete`, `move`, `move_tag`). Use `move`/`move_tag` to relocate files into the quarantine mount. |
@@ -131,6 +132,9 @@ Make sure the Docker host’s AFS cache manager has tokens for the target path (
 - Filters are always relative to the container path defined in `DSXCONNECTOR_ASSET`; they do **not** reference host paths directly.
 - See Reference → [Assets & Filters](../../reference/assets-and-filters.md) for guidance on sharding and scoping.
 
+## Webhook Exposure
+Expose or tunnel the host port mapped to `8620` when dsx-connect (or other internal services) must reach private connector routes. Keep `DSXCONNECTOR_CONNECTOR_URL` set to the Docker-network hostname (e.g., `http://filesystem-connector:8620`) so dsx-connect resolves the service internally, and forward the host port through your preferred tunnel only for inbound events that originate outside Docker.
+
 ## TLS Options
 - `DSXCONNECTOR_USE_TLS`: Serve the connector over HTTPS (mount cert/key and enable as needed).
 - `DSXCONNECTOR_TLS_CERTFILE` / `DSXCONNECTOR_TLS_KEYFILE`: Paths to the mounted certificate and private key when TLS is enabled.
@@ -139,3 +143,4 @@ Make sure the Docker host’s AFS cache manager has tokens for the target path (
 
 ## Notes
 - Consider enabling monitor (`DSXCONNECTOR_MONITOR=true`) for real-time file change detection.
+- If you can mount the storage into `/app/scan_folder`, the connector can scan it—local disks, NAS shares, and remote filesystems all work once bound.

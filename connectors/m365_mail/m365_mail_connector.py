@@ -13,7 +13,7 @@ from connectors.m365_mail.subscriptions import SubscriptionManager
 from connectors.framework.dsx_connector import connector_api
 from fastapi import Request, Response
 from connectors.framework.auth_hmac import build_outbound_auth_header
-from shared.models.connector_models import ConnectorInstanceModel, ConnectorStatusEnum, ScanRequestModel
+from shared.models.connector_models import ConnectorInstanceModel, ConnectorStatusEnum, ScanRequestModel, ItemActionEnum
 from shared.models.status_responses import StatusResponse, StatusResponseEnum
 from shared.routes import service_url, API_PREFIX_V1, DSXConnectAPI
 
@@ -25,6 +25,16 @@ _subs_task = None
 _delta_task = None
 _delta_lock: asyncio.Lock | None = None
 _STATE_NS = "m365"
+
+
+def _actions_enabled() -> bool:
+    """Determine whether remediation actions should run."""
+    desired = getattr(config, "item_action", ItemActionEnum.NOTHING)
+    wants_action = desired not in (ItemActionEnum.NOTHING, ItemActionEnum.NOT_IMPLEMENTED)
+    legacy_toggle = getattr(config, "enable_actions", None)
+    if legacy_toggle is None:
+        return wants_action
+    return bool(legacy_toggle) and wants_action
 
 
 def _configured_upns() -> list[str]:
@@ -334,7 +344,7 @@ def _default_banner() -> str:
 
 @connector.item_action
 async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> StatusResponse:
-    if not config.enable_actions:
+    if not _actions_enabled():
         return StatusResponse(status=StatusResponseEnum.NOTHING, message="actions_disabled")
     parsed = _parse_m365_uri(scan_event_queue_info.location)
     if not parsed:

@@ -1,3 +1,7 @@
+# GCP credential file
+*.json
+deploy/helm/gcp-sa-secret-test.yaml
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -85,6 +89,8 @@ celerybeat-schedule
 
 # dotenv
 .env
+*.dev.env
+.dev.env
 
 # virtualenv
 .venv

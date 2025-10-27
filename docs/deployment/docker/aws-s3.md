@@ -15,6 +15,7 @@ Use the example at `connectors/aws_s3/deploy/docker/docker-compose-aws-s3-connec
 | Variable | Description |
 | --- | --- |
 | `DSXCONNECTOR_DSX_CONNECT_URL` | dsx‑connect base URL (use `http://dsx-connect-api:8586` on the shared Docker network). |
+| `DSXCONNECTOR_CONNECTOR_URL` | Callback URL dsx-connect uses to reach the connector (defaults to the service name inside the Docker network). |
 | `DSXCONNECTOR_ASSET` | Target bucket or `bucket/prefix` to scope listings. |
 | `DSXCONNECTOR_FILTER` | Optional rsync‑style include/exclude rules relative to the asset. |
 | `DSXCONNECTOR_ITEM_ACTION` | What to do on malicious verdicts (`nothing`, `delete`, `move`, `move_tag`). Set to `move`/`move_tag` to trigger connector-side quarantine. |
@@ -45,6 +46,9 @@ docker compose -f connectors/aws_s3/deploy/docker/docker-compose-aws-s3-connecto
 - `DSXCONNECTOR_TLS_CERTFILE` / `DSXCONNECTOR_TLS_KEYFILE`: Paths to the mounted certificate and private key when TLS is enabled.
 - `DSXCONNECTOR_VERIFY_TLS`: Keep `true` (default) to verify dsx-connect’s certificate; set to `false` only for local dev.
 - `DSXCONNECTOR_CA_BUNDLE`: Optional CA bundle path when verifying dsx-connect with a private CA.
+
+## Webhook Exposure
+If you forward events into the connector’s HTTP endpoints (e.g., using tunnels or an external load balancer), expose the host port mapped to `8600` (default in compose) and point your upstream system at that URL. `DSXCONNECTOR_CONNECTOR_URL` should remain the Docker-network URL (e.g., `http://aws-s3-connector:8600`) so dsx-connect can reach the service internally.
 
 ## Provider Notes (AWS S3)
 - Region/Endpoint: ensure the connector can reach the correct S3 endpoint for your bucket’s region.

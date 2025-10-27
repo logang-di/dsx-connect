@@ -8,6 +8,7 @@ The `DSXCONNECTOR_FILTER` follows rsync include/exclude semantics for scoping sc
 - `-` / `--exclude` exclude the following match
 - `+` / `--include` include the following match (everything else is implicitly included unless a later exclude removes it)
 - Tokens can be comma‑separated or space‑separated; quote tokens with spaces
+- Prefix `+`/`-` directly onto the pattern (no space) or use the long forms `--include pattern`, `--exclude pattern`.
 - When mixing includes/excludes, add explicit `+` rules to keep intent clear (e.g., include only `/Finance/**` before dropping `tmp/`).
 
 Examples (paths are relative to `DSXCONNECTOR_ASSET`):

@@ -16,6 +16,7 @@ Use `connectors/azure_blob_storage/deploy/docker/docker-compose-azure-blob-stora
 | Variable | Description |
 | --- | --- |
 | `DSXCONNECTOR_DSX_CONNECT_URL` | dsx‑connect base URL (use `http://dsx-connect-api:8586` on the shared Docker network). |
+| `DSXCONNECTOR_CONNECTOR_URL` | Callback URL dsx-connect uses to reach the connector (defaults to the service name inside the Docker network). |
 | `DSXCONNECTOR_ASSET` | Container or `container/prefix` to scope listings. |
 | `DSXCONNECTOR_FILTER` | Optional rsync‑style include/exclude rules relative to the asset. |
 | `DSXCONNECTOR_ITEM_ACTION` | What to do on malicious verdicts (`nothing`, `delete`, `move`, `move_tag`). Use `move`/`move_tag` to relocate blobs after verdict. |
@@ -45,6 +46,9 @@ docker compose -f connectors/azure_blob_storage/deploy/docker/docker-compose-azu
 - `DSXCONNECTOR_TLS_CERTFILE` / `DSXCONNECTOR_TLS_KEYFILE`: Paths to the mounted certificate and key when TLS is enabled.
 - `DSXCONNECTOR_VERIFY_TLS`: Keep `true` (default) to verify dsx-connect’s certificate; set to `false` only for local dev.
 - `DSXCONNECTOR_CA_BUNDLE`: Optional CA bundle path when verifying dsx-connect with a private CA.
+
+## Webhook Exposure
+If you expose connector endpoints (e.g., for HTTP callbacks) outside Docker, tunnel or publish the host port mapped to `8610` (compose default). Keep `DSXCONNECTOR_CONNECTOR_URL` pointing to the Docker-network address (e.g., `http://azure-blob-storage-connector:8610`) so dsx-connect can reach the service internally.
 
 ## Provider Notes (Azure Blob)
 - Auth: connection string works well for POV; SAS or managed identity might be used in production.

@@ -22,9 +22,9 @@ class AzureBlobStorageConnectorConfig(BaseConnectorConfig):
     You can also read in an optional .env file, which will be ignored is not available
     """
     name: str = 'azure-blob-storage-connector'
-    connector_url: HttpUrl = Field(default="http://127.0.0.1:8599",
+    connector_url: HttpUrl = Field(default="http://127.0.0.1:8610",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
-    # connector_url: HttpUrl = Field(default="http://host.docker.internal:8599",
+    # connector_url: HttpUrl = Field(default="http://host.docker.internal:8610",
     #                                description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
     dsx_connect_url: HttpUrl = Field(default="http://127.0.0.1:8586",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")

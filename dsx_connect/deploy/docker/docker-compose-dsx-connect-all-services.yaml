@@ -18,6 +18,7 @@ services:
       - "8586:8586"
     environment:
       <<: *common-env
+      DSXCONNECT_AUTH__ENABLED: "false"
       # TLS for API (enable and provide cert/key paths inside the container)
       # DSXCONNECT_USE_TLS: "false"
       # DSXCONNECT_TLS_CERTFILE: "/app/certs/dev.localhost.crt"
@@ -60,7 +61,7 @@ services:
     command: >
       celery -A dsx_connect.taskworkers.celery_app.celery_app worker
       --loglevel=warning
-      -Q ${DSXCONNECT_APP_ENV:-dev}.dsx_connect.scans.request
+      -Q dev.dsx_connect.scans.request
       --concurrency=1
     restart: unless-stopped
 
@@ -78,7 +79,7 @@ services:
     command: >
       celery -A dsx_connect.taskworkers.celery_app.celery_app worker
       --loglevel=warning
-      -Q ${DSXCONNECT_APP_ENV:-dev}.dsx_connect.scans.verdict
+      -Q dev.dsx_connect.scans.verdict
       --concurrency=1
     restart: unless-stopped
 
@@ -102,7 +103,7 @@ services:
     command: >
       celery -A dsx_connect.taskworkers.celery_app.celery_app worker
       --loglevel=warning
-      -Q ${DSXCONNECT_APP_ENV:-dev}.dsx_connect.scans.result
+      -Q dev.dsx_connect.scans.result
       --concurrency=1
     restart: unless-stopped
 
@@ -119,7 +120,7 @@ services:
     command: >
       celery -A dsx_connect.taskworkers.celery_app.celery_app worker
       --loglevel=warning
-      -Q ${DSXCONNECT_APP_ENV:-dev}.dsx_connect.scans.result.notify
+      -Q dev.dsx_connect.scans.result.notify
       --concurrency=1
     restart: unless-stopped
 

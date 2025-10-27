@@ -7,7 +7,7 @@ services:
     #  dockerfile: docker/Dockerfile
 
     # ports: # uncomment this if you need to expose this service on an external port
-    #  - "8620:8620"
+    #  - "8640:8640"
     volumes:
       - type: volume
         source: sharepoint_connector_data
@@ -22,7 +22,7 @@ services:
       # Outbound TLS verification to dsx-connect
       # DSXCONNECTOR_VERIFY_TLS: "true"
       # DSXCONNECTOR_CA_BUNDLE: "/app/certs/ca.pem"
-      DSXCONNECTOR_CONNECTOR_URL: "http://sharepoint-connector:8620" # see aliases below
+      DSXCONNECTOR_CONNECTOR_URL: "http://sharepoint-connector:8640" # see aliases below
       DSXCONNECTOR_DSX_CONNECT_URL: "http://dsx-connect-api:8586" # note, this works if running on the same internal network on Docker as the dsx_connect_api...
       DSXCONNECTOR_ITEM_ACTION: "nothing" # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)
       DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "dsxconnect-quarantine" # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
@@ -48,7 +48,7 @@ services:
         aliases:
           - sharepoint-connector  # this is how dsx-connect will communicate with this on the network. if deploying two of more of this service within a single docker, this name must be unique for each instance
     command:
-      ["python", "connectors/sharepoint/start.py", "--workers", "1", "--port", "8620"]
+      ["python", "connectors/sharepoint/start.py", "--workers", "1", "--port", "8640"]
 
 # The following assumes an already created docker network like this:
 # docker network create dsx-connect-network --driver bridge

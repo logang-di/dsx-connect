@@ -12,7 +12,7 @@ app = typer.Typer(help="Start the Azure Blob Storage Connector.")
 @app.command()
 def start(
     host: str = typer.Option("0.0.0.0", help="Host to bind the FastAPI server."),
-    port: int = typer.Option(8599, help="Port to bind the FastAPI server."),
+    port: int = typer.Option(8610, help="Port to bind the FastAPI server."),
     reload: bool = typer.Option(False, help="Enable autoreload (development only)."),
     workers: int = typer.Option(1, help="Number of Uvicorn worker processes.")
 ):

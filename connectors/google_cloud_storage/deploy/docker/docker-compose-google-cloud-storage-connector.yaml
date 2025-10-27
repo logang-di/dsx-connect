@@ -6,7 +6,7 @@ services:
     #  context: .
     #  dockerfile: docker/Dockerfile
     ports:
-      - "8595:8595"
+      - "8630:8630"
     volumes:
       - type: volume
         source: google_cloud_storage_connector_data
@@ -21,12 +21,12 @@ services:
     environment:
       PYTHONUNBUFFERED: 1
       LOG_LEVEL: debug
-      DSXCONNECTOR_CONNECTOR_URL: http://google-cloud-storage-connector:8595 # see aliases below
+      DSXCONNECTOR_CONNECTOR_URL: http://google-cloud-storage-connector:8630 # see aliases below
       DSXCONNECTOR_DSX_CONNECT_URL: http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_core...
       DSXCONNECTOR_ITEM_ACTION: nothing # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)
       DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: dsxconnect-quarantine # if item action is move or move_tag, specify where to move (to be interpreted by the connector).
         # This could be a folder on storage, a quarantine bucket, or other instructions, again, to be interpreted by the connector
-      DSXCONNECTOR_ASSET: lg-test-02 # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
+      DSXCONNECTOR_ASSET: "" # identifies the asset this Connector can on demand full scan  - i.e., a bucket, blob container, etc.... To be interpreted by the Connector
       DSXCONNECTOR_FILTER: ""  # rsync-like include/exclude patterns; leave empty to scan all
 
       DSXCONNECTOR_DATA_DIR: "/app/data"

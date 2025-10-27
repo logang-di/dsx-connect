@@ -1,6 +1,5 @@
 x-common-paths: &common-paths
-  #SCAN_FOLDER_PATH: &scan-folder "/path/to/local/folder"
-  SCAN_FOLDER_PATH: &scan-folder "/Users/logangilbert/Documents/SAMPLES/PDF"
+  SCAN_FOLDER_PATH: &scan-folder "path/to/local/folder"
   QUARANTINE_FOLDER_PATH: &quarantine-folder "/path/to/local/folder/dsxconnect-quarantine"
 
 services:
@@ -11,7 +10,7 @@ services:
     #  context: .
     #  dockerfile: docker/Dockerfile
     ports:
-      - "8590:8590"
+      - "8620:8620"
     volumes:
       - type: bind
         source: *scan-folder # modify to the directory to be scanned and monitored
@@ -42,7 +41,7 @@ services:
       # Outbound TLS verification to dsx-connect
       # DSXCONNECTOR_VERIFY_TLS: "true"
       # DSXCONNECTOR_CA_BUNDLE: "/app/certs/ca.pem"
-      DSXCONNECTOR_CONNECTOR_URL: "http://filesystem-connector:8590" # see aliases below
+      DSXCONNECTOR_CONNECTOR_URL: "http://filesystem-connector:8620" # see aliases below
       DSXCONNECTOR_DSX_CONNECT_URL: "http://dsx-connect-api:8586" # note, this works if running on the same internal network on Docker as the dsx_connect_core...
       DSXCONNECTOR_ASSET: "/app/scan_folder"
       DSXCONNECTOR_FILTER: ""

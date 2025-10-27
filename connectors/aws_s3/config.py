@@ -22,7 +22,7 @@ class AWSS3ConnectorConfig(BaseConnectorConfig):
     You can also read in an optional .env file, which will be ignored is not available
     """
     name: str = 'aws-s3-connector'
-    connector_url: HttpUrl = Field(default="http://0.0.0.0:8591",
+    connector_url: HttpUrl = Field(default="http://0.0.0.0:8600",
                                    description="Base URL (http(s)://ip.add.ddr.ess|URL:port) of this connector entry point")
     dsx_connect_url: HttpUrl = Field(default="http://0.0.0.0:8586",
                                      description="Complete URL (http(s)://ip.add.ddr.ess|URL:port) of the dsxa entry point")
