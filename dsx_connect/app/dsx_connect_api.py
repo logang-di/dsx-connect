@@ -15,7 +15,7 @@ import pathlib
 from starlette import status
 from starlette.responses import FileResponse, StreamingResponse, JSONResponse
 
-from dsx_connect.config import get_config
+from dsx_connect.config import get_config, get_auth_config
 from dsx_connect.connectors.registry import ConnectorsRegistry
 from dsx_connect.messaging.bus import Bus
 from dsx_connect.messaging.channels import Channel
@@ -179,6 +179,12 @@ async def lifespan(app: FastAPI):
 
     dsx_logging.info(f"dsx-connect version: {version.DSX_CONNECT_VERSION}")
     dsx_logging.info(f"dsx-connect configuration: {config}")
+    try:
+        auth_cfg = get_auth_config()
+        if getattr(auth_cfg, "enabled", False):
+            dsx_logging.info("Connector authentication enabled (enrollment token + DSX-HMAC).")
+    except Exception:
+        dsx_logging.warning("Failed to load auth configuration; skipping auth status log.")
     dsx_logging.info("dsx-connect startup completed.")
 
     await _start_services(app, config)

@@ -1,6 +1,6 @@
 # Connector ↔ dsx-connect Authentication (Enrollment + HMAC)
 
-This document describes the current authentication model for securing traffic between connectors and the dsx-connect API using a single bootstrap enrollment secret and per‑connector HMAC. It replaces the legacy API key path and avoids long‑lived “connector tokens”.
+This document details the authentication mechanism for dsx-connect, focusing on enrollment and HMAC-based security. It describes the current authentication model for securing traffic between connectors and the dsx-connect API using a single bootstrap enrollment secret and per‑connector HMAC. It replaces the legacy API key path and avoids long‑lived “connector tokens”.
 
 ## Goals
 - Single on/off toggle per environment.
@@ -18,7 +18,7 @@ This document describes the current authentication model for securing traffic be
 - `DSXCONNECT_AUTH__ENROLLMENT_TOKEN` or `DSXCONNECT_AUTH__ENROLLMENT_TOKENS` (CSV): one or more bootstrap secrets accepted by the API for initial registration.
 - Optional JWT settings remain available but are not required for connector flows (HMAC is used after bootstrap).
 
-Recommendation: source enrollment tokens from Kubernetes Secrets and rotate with CSV overlap.
+Recommendation: source enrollment tokens from `Kubernetes Secrets` and rotate with CSV overlap.
 
 ## Connector Configuration
 - `DSXCONNECT_ENROLLMENT_TOKEN` (required when auth enabled): bootstrap secret used once at registration.
@@ -99,14 +99,8 @@ Recommendation: source enrollment tokens from Kubernetes Secrets and rotate with
 - Keep enrollment tokens limited in scope (connector→dsx‑connect only); rotate periodically with CSV overlap.
 - DSX‑HMAC ties authentication to the exact request (method/path/body); secrets are per‑connector and can be reprovisioned.
 
-## Current State Summary
-- Removed: legacy API key path and any `DSXCONNECTOR_API_KEY` wiring in charts/compose.
-- Removed: global outbound HMAC config; per‑connector HMAC is auto‑provisioned at registration.
-- Removed: JWT requirement for connector flows; no connector tokens are used after bootstrap.
-- Helm (dsx‑connect): `auth.enabled` and `auth.enrollment.{key,value}` only; charts create an enrollment Secret when `value` is set.
-- Helm (connectors): `auth.enabled` (HMAC verify) and `dsxConnectEnrollment.secretName/key` for the bootstrap token; ingress/network policy templates limit public exposure to the webhook path.
 
-## Recent Activity (Summary)
+## Summary of Changes
 - Finalized auth model: single enrollment token + per‑connector HMAC used in both directions after registration (no connector Bearer/JWT).
 - Server changes:
   - Provision per‑connector HMAC on register, store in Redis, return `hmac_key_id`/`hmac_secret` in response.

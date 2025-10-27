@@ -87,7 +87,8 @@ async def register_or_refresh_connector(
     try:
         is_new = await r.set(name=key, value=model_json, ex=ttl_sec, nx=True)
         if not is_new:
-            await r.expire(key, ttl_sec)
+            # Existing connector; refresh payload + TTL so updated fields (url, status, etc.)
+            await r.set(name=key, value=model_json, ex=ttl_sec)
 
         # Internal bus: full payload for registry cache
         if bus is not None:

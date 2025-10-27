@@ -97,6 +97,15 @@ class DSXConnector:
         self._access_token: str | None = None
         self._access_expiry_ts: int | None = None
 
+        if self._enrollment_token:
+            hmac_mode = os.getenv("DSXCONNECTOR_AUTH__ENABLED", "").strip().lower() in ("1", "true", "yes")
+            if hmac_mode:
+                dsx_logging.info("Connector authentication: enrollment token provided; DSX-HMAC verification enabled.")
+            else:
+                dsx_logging.info("Connector authentication: enrollment token provided; DSX-HMAC verification disabled (DSXCONNECTOR_AUTH__ENABLED=false).")
+        else:
+            dsx_logging.debug("Connector authentication: no enrollment token detected (DSXCONNECT_ENROLLMENT_TOKEN unset).")
+
         # clean up URL if needed
         self.dsx_connect_url = str(connector_config.dsx_connect_url).rstrip('/')
 
@@ -143,8 +152,22 @@ class DSXConnector:
         else:
             self._httpx_verify = True
 
+        # Initialize FastAPI app (lifespan handles registration + shutdown)
+        self._initialize_app()
 
-        # --------- FastAPI lifespan: startup/shutdown ----------
+    def _dsx_hmac_headers(self, method: str, url: str, body: bytes | None) -> dict[str, str] | None:
+        """Build DSX-HMAC headers for outbound calls when runtime credentials exist."""
+        try:
+            from connectors.framework.auth_hmac import build_outbound_auth_header
+            header = build_outbound_auth_header(method, url, body)
+        except Exception:
+            header = None
+        if header:
+            return {"Authorization": header}
+        return None
+
+    # --------- FastAPI lifespan: startup/shutdown ----------
+    def _build_app(self) -> FastAPI:
         @asynccontextmanager
         async def lifespan(app: FastAPI):
             # ============ startup ============
@@ -190,12 +213,18 @@ class DSXConnector:
             if self.shutdown_handler:
                 await self.shutdown_handler()
 
-        global connector_api
-        connector_api = FastAPI(
+        return FastAPI(
             title=f"{self.connector_running_model.name} [dsx-connector]",
             description=f"API for dsx-connector: {self.connector_running_model.name} (UUID: {self.connector_running_model.uuid})",
             lifespan=lifespan
         )
+
+        # Build router after app so we can re-use helper if needed
+
+    def _initialize_app(self) -> None:
+        """Create the FastAPI app and register routes (once per process)."""
+        global connector_api
+        connector_api = self._build_app()
         connector_api.include_router(DSXAConnectorRouter(self))
 
     # ----------------- decorator registrations -----------------
@@ -459,8 +488,18 @@ class DSXConnector:
                 pass
             return StatusResponse(**data)
         except httpx.HTTPStatusError as e:
-            msg = f"HTTP {e.response.status_code} during connector registration"
-            dsx_logging.error(msg, exc_info=True)
+            status_code = e.response.status_code if e.response is not None else None
+            if status_code == 401:
+                msg = (
+                    "Connector registration rejected (401 Unauthorized). "
+                    "dsx-connect authentication is enabled; set DSXCONNECT_ENROLLMENT_TOKEN to the server's enrollment "
+                    "token and restart this connector."
+                )
+                dsx_logging.error(msg)
+            else:
+                detail = e.response.text if e.response is not None else str(e)
+                msg = f"HTTP {status_code} during connector registration: {detail}"
+                dsx_logging.error(msg)
             return StatusResponse(status=StatusResponseEnum.ERROR, message="Registration failed", description=msg)
         except httpx.RequestError as e:
             hint = "Verify dsx-connect URL, scheme and port, and that the service is reachable."
@@ -664,7 +703,7 @@ class DSXAConnectorRouter(APIRouter):
                         content = _json.dumps(payload, separators=(",", ":")).encode() if payload else None
                     except Exception:
                         content = None
-                    hdrs = self._dsx_hmac_headers("POST", url, content)
+                    hdrs = self._connector._dsx_hmac_headers("POST", url, content)
                     resp = await client.post(url, json=payload, headers=hdrs or None)
                     dsx_logging.info(f"enqueue_done posted job={job_id} enqueued_total={enq_total} status={resp.status_code}")
             except Exception:
@@ -799,14 +838,3 @@ class DSXAConnectorRouter(APIRouter):
         if self._connector.config_handler:
             return await self._connector.config_handler(self._connector.connector_running_model)
         return self._connector.connector_running_model
-
-    def _dsx_hmac_headers(self, method: str, url: str, body: bytes | None) -> dict[str, str] | None:
-        """Build DSX-HMAC headers for outbound connector calls when creds are available."""
-        try:
-            from connectors.framework.auth_hmac import build_outbound_auth_header
-            header = build_outbound_auth_header(method, url, body)
-        except Exception:
-            header = None
-        if header:
-            return {"Authorization": header}
-        return None

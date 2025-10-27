@@ -1,11 +1,13 @@
 # Developer Tasks (Invoke)
 
+This document outlines common development and release automation tasks using Invoke.
+
 This repo uses Invoke for build and release automation. The default collection lives in `tasks.py` and focuses on packaging, releasing, and Helm operations.
 
 ## Prerequisites
 - Python 3.12+
 - `pip install invoke`
-- Docker (for container builds and Helm packaging pipelines)
+- `Docker` (for container builds and Helm packaging pipelines)
 
 ## Listing Tasks
 ```bash
@@ -14,7 +16,7 @@ invoke -l                     # default collection (tasks.py)
 
 ## Adding a New Connector to the Release Pipeline
 
-1. Add a new entry to `CONNECTORS_CONFIG` in `tasks.py` with the name of the connector folder, which should be in a connectors/<connanector_name> folder up from the root (where this file is).
+1. Add a new entry to `CONNECTORS_CONFIG` in `tasks.py` (located at the project root) with the name of the connector folder, which should be in `connectors/<connector_name>` relative to the project root.
 
 ```python
 # ---------- Edit me ----------
@@ -31,7 +33,7 @@ CONNECTORS_CONFIG = [
 
 ## Common Commands
 
-- Release dsx-connect and all connectors - this will bump the versions of all components and push images to Docker Hub (requires local running docker, e.g. docker desktop, colima, etc...):
+- Release dsx-connect and all connectors - this will bump the versions of all components and push images to `Docker Hub` (requires local running docker, e.g. `docker desktop`, `colima`, etc...):
 ```bash
 invoke release-all
 ```
@@ -68,5 +70,5 @@ invoke generate-manifest
 
 ## Notes
 - Test tasks are not in this file; see `DEVELOPER_TEST_TASKS.md` for auth smoke tests and local run helpers.
-- Container bases use `python:3.12-slim-bookworm` and refresh OpenSSL packages during build for CVE coverage.
+- Container bases use `python:3.12-slim-bookworm` and refresh `OpenSSL` packages during build for `CVE` coverage.
 

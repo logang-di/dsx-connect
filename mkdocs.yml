@@ -29,6 +29,7 @@ nav:
   - Deployment:
       - dsx-connect (Core): deployment/docker/dsx-connect.md
       - Docker Quickstart: deployment/docker/quickstart.md
+      - Connector Authentication: deployment/authentication.md
       - Docker Guides (per connector):
           - AWS S3: deployment/docker/aws-s3.md
           - Azure Blob Storage: deployment/docker/azure-blob.md

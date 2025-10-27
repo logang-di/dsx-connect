@@ -18,7 +18,6 @@ services:
       - "8586:8586"
     environment:
       <<: *common-env
-      DSXCONNECT_AUTH__ENABLED: "false"
       # TLS for API (enable and provide cert/key paths inside the container)
       # DSXCONNECT_USE_TLS: "false"
       # DSXCONNECT_TLS_CERTFILE: "/app/certs/dev.localhost.crt"
