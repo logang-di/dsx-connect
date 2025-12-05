@@ -5,7 +5,7 @@
 # - API/workers LOG_LEVEL default to 'info'
 # - Override image tag at install time: --set-string global.image.tag=<version>
 # -----------------------------------------------------------------------------
-# Global settings used by all dsx-connect subcharts
+# Global settings used by all dsx-connect components
 global:
   # Minimal, common env most users need to touch. Everything else is set in templates with sane defaults.
   env:
@@ -14,14 +14,14 @@ global:
     # Results/stats DB URL (redis://... => Redis, anything else => in-memory)
     DSXCONNECT_RESULTS_DB: redis://redis:6379/3
 
-  # Optional shared image defaults (subcharts fall back to these when set)
+  # Optional shared image defaults (components fall back to these when set)
   image:
     repository: dsxconnect/dsx-connect
     tag: ""
     pullPolicy: IfNotPresent
     # Note: When installing from an OCI chart with --version=X.Y.Z, the default image tag will be that chart's appVersion.
 
-  # Optional scanner service hints used when dsxa-scanner subchart is enabled
+  # Optional scanner service hints used when the dsxa-scanner dependency is enabled
   scanner:
     # serviceName: "dsxa-scanner"   # optional: explicit K8s service name (defaults to <release>-dsxa-scanner)
     # port: 5000                     # optional: override port (defaults to 5000)
@@ -36,17 +36,18 @@ dsx-connect-api:
   enabled: true
   service:
     port: 80
+    # type: ClusterIP
   tls:
     enabled: false
+    # secretName: ""           # defaults to <release>-dsx-connect-api-tls when enabled
   env:
     LOG_LEVEL: info
   auth:
-    enabled: false
-    # Enrollment (bootstrap) token; set value to create a Secret automatically.
-    # The key name inside the Secret defaults to ENROLLMENT_TOKEN.
+    enabled: true
+    # Provide the enrollment Secret name via dsx_connect/deploy/helm/examples/secrets/auth-enrollment-secret.yaml.
+    # Leave value unset in production so the chart references your Secret instead.
     enrollment:
       key: ENROLLMENT_TOKEN
-      value: ""
 
 dsx-connect-scan-request-worker:
   enabled: true
@@ -54,9 +55,7 @@ dsx-connect-scan-request-worker:
   env:
     LOG_LEVEL: info
   celery:
-    # Queue defaults to "dev.dsx_connect.scans.request"; override if sharing a broker
     # queue: "dev.dsx_connect.scans.request"
-    # Concurrency = Celery workers per pod. Combine with replicaCount for total parallelism.
     concurrency: 1
 
 dsx-connect-verdict-action-worker:
@@ -66,7 +65,6 @@ dsx-connect-verdict-action-worker:
     LOG_LEVEL: info
   celery:
     # queue: "dev.dsx_connect.scans.verdict"
-    # Concurrency = Celery workers per pod.
     concurrency: 1
 
 dsx-connect-results-worker:
@@ -78,7 +76,6 @@ dsx-connect-results-worker:
     DSXCONNECT_SYSLOG__TRANSPORT: tcp
   celery:
     # queue: "dev.dsx_connect.scans.result"
-    # Concurrency = Celery workers per pod.
     concurrency: 1
 
 dsx-connect-notification-worker:
@@ -89,7 +86,6 @@ dsx-connect-notification-worker:
     LOG_LEVEL: info
   celery:
     # queue: "dev.dsx_connect.scans.result.notify"
-    # Concurrency = Celery workers per pod.
     concurrency: 1
 
 dsx-connect-dianna-worker:
@@ -99,35 +95,31 @@ dsx-connect-dianna-worker:
     LOG_LEVEL: info
   celery:
     # queue: "dev.dsx_connect.analyze.dianna"
-    # Concurrency = Celery workers per pod.
     concurrency: 1
+  dianna:
+    # Optionally set these inline, or supply a Secret (see examples/secrets/di-api-secret.yaml) and reference it via global.dianna.secretName.
+    # managementUrl: "https://di.example.com"
+    # apiToken: "<token>"
+    # additional DIANNA worker settings
+    # verifyTls: true
+    # caBundle: ""
+    # chunkSize: 4194304
+    # timeout: 60
+    # autoOnMalicious: false
+    # pollResultsEnabled: true
+    # pollIntervalSeconds: 5
+    # pollTimeoutSeconds: 900
 
 redis:
   enabled: true
   image:
     repository: redis
     tag: "7-alpine"
-  command:
-    - "redis-server"
-    - "--notify-keyspace-events"
-    - "Ex"
-    - "--maxmemory-policy"
-    - "allkeys-lru"
-    - "--timeout"
-    - "0"
-    - "--tcp-keepalive"
-    - "300"
-    - "--appendonly"
-    - "no"
-  healthcheck:
-    test: ["redis-cli", "ping"]
-    interval: 10
-    timeout: 3
-    retries: 5
-    startPeriod: 10
+  # For advanced tuning (command flags, probes, resources), see charts/redis/values.yaml.
 
 rsyslog:
-  enabled: false
+  enabled: true
+  # For advanced tuning, see charts/rsyslog/values.yaml.
 
 ingress:
   enabled: false

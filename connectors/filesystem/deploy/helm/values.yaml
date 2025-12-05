@@ -1,11 +1,9 @@
-
 image:
   repository: dsxconnect/filesystem-connector
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart AppVersion.
   tag: ""
-  # Note: When installing this chart from an OCI registry with --version=X.Y.Z,
-  # the default image tag will be that chart's appVersion.
+  # When installing from OCI (`--version=X.Y.Z`), the default image tag is that chart's appVersion.
 
 imagePullSecrets: []
 nameOverride: ""
@@ -15,12 +13,8 @@ service:
   type: ClusterIP
   port: 80
 
-auth:
+tls:
   enabled: false
-  # Reference an existing Secret containing DSXCONNECTOR_AUTH__HMAC_KEY_ID and DSXCONNECTOR_AUTH__HMAC_SECRET
-  keyIdKey: HMAC_KEY_ID
-  secretKey: HMAC_SECRET
-  clockSkewSeconds: 60
 
 ingressWebhook:
   enabled: false
@@ -34,25 +28,12 @@ networkPolicy:
   # Allowed sources for connector API (internal). Configure namespace/pod selectors as needed.
   allowFrom: []  # e.g., [{ namespaceSelector: { matchLabels: { name: ingress-nginx } } }]
 
-dsxConnectEnrollment:
-  # Optional: reference a Secret providing DSXCONNECT_ENROLLMENT_TOKEN for JWT bootstrap with dsx-connect
-  secretName: ""
-  key: ENROLLMENT_TOKEN
-
-tls:
-  enabled: false
-
 env:
   LOG_LEVEL: "debug"
   # Optional friendly display name shown in the dsx-connect UI card
-  # DSXCONNECTOR_DISPLAY_NAME: "TrueNAS Connector"
-  # Enable realtime monitoring of the asset path for new/modified files
-  # Set to "true" to watch and enqueue on changes (default: false)
+  # DSXCONNECTOR_DISPLAY_NAME: "Filesystem Connector"
   DSXCONNECTOR_MONITOR: "false"
-  # For SMB/CIFS or remote mounts where inotify doesn't fire,
-  # force polling to detect changes reliably (default: false)
   DSXCONNECTOR_MONITOR_FORCE_POLLING: "false"
-  # Polling interval in milliseconds (effective when force polling is enabled)
   DSXCONNECTOR_MONITOR_POLL_INTERVAL_MS: "1000"
   DSXCONNECTOR_TLS_CERTFILE: "/app/certs/tls.crt"
   DSXCONNECTOR_TLS_KEYFILE: "/app/certs/tls.key"
@@ -60,36 +41,38 @@ env:
   # DSXCONNECTOR_VERIFY_TLS: "true"
   # DSXCONNECTOR_CA_BUNDLE: "/app/certs/ca.pem"
   # DSXCONNECTOR_DSX_CONNECT_URL: "https://my-dsx-connect.example.com"
-  # Only override this if the connector is NOT deployed in the same cluster
-  # as dsx-connect API. By default, the chart computes:
-  #   - http://dsx-connect-api  (when DSXCONNECTOR_USE_TLS != true)
-  #   - https://dsx-connect-api (when DSXCONNECTOR_USE_TLS == true)
+  # Defaults to http/https://dsx-connect-api based on DSXCONNECTOR_USE_TLS.
   DSXCONNECTOR_ITEM_ACTION: "nothing"         # nothing, delete, tag, move, move_tag
   DSXCONNECTOR_ITEM_ACTION_MOVE_METAINFO: "/app/quarantine"
-  # DSXCONNECTOR_ASSET is set automatically from scanVolume.mountPath when scanVolume.enabled=true.
-  # Do not override unless you know what you're doing.
+  # `DSXCONNECTOR_ASSET` defaults to scanVolume.mountPath when scanVolume.enabled=true.
   DSXCONNECTOR_ASSET: "/app/scan_folder"
-  DSXCONNECTOR_FILTER: ""                     # optional filter expression
+  DSXCONNECTOR_FILTER: ""
   DSXCONNECTOR_SCAN_BY_PATH: "False"
   DSXCONNECTOR_DATA_DIR: "/app/data"
 
+# Optional additional secrets projected via envFrom (each Secret should contain DSXCONNECTOR_* keys)
+envSecretRefs: []
+
+auth_dsxconnect:
+  enabled: false
+  clockSkewSeconds: 60
+  enrollmentSecretName: ""
+  enrollmentKey: ENROLLMENT_TOKEN  # Secret providing DSXCONNECT_ENROLLMENT_TOKEN when dsx-connect auth is enabled
+
 scanVolume:
   enabled: false
-  # Path inside the container where the volume will be mounted.
   mountPath: "/app/scan_folder"
-  # Provide one of the following sources (prefer PVC in production):
-  existingClaim: ""   # Name of an existing PersistentVolumeClaim
-  hostPath: ""        # Node path for development only (e.g., /mnt/data)
+  existingClaim: ""
+  hostPath: ""
   readOnly: false
-  subPath: ""         # Optional subPath within the volume
+  subPath: ""
 
 dataVolume:
   enabled: true
   mountPath: "/app/data"
 
 # Uvicorn concurrency and pod replicas
-# 'workers' = Uvicorn worker processes per pod (in‑pod parallelism)
+# 'workers' = Uvicorn worker processes per pod (in-pod parallelism)
 # 'replicaCount' = number of pods (horizontal scale/HA)
-
-workers: 1  # Uvicorn worker processes per pod (in‑pod parallel requests)
-replicaCount: 1  # Number of pods for this connector (HA/service capacity). Note: does not parallelize Full Scan enumeration; replicas can still serve concurrent read_file via Service LB.
+workers: 1
+replicaCount: 1  # Does not parallelize Full Scan enumeration; replicas still serve concurrent read_file via Service LB.

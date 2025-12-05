@@ -1,15 +1,15 @@
 # Launches dsxa using the same docker network as used by dsx-connect components
 services:
   dsxa_scanner:
-    image: dsxconnect/dpa-rocky9:4.1.0.2131    # or `build:` if you need to build it
+    image: ${IMAGE:-dsxconnect/dpa-rocky9:4.1.1.2020}    # or `build:` if you need to build it
     environment:
-      APPLIANCE_URL: selab-dpa.customers.deepinstinctweb.com
-      TOKEN: 7b2b872c-632f-4220-ac42-7b2c5a76850a
-      SCANNER_ID: "81"
-      FLAVOR: "rest,config"
-      NO_SSL: "true"
+      APPLIANCE_URL: ${APPLIANCE_URL}
+      TOKEN: ${TOKEN}
+      SCANNER_ID: ${SCANNER_ID}
+      FLAVOR: ${FLAVOR:-rest,config}
+      NO_SSL: ${NO_SSL:-true}
     ports:
-      - "8080:5000"
+      - "5000:5000"
     networks:
       - dsx-network
 

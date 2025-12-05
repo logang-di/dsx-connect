@@ -1,6 +1,8 @@
+from pathlib import Path
 from pydantic import HttpUrl, Field
 from connectors.framework.base_config import BaseConnectorConfig
 from shared.models.connector_models import ItemActionEnum
+from shared.dev_env import load_devenv
 
 class {{ cookiecutter.__package_config_class_name }}(BaseConnectorConfig):
     """
@@ -48,11 +50,13 @@ class ConfigManager:
     @classmethod
     def get_config(cls) -> {{ cookiecutter.__package_config_class_name }}:
         if cls._config is None:
+            load_devenv(Path(__file__).with_name('.dev.env'))
             cls._config = {{ cookiecutter.__package_config_class_name }}()
         return cls._config
 
     @classmethod
     def reload_config(cls) -> {{ cookiecutter.__package_config_class_name }}:
+        load_devenv(Path(__file__).with_name('.dev.env'))
         cls._config = {{ cookiecutter.__package_config_class_name }}()
         return cls._config
 

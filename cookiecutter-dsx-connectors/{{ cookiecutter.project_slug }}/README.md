@@ -43,8 +43,8 @@ INFO:     Application startup complete.
 
 Leave `config.py` alone — it contains sane defaults. During development, override via:
 
-- `.devenv` file next to `config.py` (not included in releases)
-  - Example:
+- Copy `.dev.env.example` to `.dev.env` (same directory). This file is sourced automatically via `shared.dev_env.load_devenv`.
+  - Example overrides:
     - `DSXCONNECTOR_USE_TLS=false`
     - `DSXCONNECTOR_TLS_CERTFILE=../framework/deploy/certs/dev.localhost.crt`
     - `DSXCONNECTOR_TLS_KEYFILE=../framework/deploy/certs/dev.localhost.key`
@@ -53,7 +53,7 @@ Leave `config.py` alone — it contains sane defaults. During development, overr
     - `DSXCONNECTOR_VERIFY_TLS=false`
     - `DSXCONNECTOR_ASSET=...`
     - `DSXCONNECTOR_FILTER=...`
-  - Or set `DSXCONNECTOR_ENV_FILE=/path/to/custom.env` to use a different file.
+  - Optionally set `DSXCONNECTOR_ENV_FILE=/path/to/custom.env` to point at another env file.
 
 - Environment variables (shell/Compose/CI)
   - Any setting can be overridden as `DSXCONNECTOR_<SETTING_NAME>`.

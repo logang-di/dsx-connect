@@ -9,40 +9,40 @@ DSX‑Connect is a modular integration framework that orchestrates safe, scalabl
   - Scales from one file to billions using queues and horizontally scalable workers.
   - Integration‑agnostic: depends only on a stable connector API.
 
-- **DSX‑Connectors:**
-  - Service‑specific adapters that implement a consistent API:
-    - `startup` / `shutdown`
-    - `full_scan` (optional): enumerate and enqueue scan requests
-    - `read_file`: stream binary content
-    - `item_action`: delete/move/tag on verdicts
-    - `webhook_event`: ingest provider notifications
-    - `repo_check`, `estimate`, `config`, health/readiness
+- **DSX‑Connectors (Connectors):**
+  - Connectors implement a consistent API and focus on the specifics of a repository.
+  - Easily extendable: add new connectors to support new repositories.
+  - Stateless and can be deployed independently.
 
 ## Architecture Advantages
 
-- **Clear delineation:** Core orchestrates scanning; connectors handle repository semantics (list/read/act).
+- **Clear delineation:** DSX-Connect core orchestrates scanning, verdict handling, logging, etc...; connectors handle repository specific semantics (list/read/actions).
 - **Event‑driven:** Queues decouple enumeration, scanning, and remediation for high throughput and resilience.
 - **Fault tolerant & HA:** Retries with exponential backoff, dead letter queues (DLQ), graceful degradation.
-- **Scalable & flexible:** Add new repositories by writing a connector; scale worker pools independently.
+- **Scalable:** Core Worker pools handle parallelism and scaling; connectors operate independently.
+- **Flexible:** Add new repositories by writing a connector; core components stay the same.
 - **Consistent & pluggable:** All connectors share the same API contract; updating one doesn’t disrupt others.
 - **Observability:** Health endpoints, queue metrics, DLQ management, structured logs.
 
-## Standard Connector API (Summary)
+## Example Workflow
+
+The following diagram illustrates a simplified workflow of DSX-Connect, deployed with Scan Request and Verdict workers, and a Filesystem Connector.  First,
+a quick overview of connector APIs relevavnt to this example:
 
 - `full_scan`: enumerate items and enqueue scan requests (streaming enumeration recommended)
 - `read_file`: retrieve file content (binary stream)
 - `item_action`: perform remediation (delete/move/tag)
-- `webhook_event`: handle provider events to trigger scans
-- `repo_check`: verify connectivity
-- `estimate` (optional): preflight sizing
-- `config`: surface runtime configuration (secrets redacted)
 
-## Example Workflow (Filesystem Connector)
+Filesystem Connector deployed with access to a folder: ~/Documents, and quarantine folder set to ~/Documents/quarantine.
 
-1. Deploy connector with access to a folder/share.
-2. Trigger `full_scan` — the connector enumerates files and enqueues scan requests asynchronously.
-3. DSX‑Connect scan‑request workers call `read_file`, stream → scan → verdict → enqueue remediation.
-4. Verdict workers call `item_action` on the connector (delete/move/tag).
+1. DSX-Connect triggers a `full_scan` on the connector then...
+2. the connector lists all files in ~/Documents and for each file...
+3. sends Scan Requests to DSX-Connect which queues each request.  
+4. DSX‑Connect Scan Request Worker dequeues a Scan Request and... 
+5. Requests the file from the connector (`read_file`), and...
+6. scan the file with DSXA and places the DSXA verdict in the Verdict Queue.
+7. Verdict Worker dequeues a verdict and then, on a malicious verdict,
+8. calls on the connector's `item_action` to take action the connector (delete/move/tag the file). In this case, the Filesystem Connector moves the file to ~/Documents/quarantine.
 
 Benefits of decoupling: resiliency (queue persistence), scale (parallel workers), and isolation (enumeration doesn’t block scanning).
 
@@ -52,32 +52,49 @@ Benefits of decoupling: resiliency (queue persistence), scale (parallel workers)
 
 ## Architecture Diagram
 
-![DSX‑Connect Architecture](assets/dsx-connect-design.svg)
-
-Below is a high‑level Mermaid diagram that complements the static overview:
+![DSX‑Connect Architecture](assets/drawio/dsx-connect-design.svg)
 
 ```mermaid
 flowchart LR
-  UI[Web UI / API Client]
-  DSX[DSX‑Connect Core]
-  Q[(Redis Queues)]
-  Wk[Scan Request Workers]
-  Conn[Connector]
-  Repo[(Repository)]
-  DSXA[DSXA Scanner]
+%% Define Repositories (left column)
+    subgraph Repositories["File Repositories"]
+        AWSRepo["AWS S3"]
+        AzureRepo["Azure Blob Storage"]
+        GCPRepo["Google Cloud Storage"]
+        FSRepo["Filesystem"]
+    end
 
-  UI -->|full_scan| DSX
-  DSX -->|POST full_scan| Conn
-  Conn -->|Enumerate| Repo
-  Conn -->|POST scan_request| DSX
-  DSX -->|Enqueue| Q
-  Wk -->|Dequeue| Q
-  Wk -->|POST read_file| Conn
-  Conn -->|Stream content| Wk
-  Wk -->|Scan binary| DSXA
-  DSXA -->|Verdict| Wk
-  Wk -->|item_action (if malicious)| Conn
+%% Define Connectors (middle column)
+    subgraph Connectors["DSX-Connectors"]
+        AWSConn["AWS Connector"]
+        AzureConn["Azure Connector"]
+        GCPConn["GCP Connector"]
+        FSConn["Filesystem Connector"]
+    end
+
+%% Define Core System (right column)
+    DSX["DSX-Connect Core\n(FastAPI / Celery / Redis)"]
+
+%% Relationships (bidirectional)
+    AWSRepo <--> AWSConn
+    AzureRepo <--> AzureConn
+    GCPRepo <--> GCPConn
+    FSRepo <--> FSConn
+
+    AWSConn <--> DSX
+    AzureConn <--> DSX
+    GCPConn <--> DSX
+    FSConn <--> DSX
+
+%% Styling for clarity
+    classDef repo fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:1px;
+    classDef conn fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:1px;
+    classDef core fill:#fff3e0,stroke:#ef6
+
 ```
+
+Below is a high‑level Mermaid diagram that complements the static overview:
+
 
 ## Sequence: Full Scan (Mermaid)
 

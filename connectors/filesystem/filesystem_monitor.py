@@ -22,7 +22,8 @@ class FilesystemMonitorCallback(ABC):
 class FilesystemMonitor:
 
     def __init__(self, folder: pathlib.Path, filter: str, callback: FilesystemMonitorCallback,
-                 force_polling: bool = False, poll_interval_ms: int = 1000):
+                 force_polling: bool = False, poll_interval_ms: int = 1000,
+                 ignore_paths: list[pathlib.Path] | None = None):
         self._folder = folder
         self._filter = filter or ""
         self._callback = callback
@@ -30,6 +31,19 @@ class FilesystemMonitor:
         self._thread: threading.Thread | None = None
         self._force_polling = force_polling
         self._poll_interval_ms = max(10, int(poll_interval_ms or 1000))
+        self._ignore_rel: list[str] = []
+        self._ignore_abs: list[str] = []
+        for p in ignore_paths or []:
+            try:
+                resolved = p.expanduser().resolve()
+            except Exception:
+                resolved = p
+            self._ignore_abs.append(resolved.as_posix())
+            try:
+                rel = resolved.relative_to(self._folder)
+                self._ignore_rel.append(rel.as_posix())
+            except Exception:
+                pass
 
     def start(self):
         if not _HAVE_WATCHFILES:
@@ -62,6 +76,21 @@ class FilesystemMonitor:
                         # Only consider regular files
                         if not pth.exists() or not pth.is_file():
                             return False
+                        resolved = pth.resolve()
+                        rel_posix = None
+                        try:
+                            rel = resolved.relative_to(self._folder)
+                            rel_posix = rel.as_posix()
+                        except Exception:
+                            pass
+                        if rel_posix:
+                            for ignore in self._ignore_rel:
+                                if rel_posix == ignore or rel_posix.startswith(ignore.rstrip('/') + '/'):
+                                    return False
+                        abs_posix = resolved.as_posix()
+                        if any(abs_posix == ignore or abs_posix.startswith(ignore.rstrip('/') + '/')
+                               for ignore in self._ignore_abs):
+                            return False
                         return path_matches_filter(self._folder, pth, self._filter)
                     except Exception:
                         return False
@@ -81,6 +110,23 @@ class FilesystemMonitor:
                             continue
                         p = pathlib.Path(path_str)
                         if not p.exists() or not p.is_file():
+                            continue
+                        resolved = p.resolve()
+                        ignore_hit = False
+                        try:
+                            rel = resolved.relative_to(self._folder)
+                            rel_posix = rel.as_posix()
+                            if any(rel_posix == ignore or rel_posix.startswith(ignore.rstrip('/') + '/')
+                                   for ignore in self._ignore_rel):
+                                ignore_hit = True
+                        except Exception:
+                            pass
+                        abs_posix = resolved.as_posix()
+                        if any(abs_posix == ignore or abs_posix.startswith(ignore.rstrip('/') + '/')
+                               for ignore in self._ignore_abs):
+                            ignore_hit = True
+                        if ignore_hit:
+                            dsx_logging.debug(f"File {p} ignored by monitor (ignore list)")
                             continue
                         # Apply rsync-like filter as an extra guard
                         if not path_matches_filter(self._folder, p, self._filter):
@@ -127,6 +173,28 @@ class FilesystemMonitor:
             return
         filename = pathlib.Path(getattr(event, 'src_path', ''))
         if not filename:
+            return
+        try:
+            resolved = filename.resolve()
+        except Exception:
+            resolved = filename
+        rel_posix = None
+        try:
+            rel = resolved.relative_to(self._folder)
+            rel_posix = rel.as_posix()
+        except Exception:
+            pass
+        ignore_hit = False
+        if rel_posix:
+            if any(rel_posix == ignore or rel_posix.startswith(ignore.rstrip('/') + '/')
+                   for ignore in self._ignore_rel):
+                ignore_hit = True
+        abs_posix = resolved.as_posix()
+        if any(abs_posix == ignore or abs_posix.startswith(ignore.rstrip('/') + '/')
+               for ignore in self._ignore_abs):
+            ignore_hit = True
+        if ignore_hit:
+            dsx_logging.debug(f"File {filename} ignored by monitor (ignore list)")
             return
         try:
             if filename.exists() and filename.is_file():

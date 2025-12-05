@@ -17,7 +17,7 @@
 
     "command_line_interface": ["No command-line interface", "Typer", "Argparse"],
     "create_author_file": "n",
-    "open_source_license": ["MIT license", "BSD license", "ISC license", "Apache Software License 2.0", "GNU General Public License v3", "Not open source"],
+    "open_source_license": "GNU General Public License v3",
     "__use_pytest" : "n",
     "__add_pyup_badge": "n",
     "__use_pypi_deployment_with_travis" : "n",

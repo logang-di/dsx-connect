@@ -22,7 +22,7 @@ command: [
 
 healthcheck:
   test: ["redis-cli", "ping"]
-  interval: 10s
-  timeout: 3s
+  interval: 10
+  timeout: 3
   retries: 5
-  startPeriod: 10s
+  startPeriod: 10

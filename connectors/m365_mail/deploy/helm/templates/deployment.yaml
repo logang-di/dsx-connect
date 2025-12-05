@@ -47,15 +47,19 @@ spec:
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: DSXCONNECTOR_AUTH__ENABLED
-              value: {{ .Values.auth.enabled | quote }}
+              value: {{ .Values.auth_dsxconnect.enabled | quote }}
+            {{- if .Values.webhook.publicUrl }}
+            - name: DSXCONNECTOR_WEBHOOK_URL
+              value: {{ .Values.webhook.publicUrl | quote }}
+            {{- end }}
             - name: LOG_LEVEL
               value: {{ .Values.env.LOG_LEVEL | default "debug" | quote }}
-            {{- if .Values.dsxConnectEnrollment.secretName }}
+            {{- if .Values.auth_dsxconnect.enrollmentSecretName }}
             - name: DSXCONNECT_ENROLLMENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.dsxConnectEnrollment.secretName | quote }}
-                  key: {{ .Values.dsxConnectEnrollment.key | quote }}
+                  name: {{ .Values.auth_dsxconnect.enrollmentSecretName | quote }}
+                  key: {{ .Values.auth_dsxconnect.enrollmentKey | quote }}
             {{- end }}
             {{- range $k, $v := .Values.env }}
             {{- if not (has $k (list "LOG_LEVEL")) }}
@@ -63,10 +67,18 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
             {{- end }}
+            - name: DSXCONNECTOR_AUTH__CLOCK_SKEW_SECONDS
+              value: {{ .Values.auth_dsxconnect.clockSkewSeconds | quote }}
+          {{- if .Values.envSecretRefs }}
+          envFrom:
+            {{- range .Values.envSecretRefs }}
+            - secretRef:
+                name: {{ . | quote }}
+            {{- end }}
+          {{- end }}
           {{- if .Values.tls.enabled }}
           volumeMounts:
             - name: tls-certs
               mountPath: "/app/certs"
               readOnly: true
           {{- end }}
-

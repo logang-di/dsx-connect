@@ -1,6 +1,11 @@
 # Connector State KV (dsx‑connect)
 
-Use dsx‑connect as a small, HMAC‑protected key/value store for stateless connectors. Typical use cases include delta tokens, cursors, or small configuration flags.
+Connectors are intended to be stateless, as it promotes simple, "do-your-job" connectors, that focus on a few single tasks, and not complex interactions, fault tolerance, redundancy, etc....
+For example, if a connector crashes, simply restart and the dsx-connect core will pick up where things left off.
+
+However, there are cases where connectors need to utilize state, such retaining delta tokens or cursors that tracks Microsoft Graph changes (see Sharepoint/One Drive connectors).
+In this case, where a saved state is needed for resuming work after connector restarts or redeployments (e.g., persisting the latest Graph delta cursor so the next run can
+pick up from the correct change token), connectors should use dsx‑connect APIs to store small, key/values. 
 
 ## Endpoints
 

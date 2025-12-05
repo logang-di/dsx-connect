@@ -1,3 +1,6 @@
+import json
+import threading
+
 from starlette.responses import StreamingResponse
 
 from connectors.framework.dsx_connector import DSXConnector
@@ -7,11 +10,14 @@ from shared.dsx_logging import dsx_logging
 from shared.models.status_responses import StatusResponse, StatusResponseEnum, ItemActionStatusResponse
 from connectors.google_cloud_storage.config import ConfigManager
 from connectors.google_cloud_storage.version import CONNECTOR_VERSION
-from shared.streaming import stream_blob
+from shared.async_ops import run_async
 from shared.file_ops import relpath_matches_filter
+from shared.streaming import stream_blob
 
 # Reload config to pick up environment variables
 config = ConfigManager.reload_config()
+
+DEFAULT_PUBSUB_EVENTS: set[str] = {"OBJECT_FINALIZE", "OBJECT_METADATA_UPDATE"}
 
 # Derive bucket and base prefix from asset, supporting both "bucket" and "bucket/prefix" forms
 try:
@@ -30,6 +36,122 @@ except Exception:
 connector = DSXConnector(config)
 
 gcs_client = GCSClient()
+
+_monitor_thread: threading.Thread | None = None
+_monitor_stop = threading.Event()
+
+
+def _should_monitor() -> bool:
+    if not getattr(config, "monitor", False):
+        return False
+    if not config.pubsub_project_id or not config.pubsub_subscription:
+        dsx_logging.warning(
+            "GCS monitor enabled but PUB/SUB project or subscription is missing; monitoring disabled."
+        )
+        return False
+    return True
+
+
+def _start_pubsub_monitor():
+    global _monitor_thread
+    if _monitor_thread and _monitor_thread.is_alive():
+        return
+
+    try:
+        from google.cloud import pubsub_v1  # local import to keep optional dependency optional
+    except Exception as exc:
+        dsx_logging.error(f"Failed to import google.cloud.pubsub_v1: {exc}")
+        return
+
+    project = config.pubsub_project_id.strip()
+    subscription_name = config.pubsub_subscription.strip()
+    if not project or not subscription_name:
+        dsx_logging.warning("Pub/Sub project or subscription not configured; skipping monitor thread.")
+        return
+
+    client_options = {}
+    endpoint = getattr(config, "pubsub_endpoint", "") or ""
+    if endpoint:
+        client_options["api_endpoint"] = endpoint
+
+    subscriber = pubsub_v1.SubscriberClient(client_options=client_options or None)
+    if subscription_name.startswith("projects/"):
+        subscription_path = subscription_name
+    else:
+        subscription_path = subscriber.subscription_path(project, subscription_name)
+
+    accepted_types = set(DEFAULT_PUBSUB_EVENTS)
+    bucket_prefix = (config.asset_prefix_root or "").strip("/")
+    if bucket_prefix:
+        bucket_prefix = bucket_prefix + "/"
+
+    def handle_message(message):
+        try:
+            attrs = message.attributes or {}
+            raw_data = message.data.decode("utf-8") if message.data else ""
+            payload = {}
+            if raw_data:
+                try:
+                    payload = json.loads(raw_data)
+                except Exception:
+                    payload = {}
+
+            bucket = attrs.get("bucketId") or attrs.get("bucket_id") or payload.get("bucket")
+            obj = attrs.get("objectId") or attrs.get("object_id") or payload.get("name")
+            event_type = attrs.get("eventType") or attrs.get("event_type") or payload.get("eventType") or ""
+            event_type = str(event_type).upper()
+
+            if bucket and bucket != config.asset_bucket:
+                message.ack()
+                return
+
+            if not obj:
+                message.ack()
+                return
+
+            if bucket_prefix and not obj.startswith(bucket_prefix):
+                message.ack()
+                return
+
+            if event_type and accepted_types and event_type not in accepted_types:
+                message.ack()
+                return
+
+            full_path = f"{config.asset_bucket}/{obj}" if config.asset_bucket else obj
+
+            async def enqueue_scan():
+                await connector.scan_file_request(
+                    ScanRequestModel(location=obj, metainfo=full_path)
+                )
+
+            run_async(enqueue_scan())
+            dsx_logging.info(f"GCS Pub/Sub enqueue for {full_path} ({event_type or 'unknown event'})")
+            message.ack()
+        except Exception as exc:
+            dsx_logging.error(f"Failed to process Pub/Sub message: {exc}")
+            try:
+                message.nack()
+            except Exception:
+                pass
+
+    def worker():
+        dsx_logging.info(
+            f"Starting GCS Pub/Sub monitor on {subscription_path} (events: {', '.join(sorted(accepted_types))})"
+        )
+        streaming_future = subscriber.subscribe(subscription_path, callback=handle_message)
+        try:
+            while not _monitor_stop.wait(5):
+                continue
+        except Exception as exc:
+            dsx_logging.error(f"Pub/Sub subscriber error: {exc}")
+        finally:
+            streaming_future.cancel()
+            subscriber.close()
+            dsx_logging.info("GCS Pub/Sub monitor stopped")
+
+    _monitor_stop.clear()
+    _monitor_thread = threading.Thread(target=worker, name="gcs-pubsub-monitor", daemon=True)
+    _monitor_thread.start()
 
 
 @connector.startup
@@ -53,6 +175,10 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     base.status = ConnectorStatusEnum.READY
     prefix_disp = f"/{config.asset_prefix_root}" if getattr(config, 'asset_prefix_root', '') else ""
     base.meta_info = f"GCS Bucket: {config.asset_bucket}{prefix_disp}, filter: {config.filter or '(none)'}"
+
+    if _should_monitor():
+        _start_pubsub_monitor()
+
     return base
 
 
@@ -68,6 +194,13 @@ async def shutdown_event():
         None
     """
     dsx_logging.info(f"Shutting down connector {connector.connector_id}")
+    global _monitor_thread
+    if _monitor_thread and _monitor_thread.is_alive():
+        _monitor_stop.set()
+        _monitor_thread.join(timeout=10)
+        if _monitor_thread.is_alive():
+            dsx_logging.warning("Pub/Sub monitor thread did not exit cleanly")
+    _monitor_thread = None
 
 
 @connector.full_scan

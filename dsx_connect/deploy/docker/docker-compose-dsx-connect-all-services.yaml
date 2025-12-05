@@ -8,9 +8,11 @@ x-common-env: &common-env
   DSXCONNECT_RESULTS_DB__RETAIN: 100
   PYTHONUNBUFFERED: 1
 
+x-core-image: &core-image ${DSXCONNECT_IMAGE:-dsxconnect/dsx-connect:__VERSION__}
+
 services:
   dsx_connect_api:
-    image: dsxconnect/dsx-connect:__VERSION__
+    image: *core-image
     #build:
     #  context: .
     #  dockerfile: Dockerfile
@@ -46,7 +48,7 @@ services:
     restart: unless-stopped
 
   dsx_connect_scan_request_worker:
-    image: dsxconnect/dsx-connect:__VERSION__
+    image: *core-image
     environment:
       <<: *common-env
       # using common-env setting for SCAN_BINARY_URL if commented out
@@ -66,7 +68,7 @@ services:
 
 
   dsx_connect_verdict_action_worker:
-    image: dsxconnect/dsx-connect:__VERSION__
+    image: *core-image
     environment:
       <<: *common-env
       LOG_LEVEL: debug
@@ -83,7 +85,7 @@ services:
     restart: unless-stopped
 
   dsx_connect_results_worker:
-    image: dsxconnect/dsx-connect:__VERSION__
+    image: *core-image
     environment:
       <<: *common-env
       LOG_LEVEL: debug
@@ -107,7 +109,7 @@ services:
     restart: unless-stopped
 
   dsx_connect_notification_worker:
-    image: dsxconnect/dsx-connect:__VERSION__
+    image: *core-image
     environment:
       <<: *common-env
       LOG_LEVEL: debug

@@ -1,7 +1,10 @@
+import errno
+import os
 import pathlib
+import shutil
+from uuid import uuid4
 
 import uvicorn
-import os
 
 from starlette.responses import StreamingResponse
 
@@ -68,6 +71,13 @@ async def start_monitor():
                 run_async(
                     connector.webhook_handler(ScanRequestModel(location=str(file_path), metainfo=file_path.name)))
 
+        # Determine quarantine path relative to asset if a relative path is supplied
+        raw_quarantine = config.item_action_move_metainfo or ""
+        quarantine_path = pathlib.Path(os.path.expandvars(raw_quarantine)).expanduser()
+        if not quarantine_path.is_absolute():
+            base_asset = _normalize_path(config.asset)
+            quarantine_path = (base_asset / quarantine_path).resolve()
+
         monitor_callback = MonitorCallback()
 
         # Expand '~' and env vars, resolve to absolute path, and validate directory exists before starting watch
@@ -85,12 +95,18 @@ async def start_monitor():
             )
             return
 
+        ignore_paths: list[pathlib.Path] = []
+        if quarantine_path.exists():
+            ignore_paths.append(quarantine_path)
+
         connector.filesystem_monitor = FilesystemMonitor(
             folder=watch_path,
             filter=config.filter,
             callback=monitor_callback,
             force_polling=bool(getattr(config, 'monitor_force_polling', False)),
-            poll_interval_ms=int(getattr(config, 'monitor_poll_interval_ms', 1000)))
+            poll_interval_ms=int(getattr(config, 'monitor_poll_interval_ms', 1000)),
+            ignore_paths=ignore_paths,
+        )
         connector.filesystem_monitor.start()
         dsx_logging.info(f"Monitor set on {watch_path} for new or modified files with filter: {config.filter}")
     else:
@@ -221,27 +237,57 @@ async def item_action_handler(scan_event_queue_info: ScanRequestModel) -> Status
                                         description=f"File deleted from {file_path}")
     elif config.item_action == ItemActionEnum.MOVE:
         dsx_logging.debug(f'Item action {ItemActionEnum.MOVE} on {file_path} invoked.')
-        # Ensure the destination directory exists
-        move_dir = pathlib.Path(config.item_action_move_metainfo)
-        move_dir.mkdir(parents=True, exist_ok=True)
-        # Construct the destination file path (same file name)
-        new_path = move_dir / path_obj.name
+
+        raw_target = config.item_action_move_metainfo or ""
+        dest_root = pathlib.Path(os.path.expandvars(raw_target)).expanduser()
+        if not dest_root.is_absolute():
+            dest_root = (_normalize_path(config.asset) / dest_root).resolve()
+        else:
+            dest_root = dest_root.resolve()
+        dest_root.mkdir(parents=True, exist_ok=True)
+
+        def _unique_destination(base_dir: pathlib.Path, name: str) -> pathlib.Path:
+            candidate = base_dir / name
+            if not candidate.exists():
+                return candidate
+            stem = candidate.stem
+            suffix = candidate.suffix
+            while True:
+                alt = base_dir / f"{stem}-{uuid4().hex[:6]}{suffix}"
+                if not alt.exists():
+                    return alt
+
+        destination = _unique_destination(dest_root, path_obj.name)
+
         try:
-            path_obj.rename(new_path)
-            return ItemActionStatusResponse(
-                status=StatusResponseEnum.SUCCESS,
-                item_action=config.item_action,
-                message="File moved",
-                description=f'Item action {config.item_action} was invoked. File {file_path} successfully moved to {new_path}.'
-            )
-        except Exception as e:
-            error_msg = f'Failed to move file {file_path}: {e}'
-            dsx_logging.error(error_msg)
-            return ItemActionStatusResponse(
-                status=StatusResponseEnum.ERROR,
-                message=error_msg,
-                item_action=config.item_action
-            )
+            path_obj.rename(destination)
+        except OSError as exc:
+            if exc.errno in {errno.EXDEV, errno.EACCES, errno.EPERM, errno.EEXIST}:
+                try:
+                    shutil.move(str(path_obj), str(destination))
+                except Exception as inner_exc:
+                    error_msg = f'Failed to move file {file_path} into {destination}: {inner_exc}'
+                    dsx_logging.error(error_msg)
+                    return ItemActionStatusResponse(
+                        status=StatusResponseEnum.ERROR,
+                        message=error_msg,
+                        item_action=config.item_action,
+                    )
+            else:
+                error_msg = f'Failed to move file {file_path}: {exc}'
+                dsx_logging.error(error_msg)
+                return ItemActionStatusResponse(
+                    status=StatusResponseEnum.ERROR,
+                    message=error_msg,
+                    item_action=config.item_action,
+                )
+
+        return ItemActionStatusResponse(
+            status=StatusResponseEnum.SUCCESS,
+            item_action=config.item_action,
+            message="File moved",
+            description=f'Item action {config.item_action} was invoked. File {file_path} successfully moved to {destination}.'
+        )
 
     return ItemActionStatusResponse(status=StatusResponseEnum.NOTHING, item_action=config.item_action,
                                     message="Item action did nothing or not implemented")

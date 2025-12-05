@@ -25,7 +25,11 @@ from shared.dsx_logging import dsx_logging
 from connectors.framework.connector_id import get_or_create_connector_uuid
 import httpx
 from shared.routes import ConnectorAPI
-from connectors.framework.auth_hmac import require_dsx_hmac
+from connectors.framework.auth_hmac import (
+    require_dsx_hmac,
+    reload_settings as reload_connector_auth_settings,
+    auth_enabled as connector_auth_enabled,
+)
 
 # Context variable to propagate a scan job id during full_scan
 _SCAN_JOB_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar("scan_job_id", default=None)
@@ -76,6 +80,7 @@ def _sanitize_display_icon(raw: str | None) -> str | None:
 class DSXConnector:
     def __init__(self, connector_config: BaseConnectorConfig):
         self.connector_id = connector_config.name
+        self.connector_config = connector_config
 
         # Ensure per-connector default data dir for UUID persistence in local/dev.
         # If DSXCONNECTOR_DATA_DIR is not set, derive it from the connector's config module path.
@@ -97,8 +102,17 @@ class DSXConnector:
         self._access_token: str | None = None
         self._access_expiry_ts: int | None = None
 
+        # Refresh connector auth settings now that .env has been loaded
+        try:
+            reload_connector_auth_settings()
+        except Exception:
+            pass
+
         if self._enrollment_token:
-            hmac_mode = os.getenv("DSXCONNECTOR_AUTH__ENABLED", "").strip().lower() in ("1", "true", "yes")
+            try:
+                hmac_mode = connector_auth_enabled()
+            except Exception:
+                hmac_mode = os.getenv("DSXCONNECTOR_AUTH__ENABLED", "").strip().lower() in ("1", "true", "yes")
             if hmac_mode:
                 dsx_logging.info("Connector authentication: enrollment token provided; DSX-HMAC verification enabled.")
             else:
@@ -213,10 +227,14 @@ class DSXConnector:
             if self.shutdown_handler:
                 await self.shutdown_handler()
 
+        docs_enabled = not connector_auth_enabled()
         return FastAPI(
             title=f"{self.connector_running_model.name} [dsx-connector]",
             description=f"API for dsx-connector: {self.connector_running_model.name} (UUID: {self.connector_running_model.uuid})",
-            lifespan=lifespan
+            lifespan=lifespan,
+            docs_url="/docs" if docs_enabled else None,
+            redoc_url="/redoc" if docs_enabled else None,
+            openapi_url="/openapi.json" if docs_enabled else None,
         )
 
         # Build router after app so we can re-use helper if needed
@@ -403,6 +421,18 @@ class DSXConnector:
     # ----------------- outward calls -----------------
 
     async def scan_file_request(self, scan_request: ScanRequestModel) -> StatusResponse:
+        if self.connector_running_model.status != ConnectorStatusEnum.READY:
+            dsx_logging.warning(
+                "Skipping scan request for %s because connector is not registered with dsx-connect (status=%s).",
+                scan_request.location,
+                self.connector_running_model.status.value,
+            )
+            return StatusResponse(
+                status=StatusResponseEnum.ERROR,
+                description="Connector not registered with dsx-connect",
+                message="Scan request skipped because dsx-connect is unavailable.",
+            )
+
         if self.connector_running_model.item_action_move_metainfo in scan_request.location:
             return StatusResponse(status=StatusResponseEnum.NOTHING, description="Quarantine path", message=f"Skip {scan_request.location}")
         scan_request.connector = self.connector_running_model
@@ -441,16 +471,24 @@ class DSXConnector:
             async with httpx.AsyncClient(verify=self._httpx_verify) as client:
                 url = service_url(self.dsx_connect_url, API_PREFIX_V1, DSXConnectAPI.SCAN_PREFIX, ScanPath.REQUEST)
                 payload = jsonable_encoder(scan_request)
+                import json as _json
                 try:
-                    import json as _json
                     content = _json.dumps(payload, separators=(",", ":")).encode()
+                    hdrs = self._dsx_hmac_headers("POST", url, content)
+                    resp = await client.post(url, content=content, headers=hdrs or None)
                 except Exception:
-                    content = None
-                hdrs = self._dsx_hmac_headers("POST", url, content)
-                resp = await client.post(url, json=payload, headers=hdrs or None)
+                    hdrs = self._dsx_hmac_headers("POST", url, b"")
+                    resp = await client.post(url, json=payload, headers=hdrs or None)
             resp.raise_for_status()
             self.scan_request_count += 1
             return StatusResponse(**resp.json())
+        except httpx.ConnectError as e:
+            dsx_logging.warning("dsx-connect unreachable during scan request: %s", e)
+            return StatusResponse(
+                status=StatusResponseEnum.ERROR,
+                description="dsx-connect unreachable",
+                message="Failed to deliver scan request; dsx-connect not reachable.",
+            )
         except httpx.HTTPStatusError as e:
             dsx_logging.error("HTTP error during scan request", exc_info=True)
             return StatusResponse(status=StatusResponseEnum.ERROR, description="Failed to send scan request", message=str(e))
@@ -484,6 +522,11 @@ class DSXConnector:
                     if kid and sec:
                         from connectors.framework.auth_hmac import set_runtime_hmac_credentials
                         set_runtime_hmac_credentials(kid, sec)
+                        try:
+                            setattr(self.connector_running_model, "hmac_key_id", kid)
+                            setattr(self.connector_running_model, "hmac_secret", sec)
+                        except Exception:
+                            pass
             except Exception:
                 pass
             return StatusResponse(**data)
@@ -823,6 +866,12 @@ class DSXAConnectorRouter(APIRouter):
 
     async def post_handle_webhook_event(self, request: Request):
         if self._connector.webhook_handler:
+            # Handle Graph-like validation handshake (validationToken query parameter)
+            validation_token = request.query_params.get("validationToken")
+            if validation_token:
+                # Microsoft Graph requires the raw token echoed as the response body with 200 OK
+                dsx_logging.debug("Validation token received; echoing for webhook handshake.")
+                return Response(content=str(validation_token), media_type="text/plain", status_code=200)
             # Parse the JSON payload from the request body
             event = await request.json()
             dsx_logging.info(f"Received webhook for artifact path: {event}")

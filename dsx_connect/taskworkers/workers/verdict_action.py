@@ -43,8 +43,8 @@ class VerdictActionWorker(BaseWorker):
         if verdict.verdict == DPAVerdictEnum.MALICIOUS:
             # 2a. Call item_action if verdict is MALICIOUS and perhaps in some future - where the severity meets a threshold
             dsx_logging.info(f"Verdict is MALICIOUS, calling item_action")
-
-            with get_connector_client(scan_request.connector_url) as client:
+            target = scan_request.connector or scan_request.connector_url
+            with get_connector_client(target) as client:
                 response = client.put(
                     ConnectorAPI.ITEM_ACTION,
                     json_body=jsonable_encoder(scan_request),

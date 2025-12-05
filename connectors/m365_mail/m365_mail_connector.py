@@ -6,11 +6,12 @@ import httpx
 from fastapi.encoders import jsonable_encoder
 from starlette.responses import StreamingResponse
 from shared.dsx_logging import dsx_logging
+# Import module as alias so connector_api updates propagate
+from connectors.framework import dsx_connector as dsx_framework
 from connectors.framework.dsx_connector import DSXConnector
 from connectors.m365_mail.config import config
 from connectors.m365_mail.graph_client import GraphClient
 from connectors.m365_mail.subscriptions import SubscriptionManager
-from connectors.framework.dsx_connector import connector_api
 from fastapi import Request, Response
 from connectors.framework.auth_hmac import build_outbound_auth_header
 from shared.models.connector_models import ConnectorInstanceModel, ConnectorStatusEnum, ScanRequestModel, ItemActionEnum
@@ -19,6 +20,7 @@ from shared.routes import service_url, API_PREFIX_V1, DSXConnectAPI
 
 
 connector = DSXConnector(config)
+connector_api = dsx_framework.connector_api
 _graph: GraphClient | None = None
 _subs_mgr: SubscriptionManager | None = None
 _subs_task = None
@@ -191,6 +193,39 @@ async def _delta_runner(limit: int | None = None) -> dict:
         return {"status": status, "enqueued": total, "details": details}
 
 
+def _kick_delta_for_upns(upns: list[str]) -> None:
+    if not upns:
+        return
+    try:
+        from fastapi import BackgroundTasks
+    except ImportError:
+        BackgroundTasks = None
+
+    async def _run_once(targets: list[str]):
+        lock = _ensure_delta_lock()
+        async with lock:
+            results = []
+            for upn in targets:
+                try:
+                    res = await _run_delta_for_mailbox(upn, None)
+                    results.append({"upn": upn, **res})
+                except Exception as exc:
+                    dsx_logging.warning(f"delta_kick_failed upn={upn}: {exc}")
+            if results:
+                total = sum(r.get("enqueued", 0) for r in results)
+                dsx_logging.info(f"delta.kick enqueued={total} details={results}")
+
+    targets = sorted(set(upns))
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop and loop.is_running():
+        loop.create_task(_run_once(targets))
+    else:
+        asyncio.run(_run_once(targets))
+
+
 @connector.startup
 async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
     dsx_logging.info(f"{base.name} startup. tenant={config.tenant_id} client_id={config.client_id}")
@@ -212,12 +247,31 @@ async def startup_event(base: ConnectorInstanceModel) -> ConnectorInstanceModel:
         if _graph and upns:
             global _subs_mgr, _subs_task
             _subs_mgr = SubscriptionManager(_graph.token)
-            webhook_url = f"{config.connector_url.rstrip('/')}/{config.name}/webhook/event"
+            if getattr(config, "webhook_base_url", None):
+                connector_base = str(config.webhook_base_url).rstrip("/")
+            else:
+                connector_base = str(config.connector_url).rstrip("/")
+            webhook_url = f"{connector_base}/{config.name}/webhook/event"
             async def _reconcile_loop():
                 while True:
                     try:
                         summary = await _subs_mgr.reconcile_for_upns(upns, webhook_url)
                         dsx_logging.info(f"Subscriptions reconciled: {summary}")
+                    except httpx.HTTPStatusError as e:
+                        status = e.response.status_code if e.response is not None else "unknown"
+                        msg = ""
+                        try:
+                            payload = e.response.json()
+                            msg = payload.get("error", {}).get("message") or ""
+                        except Exception:
+                            msg = (e.response.text[:256] if e.response is not None else "")
+                        hint = ""
+                        if status == 400 and str(config.connector_url).startswith("http://"):
+                            hint = " (Graph requires a publicly reachable HTTPS webhook URL—check DSXCONNECTOR_CONNECTOR_URL)"
+                        dsx_logging.warning(
+                            f"Subscription reconcile failed (HTTP {status}): {msg or e}. "
+                            f"webhook_url={webhook_url}{hint}"
+                        )
                     except Exception as e:
                         dsx_logging.warning(f"Subscription reconcile failed: {e}")
                     await asyncio.sleep(1800)  # 30 minutes
@@ -273,6 +327,18 @@ async def webhook_handler(event: dict | ScanRequestModel) -> StatusResponse:
                 values = [v for v in values if v.get('clientState') == config.client_state]
         except Exception:
             pass
+        if getattr(config, "trigger_delta_on_notification", False) and values:
+            upns = []
+            for v in values:
+                try:
+                    resource = v.get("resource", "")
+                    parts = resource.strip("/").split("/")
+                    if len(parts) >= 2 and parts[0].lower() == "users":
+                        upns.append(parts[1])
+                except Exception:
+                    continue
+            if upns:
+                _kick_delta_for_upns(upns)
         enq = 0
         for v in values:
             resource = v.get("resource") or ""

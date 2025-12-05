@@ -2,3 +2,6 @@
 __pycache__/#.envs
 *.dev.env
 .dev.env
+
+# DSXA SDK test assets
+dsxa_sdk/tests/assets/samples/

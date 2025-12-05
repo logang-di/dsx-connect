@@ -104,8 +104,9 @@ class ScanRequestWorker(BaseWorker):
 
     def read_file_from_connector(self, scan_request: ScanRequestModel) -> bytes:
         """Read file bytes from connector. Maps exceptions to task-appropriate errors."""
+        target = scan_request.connector or scan_request.connector_url
         try:
-            with get_connector_client(scan_request.connector_url) as client:
+            with get_connector_client(target) as client:
                 response = client.post(
                     ConnectorAPI.READ_FILE,
                     json_body=jsonable_encoder(scan_request),

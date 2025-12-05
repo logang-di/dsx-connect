@@ -61,8 +61,8 @@ Recommendation: source enrollment tokens from `Kubernetes Secrets` and rotate wi
     - `DSXCONNECT_AUTH__ENROLLMENT_TOKEN` (single) or `DSXCONNECT_AUTH__ENROLLMENT_TOKENS` (CSV for rotation).
   - Auth toggle: `DSXCONNECT_AUTH__ENABLED=true` to enforce HMAC.
 - Connector charts:
-  - `dsxConnectEnrollment`: reference the same enrollment Secret and set `DSXCONNECT_ENROLLMENT_TOKEN`.
-  - `auth.enabled`: controls HMAC verification on connector private endpoints.
+  - `auth_dsxconnect.enabled`: controls DSX-HMAC verification on private connector endpoints.
+  - `auth_dsxconnect.enrollmentSecretName` / `.enrollmentKey`: reference the same enrollment Secret used by dsx-connect.
   - Expose only `/webhook_event` via Ingress; add NetworkPolicies to allow ingress only from dsx-connect and your Ingress controller.
 
 ### Secret Generation Options
@@ -106,11 +106,11 @@ Recommendation: source enrollment tokens from `Kubernetes Secrets` and rotate wi
   - Provision per‑connector HMAC on register, store in Redis, return `hmac_key_id`/`hmac_secret` in response.
   - Added inbound DSX‑HMAC verifier for connector→dsx‑connect endpoints (e.g., `/scan/request`, `enqueue_done`, `unregister`).
 - Connector changes:
-  - On register, capture returned HMAC creds at runtime; sign all calls to dsx‑connect with DSX‑HMAC.
-  - Enforce DSX‑HMAC on private connector routes when `auth.enabled=true`.
+  - On register, capture returned HMAC creds at runtime; sign all calls to dsx-connect with DSX-HMAC.
+  - Enforce DSX-HMAC on private connector routes when `auth_dsxconnect.enabled=true`.
 - Helm changes:
-  - Simplified dsx‑connect auth values to just `auth.enabled` + `auth.enrollment.{key,value}`; removed outboundHmac and JWT settings.
-  - Connector charts use `dsxConnectEnrollment` and `auth.enabled`; added Ingress (webhook‑only) and NetworkPolicy templates.
+  - Simplified dsx-connect auth values to just `auth.enabled` + `auth.enrollment.{key,value}`; removed outboundHmac and JWT settings.
+  - Connector charts now expose a unified `auth_dsxconnect` block (enrollment + HMAC secrets) and ship Ingress (webhook-only) / NetworkPolicy templates.
   - Moved DIANNA config from `global.dianna` to `dsx-connect-dianna-worker.dianna` (managementUrl/token per worker);
     updated DI worker template to read `.Values.dianna` and docs to favor values files + Secrets over CLI.
 - Docs:

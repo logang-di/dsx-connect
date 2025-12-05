@@ -3,8 +3,8 @@ site_description: Modular, scalable file scanning orchestration with pluggable c
 repo_url: https://github.com/your-org/dsx-connect
 theme:
   name: material
-  logo: assets/dsx-connect-icon.svg
-  favicon: assets/dsx-connect-icon.svg
+  logo: assets/dsx-connect-icon-white.svg
+  favicon: assets/dsx-connect-icon-white.svg
   features:
     - navigation.instant
     - navigation.tracking
@@ -14,32 +14,76 @@ theme:
     - search.suggest
     - search.highlight
   palette:
+#    - scheme: default
+#      primary: teal
+#      accent: amber
     - scheme: default
-      primary: indigo
-      accent: indigo
+      primary: light blue
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: light blue
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
 nav:
   - Home: index.md
   - Overview: overview.md
-  - Operations:
-      - Connector State KV: operations/kv-state.md
+  - Quick Start: overview-quick-start.md
   - Connectors:
       - Index: connectors/index.md
+      - Connector Concepts: connectors/concepts.md
       - M365 Email (Design): connectors/m365-email.md
       - Filesystem (Overview): connectors/filesystem.md
+      - SharePoint vs OneDrive: connectors/sharepoint-vs-onedrive.md
   - Deployment:
-      - dsx-connect (Core): deployment/docker/dsx-connect.md
-      - Docker Quickstart: deployment/docker/quickstart.md
-      - Connector Authentication: deployment/authentication.md
-      - Docker Guides (per connector):
-          - AWS S3: deployment/docker/aws-s3.md
-          - Azure Blob Storage: deployment/docker/azure-blob.md
-          - Filesystem: deployment/docker/filesystem.md
-          - Google Cloud Storage: deployment/docker/google-cloud-storage.md
-          - SharePoint: deployment/docker/sharepoint.md
-          - M365 Email: deployment/docker/m365-mail.md
+      - Docker Deployment:
+          - Docker Quickstart: deployment/docker/quickstart.md
+          - dsx-connect (Core): deployment/docker/dsx-connect.md
+          - Connector Deployments:
+              - AWS S3: deployment/docker/aws-s3.md
+              - Azure Blob Storage: deployment/docker/azure-blob.md
+              - Filesystem: deployment/docker/filesystem.md
+              - Google Cloud Storage: deployment/docker/google-cloud-storage.md
+              - SharePoint: deployment/docker/sharepoint.md
+              - Salesforce: deployment/docker/salesforce.md
+              - M365 Email: deployment/docker/m365-mail.md
+              - OneDrive: deployment/docker/onedrive.md
+      - Kubernetes (advanced) Deployment:
+          - General Tips: deployment/kubernetes/getting-started.md
+          - Quick Tutorial: deployment/kubernetes/getting-started-quickstart.md
+          - Quick Tutorial 2: deployment/kubernetes/getting-started-quickstart-azure.md
+          - Authentication: deployment/authentication.md
+          - Deploying DSX-Connect: deployment/kubernetes/dsx-connect.md
+          - Connector Deployments (Helm):
+              - Overview: deployment/helm/index.md
+              - AWS S3: deployment/kubernetes/aws-s3.md
+              - Azure Blob Storage: deployment/kubernetes/azure-blob.md
+              - Filesystem: deployment/kubernetes/filesystem.md
+              - Google Cloud Storage: deployment/kubernetes/google-cloud-storage.md
+              - SharePoint: deployment/kubernetes/sharepoint.md
+              - Salesforce: deployment/kubernetes/salesforce.md
+              - M365 Mail: deployment/helm/m365-mail.md
+              - OneDrive: deployment/kubernetes/onedrive.md
+          - Log Collectors: deployment/log-collectors.md
   - Reference:
+      - Azure Credentials: reference/azure-credentials.md
+      - Google Cloud Credentials: reference/google-cloud-credentials.md
       - Assets & Filters: reference/assets-and-filters.md
+      - Advanced Kubernetes Network Security: reference/advanced-kubernetes-network-security.md
+      - UI Display Icons: reference/display-icons.md
+      - DSXA Python SDK: reference/dsxa-sdk.md
       - Filters (Details): reference/filters.md
+  - Case Studies:
+      - Scanning Windows Fileshares: case-studies/windows-fileshares.md
+  - Developer's Guide:
+      - Operations:
+          - Connector State KV: operations/kv-state.md
+
 plugins:
   - search
 markdown_extensions:
@@ -48,6 +92,7 @@ markdown_extensions:
       permalink: true
   - tables
   - pymdownx.details
+  - pymdownx.snippets
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid

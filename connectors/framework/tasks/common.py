@@ -73,6 +73,9 @@ def prepare_shared_files(c: Context, project_root: str, export_folder: str):
 
 def prepare_common_files(c: Context, project_slug: str, connector_name: str, version: str, project_root_dir: str,
                          export_folder: str):
+    chart_file = Path(project_root_dir) / "connectors" / project_slug / "deploy" / "helm" / "Chart.yaml"
+    _update_chart_yaml(chart_file, version)
+
     # Optionally generate dev certs once (shared across connectors)
     gen_flag = os.environ.get("GEN_DEV_CERTS", "").lower() in ("1", "true", "yes")
     if gen_flag:
@@ -205,6 +208,25 @@ def push_image(c: Context, repo: str, name: str, version: str):
 _CONNECTOR_VERSION_RE = re.compile(r"CONNECTOR_VERSION\s*=\s*[\"'](\d+\.\d+\.\d+)[\"']")
 
 
+def _update_chart_yaml(chart_path: Path, version: str):
+    if not chart_path.exists():
+        return
+    lines = chart_path.read_text().splitlines()
+    app_present = False
+    version_idx = None
+    for idx, line in enumerate(lines):
+        if line.startswith("version:"):
+            lines[idx] = f"version: {version}"
+            version_idx = idx
+        elif line.startswith("appVersion:"):
+            lines[idx] = f'appVersion: "{version}"'
+            app_present = True
+    if not app_present:
+        insert_at = version_idx + 1 if version_idx is not None else len(lines)
+        lines.insert(insert_at, f'appVersion: "{version}"')
+    chart_path.write_text("\n".join(lines) + "\n")
+
+
 def read_connector_version(version_file: str) -> str:
     path = Path(version_file)
     if not path.exists():
@@ -266,6 +288,8 @@ def helm_package_connector(c: Context, project_slug: str, out_dir: str = "dist/c
         version = read_connector_version(str(root / "connectors" / project_slug / "version.py"))
     if app_version is None:
         app_version = version
+    chart_yaml = root / "connectors" / project_slug / "deploy" / "helm" / "Chart.yaml"
+    _update_chart_yaml(chart_yaml, version)
     out_path = Path(out_dir)
     if not out_path.is_absolute():
         out_path = root / out_dir

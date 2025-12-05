@@ -8,6 +8,7 @@ import pathlib
 import re
 import shutil
 import sys
+from textwrap import dedent
 from invoke import task
 
 # Compute the project root directory
@@ -32,6 +33,27 @@ def _read_version() -> str:
 
 def _export_folder(version: str) -> str:
     return os.path.join(build_dir, f"{name}-{version}")
+
+
+def _update_chart_yaml(chart_path: pathlib.Path, version: str):
+    """Ensure Chart.yaml has version/appVersion matching the given version."""
+    if not chart_path.exists():
+        print(f"[prepare] Chart.yaml not found at {chart_path}")
+        return
+    lines = chart_path.read_text().splitlines()
+    app_present = False
+    version_idx = None
+    for idx, line in enumerate(lines):
+        if line.startswith("version:"):
+            lines[idx] = f"version: {version}"
+            version_idx = idx
+        elif line.startswith("appVersion:"):
+            lines[idx] = f'appVersion: "{version}"'
+            app_present = True
+    if not app_present:
+        insert_at = version_idx + 1 if version_idx is not None else len(lines)
+        lines.insert(insert_at, f'appVersion: "{version}"')
+    chart_path.write_text("\n".join(lines) + "\n")
 
 @task
 def bump(c):
@@ -76,22 +98,27 @@ def prepare(c):
     version = _read_version()
     export_folder = _export_folder(version)
     print(f"Preparing release files for version {version}...")
+    # Sync Helm Chart.yaml metadata with current version
+    chart_path = project_root / "deploy" / "helm" / "Chart.yaml"
+    _update_chart_yaml(chart_path, version)
     c.run(f"mkdir -p {export_folder}/dsx_connect")
     c.run(f"cp __init__.py {export_folder}/dsx_connect/")
     c.run(f"cp config.py {export_folder}/dsx_connect/")
 
     folders = [
         "app",
-        "auth",
         "connectors",
         "database",
         "dsxa_client",
         "messaging",
         "models",
-        "security",
         "taskworkers"
     ]
     for folder in folders:
+        src = pathlib.Path(folder)
+        if not src.exists():
+            print(f"[prepare] skipping missing folder: {folder}")
+            continue
         c.run(f"rsync -av --exclude '__pycache__' {folder}/ {export_folder}/dsx_connect/{folder}/")
 
     c.run(f"rsync -av --exclude '__pycache__' ../shared/ {export_folder}/shared")
@@ -100,16 +127,15 @@ def prepare(c):
     c.run(f"cp deploy/docker/Dockerfile {export_folder}/")
     c.run(f"cp deploy/docker/docker-compose-dsx-connect-all-services.yaml {export_folder}/")
     c.run(f"cp deploy/docker/docker-compose-dsxa.yaml {export_folder}/")
-    c.run(f"cp deploy/docker/README.md {export_folder}/")
     # Collector configs are embedded inline in docker-compose; no bind mounts required
     # rsyslog config is now embedded in the compose service startup; no external rsyslog.conf is bundled
     # Include Helm chart assets similar to connectors: place under export/helm
     c.run(f"rsync -av --exclude '*.tgz' deploy/helm/ {export_folder}/helm/ 2>/dev/null || true")
-    # Ensure subchart dependencies inside the export are fresh (package file:// deps into charts/*.tgz)
+    # Ensure Helm dependencies inside the export are fresh (package file:// deps into charts/*.tgz)
     try:
-        # Clean any stale packaged subcharts in the export path
+        # Clean any stale packaged dependency archives in the export path
         c.run(f"rm -f {export_folder}/helm/charts/*.tgz 2>/dev/null || true")
-        # Build dependencies in the exported helm dir so installs from the folder pick up correct subcharts
+        # Build dependencies in the exported helm dir so installs from the folder pick up correct dependency charts
         c.run(f"helm dependency build {export_folder}/helm")
     except Exception as e:
         print(f"[helm] Skipped building export chart dependencies: {e}")
@@ -125,6 +151,34 @@ def prepare(c):
     # Prefer shared certs; then dsx_connect's docker certs
     c.run(f"mkdir -p {export_folder}/certs && rsync -av ../shared/deploy/certs/ {export_folder}/certs/ 2>/dev/null || true")
     c.run(f"mkdir -p {export_folder}/certs && rsync -av deploy/docker/certs/ {export_folder}/certs/ 2>/dev/null || true")
+
+    # Bundle developer documentation (MkDocs sources) with quickstart instructions
+    c.run(
+        "rsync -av --exclude 'site' --exclude '__pycache__' ../docs/ "
+        f"{export_folder}/docs/ 2>/dev/null || true"
+    )
+    docs_readme = pathlib.Path(export_folder) / "docs" / "README.md"
+    docs_readme.parent.mkdir(parents=True, exist_ok=True)
+    docs_readme.write_text(
+        dedent(
+            """
+            # dsx-connect Docs
+
+            The files in the docs directory back the MkDocs site for dsx-connect.  You can use the markdown docs as-is (better with a markdown renderer) or even better,
+            use mkdocs to build a static site you can view on your local machine.
+
+            ## Preview locally
+
+            ```bash
+            pip install mkdocs-material
+            mkdocs serve
+            ```
+
+            Run the commands from this directory (where the mkdocs.yml file resides) to launch the documentation site at http://127.0.0.1:8000.
+            """
+        ).strip()
+        + "\n"
+    )
 
     # (Deprecated) No longer include stack helper scripts or Makefile in bundles
 
@@ -244,7 +298,8 @@ def helm_package(c, out_dir="dist/charts", version=None, app_version=None):
     if app_version is None:
         app_version = version
     chart_dir = project_root / "deploy" / "helm"
-    # Ensure no stale subchart artifacts remain (e.g., renamed/removed charts)
+    _update_chart_yaml(chart_dir / "Chart.yaml", version)
+    # Ensure no stale dependency artifacts remain (e.g., renamed/removed charts)
     charts_subdir = chart_dir / "charts"
     if charts_subdir.exists():
         # Remove old syslog and legacy dsx-collector-rsyslog folders if present

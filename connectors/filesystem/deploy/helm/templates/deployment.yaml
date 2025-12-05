@@ -81,29 +81,17 @@ spec:
           env:
             - name: DSXCONNECTOR_USE_TLS
               value: {{ .Values.tls.enabled | quote }}
-            {{- if .Values.dsxConnectEnrollment.secretName }}
+            {{- if .Values.auth_dsxconnect.enrollmentSecretName }}
             - name: DSXCONNECT_ENROLLMENT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.dsxConnectEnrollment.secretName | quote }}
-                  key: {{ .Values.dsxConnectEnrollment.key | quote }}
+                  name: {{ .Values.auth_dsxconnect.enrollmentSecretName | quote }}
+                  key: {{ .Values.auth_dsxconnect.enrollmentKey | quote }}
             {{- end }}
             - name: DSXCONNECTOR_AUTH__ENABLED
-              value: {{ .Values.auth.enabled | quote }}
+              value: {{ .Values.auth_dsxconnect.enabled | quote }}
             - name: DSXCONNECTOR_AUTH__CLOCK_SKEW_SECONDS
-              value: {{ .Values.auth.clockSkewSeconds | quote }}
-            {{- if .Values.auth.secretName }}
-            - name: DSXCONNECTOR_AUTH__HMAC_KEY_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.secretName | quote }}
-                  key: {{ .Values.auth.keyIdKey | quote }}
-            - name: DSXCONNECTOR_AUTH__HMAC_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.auth.secretName | quote }}
-                  key: {{ .Values.auth.secretKey | quote }}
-            {{- end }}
+              value: {{ .Values.auth_dsxconnect.clockSkewSeconds | quote }}
             - name: DSXCONNECTOR_CONNECTOR_URL
               value: "{{- if .Values.tls.enabled }}https://{{ else }}http://{{ end }}{{ include "filesystem-connector.fullname" . }}:{{- if .Values.tls.enabled }}443{{ else }}{{ .Values.service.port }}{{ end }}"
             - name: PYTHONUNBUFFERED
@@ -121,6 +109,13 @@ spec:
               value: {{ $val | quote }}
             {{- end }}
             {{- end }}
+          {{- if .Values.envSecretRefs }}
+          envFrom:
+            {{- range .Values.envSecretRefs }}
+            - secretRef:
+                name: {{ . | quote }}
+            {{- end }}
+          {{- end }}
           volumeMounts:
             {{- if .Values.tls.enabled }}
             - name: tls-certs

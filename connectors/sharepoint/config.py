@@ -1,6 +1,6 @@
 from typing import Optional
 
-from pydantic import HttpUrl, Field
+from pydantic import HttpUrl, Field, AliasChoices
 from pydantic_settings import BaseSettings
 from shared.models.connector_models import ItemActionEnum
 from connectors.framework.base_config import BaseConnectorConfig
@@ -59,6 +59,38 @@ class SharepointConnectorConfig(BaseConnectorConfig):
     sp_rest_row_limit: int = Field(default=5000, description="Row limit for REST RenderListDataAsStream")
     sp_list_id: Optional[str] = Field(default=None, description="List GUID for REST mode (e.g., a large custom list or Documents list)")
     sp_digest_ttl_s: int = Field(default=1500, description="Cache TTL for SharePoint request digests")
+
+    # Webhook (change notification) settings
+    sp_webhook_enabled: bool = Field(
+        default=False,
+        description="Enable Microsoft Graph change notifications to auto-trigger scans for new/updated files",
+        validation_alias=AliasChoices("DSXCONNECTOR_SP_WEBHOOK_ENABLED", "SP_WEBHOOK_ENABLED", "WEBHOOK_ENABLED"),
+    )
+    sp_webhook_change_types: str = Field(
+        default="updated",
+        description="Comma-separated Graph change types to subscribe to (e.g., 'created,updated')",
+        validation_alias=AliasChoices("DSXCONNECTOR_SP_WEBHOOK_CHANGE_TYPES", "SP_WEBHOOK_CHANGE_TYPES", "WEBHOOK_CHANGE_TYPES"),
+    )
+    sp_webhook_expire_minutes: int = Field(
+        default=60,
+        description="Subscription expiration window in minutes (Graph max varies by resource; renew happens automatically)",
+        validation_alias=AliasChoices("DSXCONNECTOR_SP_WEBHOOK_EXPIRE_MINUTES", "SP_WEBHOOK_EXPIRE_MINUTES", "WEBHOOK_EXPIRE_MINUTES"),
+    )
+    sp_webhook_refresh_seconds: int = Field(
+        default=900,
+        description="How often to reconcile/renew the Graph subscription (seconds)",
+        validation_alias=AliasChoices("DSXCONNECTOR_SP_WEBHOOK_REFRESH_SECONDS", "SP_WEBHOOK_REFRESH_SECONDS", "WEBHOOK_REFRESH_SECONDS"),
+    )
+    sp_webhook_client_state: Optional[str] = Field(
+        default=None,
+        description="Optional clientState to require on inbound notifications from Graph",
+        validation_alias=AliasChoices("DSXCONNECTOR_SP_WEBHOOK_CLIENT_STATE", "SP_WEBHOOK_CLIENT_STATE", "WEBHOOK_CLIENT_STATE"),
+    )
+    webhook_base_url: Optional[str] = Field(
+        default=None,
+        description="Public HTTPS base URL Graph should call for webhook events (defaults to connector_url)",
+        validation_alias=AliasChoices("SP_WEBHOOK_URL", "WEBHOOK_URL", "DSXCONNECTOR_WEBHOOK_URL"),
+    )
 
     ### Connector specific configuration
 

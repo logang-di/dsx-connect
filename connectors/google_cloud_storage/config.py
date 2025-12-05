@@ -1,10 +1,11 @@
-from pydantic import HttpUrl, Field
-from pydantic_settings import BaseSettings
+from pathlib import Path
+from typing import Optional
+
+from pydantic import AliasChoices, Field, HttpUrl
 
 from connectors.framework.base_config import BaseConnectorConfig
-from shared.models.connector_models import ItemActionEnum
-from pathlib import Path
 from shared.dev_env import load_devenv
+from shared.models.connector_models import ItemActionEnum
 
 
 class GoogleCloudStorageConnectorConfig(BaseConnectorConfig):
@@ -38,6 +39,38 @@ class GoogleCloudStorageConnectorConfig(BaseConnectorConfig):
 
     asset: str = "lg-test-01"
     filter: str = ""
+
+    monitor: bool = False
+    pubsub_project_id: str = Field(
+        default="",
+        description="GCP project that owns the Pub/Sub subscription used for bucket notifications.",
+        validation_alias=AliasChoices(
+            "DSXCONNECTOR_PUBSUB_PROJECT_ID",
+            "DSXCONNECTOR_GCS_PUBSUB_PROJECT_ID",
+            "GCS_PUBSUB_PROJECT_ID",
+            "PUBSUB_PROJECT_ID",
+        ),
+    )
+    pubsub_subscription: str = Field(
+        default="",
+        description="Subscription name or full resource path that delivers bucket events.",
+        validation_alias=AliasChoices(
+            "DSXCONNECTOR_PUBSUB_SUBSCRIPTION",
+            "DSXCONNECTOR_GCS_PUBSUB_SUBSCRIPTION",
+            "GCS_PUBSUB_SUBSCRIPTION",
+            "PUBSUB_SUBSCRIPTION",
+        ),
+    )
+    pubsub_endpoint: Optional[str] = Field(
+        default=None,
+        description="Optional override for the Pub/Sub API endpoint (used for emulators).",
+        validation_alias=AliasChoices(
+            "DSXCONNECTOR_PUBSUB_ENDPOINT",
+            "DSXCONNECTOR_GCS_PUBSUB_ENDPOINT",
+            "GCS_PUBSUB_ENDPOINT",
+            "PUBSUB_ENDPOINT",
+        ),
+    )
 
     # Derived at startup from `asset`. For GCS, `asset` may be either
     #   - "bucket" or

@@ -1,10 +1,10 @@
 import os
 import re
 import json
+import shutil
 from pathlib import Path
 from invoke import task, Exit
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import re as _re
 ## Note: test-related imports and tasks have been moved to test-tasks.py
 
 # ---------- Edit me ----------
@@ -16,7 +16,8 @@ CONNECTORS_CONFIG = [
     {"name": "filesystem", "enabled": True},
     {"name": "google_cloud_storage", "enabled": True},
     {"name": "sharepoint", "enabled": True},
-    {"name": "m365_mail", "enabled": False}
+    {"name": "m365_mail", "enabled": True},
+    {"name": "onedrive", "enabled": True}
 ]
 # ---------- /Edit me ----------
 
@@ -41,8 +42,30 @@ def read_version_file(path: Path) -> str:
     return match.group(1)
 
 
+def _sync_chart_yaml(chart_path: Path, version: str) -> None:
+    """Ensure Chart.yaml has matching version/appVersion."""
+    if not chart_path.exists():
+        raise FileNotFoundError(f"Chart.yaml not found at {chart_path}")
+    lines = chart_path.read_text().splitlines()
+    version_idx = None
+    app_idx = None
+    for idx, line in enumerate(lines):
+        if line.startswith("version:"):
+            lines[idx] = f"version: {version}"
+            version_idx = idx
+        elif line.startswith("appVersion:"):
+            lines[idx] = f'appVersion: "{version}"'
+            app_idx = idx
+    if app_idx is None:
+        insert_at = version_idx + 1 if version_idx is not None else len(lines)
+        lines.insert(insert_at, f'appVersion: "{version}"')
+    chart_path.write_text("\n".join(lines) + "\n")
+
+
 from connectors.framework.tasks.common import (
+    clean_export as _clean_export_impl,
     release_connector_no_bump as _release_connector_no_bump_impl,
+    zip_export as _zip_export_impl,
 )
 
 # Default OCI Helm repo base (Docker Hub requires namespace-only base; chart name becomes the repo)
@@ -53,6 +76,18 @@ DEFAULT_HELM_REPO = "oci://registry-1.docker.io/dsxconnect"
 def release_connector_nobump(c, name: str, repo_uname: str = "dsxconnect"):
     """Build+push a connector image without bumping version (CI-friendly)."""
     _release_connector_no_bump_impl(c, project_slug=name, repo_uname=repo_uname)
+
+
+@task
+def sync_core_chart_version(c):
+    """
+    Sync dsx-connect Helm Chart.yaml version/appVersion with dsx_connect/version.py.
+    Run this before packaging/pushing the core Helm chart to avoid drift.
+    """
+    version = read_version_file(CORE_VERSION_FILE)
+    chart_path = PROJECT_ROOT / "dsx_connect" / "deploy" / "helm" / "Chart.yaml"
+    _sync_chart_yaml(chart_path, version)
+    print(f"[sync] Updated {chart_path} to version {version}")
 
 
 @task
@@ -80,6 +115,10 @@ def helm_release(
     """
     import os as _os
     if include_core:
+        version = read_version_file(CORE_VERSION_FILE)
+        chart_path = PROJECT_ROOT / "dsx_connect" / "deploy" / "helm" / "Chart.yaml"
+        _sync_chart_yaml(chart_path, version)
+        print(f"[helm-release] Core Chart.yaml synced to {version}")
         print("=== Helm release: core (dsx_connect) ===")
         repo = repo or _os.environ.get("HELM_REPO", DEFAULT_HELM_REPO)
         # Pushing charts to the 'dsxconnect' namespace is safe because chart names carry a '-chart' suffix.
@@ -351,30 +390,40 @@ def bundle(c):
     def _emit_bundle_to(target_dir: Path):
         # Core compose
         core_version_local = read_version_file(CORE_VERSION_FILE)
-        core_compose_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "docker-compose-dsx-connect-all-services.yaml"
-        dsxa_compose_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "docker-compose-dsxa.yaml"
-        readme_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "README.md"
+        core_export_dir = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}"
+        core_compose_src_l = core_export_dir / "docker-compose-dsx-connect-all-services.yaml"
+        dsxa_compose_src_l = core_export_dir / "docker-compose-dsxa.yaml"
+        docs_src = core_export_dir / "docs"
         target_dir.mkdir(parents=True, exist_ok=True)
         # Create a docker/ folder and copy compose + README there
         docker_dir = target_dir / "docker"
         docker_dir.mkdir(parents=True, exist_ok=True)
         c.run(f"cp -f {core_compose_src_l} {docker_dir}/docker-compose-dsx-connect-all-services.yaml")
         c.run(f"cp -f {dsxa_compose_src_l} {docker_dir}/docker-compose-dsxa.yaml")
-        c.run(f"cp -f {readme_src_l} {docker_dir}/README.md")
         # rsyslog config is embedded in the rsyslog service startup (no external rsyslog.conf needed)
         # Append bundle quickstart to README
         _append_bundle_readme(target_dir / "README.md")
         # Copy core Helm chart (raw files) into the bundle
-        core_helm_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "helm"
+        core_helm_src_l = core_export_dir / "helm"
         if core_helm_src_l.exists():
             c.run(f"mkdir -p {target_dir}/helm && rsync -av {core_helm_src_l}/ {target_dir}/helm/")
         # Copy helper scripts and Makefile from the core export if present
-        core_scripts_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "scripts"
-        core_makefile_src_l = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}" / "Makefile"
+        core_scripts_src_l = core_export_dir / "scripts"
+        core_makefile_src_l = core_export_dir / "Makefile"
         # if core_scripts_src_l.exists():
         #     c.run(f"mkdir -p {target_dir}/scripts && rsync -av {core_scripts_src_l}/ {target_dir}/scripts/")
         # if core_makefile_src_l.exists():
         #     c.run(f"cp -f {core_makefile_src_l} {target_dir}/Makefile")
+        if docs_src.exists():
+            c.run(f"mkdir -p {target_dir}/docs && rsync -av {docs_src}/ {target_dir}/docs/")
+            # Hoist docs/README.md (site index) to bundle root for convenience
+            docs_readme = target_dir / "docs" / "README.md"
+            if docs_readme.exists():
+                c.run(f"mv -f {docs_readme} {target_dir}/README.md")
+        # Copy mkdocs config so mkdocs serve works from bundle root
+        mkdocs_src = PROJECT_ROOT / "mkdocs.yml"
+        if mkdocs_src.exists():
+            c.run(f"cp -f {mkdocs_src} {target_dir}/mkdocs.yml")
 
         # Connector composes
         if CONNECTORS_DIR.exists():
@@ -387,10 +436,6 @@ def bundle(c):
                 version = read_version_file(version_file)
                 export_dir = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}"
                 compose_primary = export_dir / f"docker-compose-{connector_name}.yaml"
-                # Prefer a Docker-specific README if present; else fall back to deploy README
-                readme_src_conn = export_dir / "docker" / "README.md"
-                if not readme_src_conn.exists():
-                    readme_src_conn = export_dir / "README.md"
                 if not export_dir.exists():
                     print(f"Warning: export dir not found for {name}: {export_dir}")
                     continue
@@ -409,13 +454,11 @@ def bundle(c):
                     if f.name == compose_primary.name:
                         continue
                     c.run(f"cp -f {f} {conn_docker_dir}/{f.name}")
-                # Copy connector README if present (to docker/ only)
-                if readme_src_conn.exists():
-                    c.run(f"cp -f {readme_src_conn} {conn_docker_dir}/README.md")
                 # Copy connector Helm chart (raw files) into the bundle
                 conn_helm_src = export_dir / "helm"
                 if conn_helm_src.exists():
                     c.run(f"mkdir -p {dest_dir}/helm && rsync -av {conn_helm_src}/ {dest_dir}/helm/")
+                _append_bundle_readme(dest_dir / "README.md")
 
     # Emit to versioned bundle directory only (no 'latest' alias)
     core_version = read_version_file(CORE_VERSION_FILE)
@@ -424,93 +467,78 @@ def bundle(c):
     print(f"Copied bundle to {versioned_dir}")
 
 
-def _text_replace(path: Path, subs: list[tuple[str, str]]):
-    """Apply a list of (pattern, replacement) regex substitutions to a file in-place."""
-    text = path.read_text()
-    for pat, repl in subs:
-        text = _re.sub(pat, repl, text, flags=_re.MULTILINE)
-    path.write_text(text)
-
-
-def _enable_core_tls(core_compose: Path):
-    # Uncomment and set TLS env vars in the dsx_connect_api service
-    subs = [
-        (r"^\s+# DSXCONNECT_USE_TLS: .*$", "      DSXCONNECT_USE_TLS: \"true\""),
-        (r"^\s+# DSXCONNECT_TLS_CERTFILE: .*$", "      DSXCONNECT_TLS_CERTFILE: \"/app/certs/dev.localhost.crt\""),
-        (r"^\s+# DSXCONNECT_TLS_KEYFILE: .*$", "      DSXCONNECT_TLS_KEYFILE: \"/app/certs/dev.localhost.key\""),
-    ]
-    _text_replace(core_compose, subs)
-
-
-def _enable_connector_tls(compose_path: Path):
-    # Force connector + dsx-connect URLs to https and enable TLS envs
-    subs = [
-        # Allow optional quote before the scheme
-        (r"(DSXCONNECTOR_CONNECTOR_URL:\s*[\"']?)http://", r"\\1https://"),
-        (r"(DSXCONNECTOR_DSX_CONNECT_URL:\s*[\"']?)http://", r"\\1https://"),
-        (r"^\s+# DSXCONNECTOR_USE_TLS: .*$", "      DSXCONNECTOR_USE_TLS: \"true\""),
-        (r"^\s+# DSXCONNECTOR_TLS_CERTFILE: .*$", "      DSXCONNECTOR_TLS_CERTFILE: \"/app/certs/dev.localhost.crt\""),
-        (r"^\s+# DSXCONNECTOR_TLS_KEYFILE: .*$", "      DSXCONNECTOR_TLS_KEYFILE: \"/app/certs/dev.localhost.key\""),
-        (r"^\s+# DSXCONNECTOR_VERIFY_TLS: .*$", "      DSXCONNECTOR_VERIFY_TLS: \"false\""),
-    ]
-    _text_replace(compose_path, subs)
-
-
 @task(pre=[generate_manifest])
-def bundle_usetls(c):
+def bundle_connector(c, name: str, zip_archive: bool = True):
     """
-    Create the bundle like `bundle`, but enable TLS everywhere:
-    - dsx-connect API: DSXCONNECT_USE_TLS=true and dev cert paths
-    - connectors: DSXCONNECTOR_USE_TLS=true, URLs switched to https, VERIFY_TLS=false by default
+    Bundle a single connector's prepared export (docker compose, docs, etc.) into dist/<connector>-bundle-<version>.
+    e.g. `inv bundle-connector --name filesystem`
+    """
+    available = set(_configured_names(include_disabled=True))
+    if name not in available:
+        raise Exit(f"Unknown connector '{name}'. Valid options: {', '.join(sorted(available))}", code=2)
 
-    Note: health checks may still use http in compose; the API will present HTTPS on port 8586.
-    """
-    bundle(c)
+    connector_slug = name.replace("_", "-") + "-connector"
+    version_file = CONNECTORS_DIR / name / "version.py"
+    if not version_file.exists():
+        raise Exit(f"No version.py found for connector '{name}'", code=2)
+    version = read_version_file(version_file)
+    export_dir = CONNECTORS_DIR / name / DEPLOYMENT_DIR / f"{connector_slug}-{version}"
+
+    if not export_dir.exists():
+        print(f"[bundle-connector] Export directory {export_dir} missing; running connector prepare…")
+        code = _run(c, "invoke prepare", cwd=CONNECTORS_DIR / name)
+        if code != 0 or not export_dir.exists():
+            raise Exit(f"Failed to prepare connector '{name}'. Ensure invoke prepare succeeds.", code=code or 1)
+
+    def _copy_bundle_contents(dest_dir: Path):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        docker_src = export_dir / "docker"
+        docker_dest = dest_dir / "docker"
+        docker_dest.mkdir(parents=True, exist_ok=True)
+        if docker_src.exists():
+            c.run(f'rsync -av "{docker_src}/" "{docker_dest}/"')
+        else:
+            for compose in export_dir.glob("docker-compose-*.yaml"):
+                shutil.copy2(compose, docker_dest / compose.name)
+        helm_src = export_dir / "helm"
+        if helm_src.exists():
+            helm_dest = dest_dir / "helm"
+            helm_dest.mkdir(parents=True, exist_ok=True)
+            c.run(f'rsync -av "{helm_src}/" "{helm_dest}/"')
+        _append_bundle_readme(dest_dir / "README.md")
+
+    target_dir = PROJECT_ROOT / DEPLOYMENT_DIR / f"{connector_slug}-bundle-{version}"
+    _clean_export_impl(str(target_dir))
+    _copy_bundle_contents(target_dir)
+    print(f"[bundle-connector] Bundle copied to {target_dir}")
+
     core_version = read_version_file(CORE_VERSION_FILE)
-    # Apply TLS transforms to the versioned bundle only
-    for bundle_dir in [PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"]:
-        # Prefer docker/ compose paths; also update root if present for back-compat
-        for core_compose in [bundle_dir / "docker" / "docker-compose-dsx-connect-all-services.yaml",
-                             bundle_dir / "docker-compose-dsx-connect-all-services.yaml"]:
-            if core_compose.exists():
-                _enable_core_tls(core_compose)
-        # connectors under the bundle
-        if bundle_dir.exists():
-            for sub in bundle_dir.iterdir():
-                if sub.is_dir():
-                    # Update any connector compose files (search recursively to include docker/)
-                    for f in sub.rglob("docker-compose-*-connector.yaml"):
-                        _enable_connector_tls(f)
+    versioned_core_dir = PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"
+    versioned_core_dir.mkdir(parents=True, exist_ok=True)
+    nested_target = versioned_core_dir / f"{connector_slug}-{version}"
+    _clean_export_impl(str(nested_target))
+    _copy_bundle_contents(nested_target)
+    print(f"[bundle-connector] Also copied bundle to {nested_target}")
 
-        # Ensure README has bundle quickstart
-        _append_bundle_readme(bundle_dir / "README.md")
+    if zip_archive:
+        _zip_export_impl(c, str(target_dir), str(target_dir.parent))
+        print(f"[bundle-connector] Created archive {target_dir}.zip")
 
-
-@task(pre=[generate_manifest], name="bundle-tls")
-def bundle_tls(c):
-    """Alias for bundle_usetls (enable TLS across API and connectors in the bundle)."""
-    bundle_usetls(c)
 
 def _append_bundle_readme(path: Path):
-    """Append a minimal bundle quickstart section to the README if not present."""
-    section_title = "\n\n## Bundle Quickstart\n"
-    if path.exists():
-        content = path.read_text()
-    else:
-        content = ""
-    if "Bundle Quickstart" in content:
+    """
+    Historically appended a Bundle Quickstart README; now a no-op.
+    Clean up legacy quickstart content if present so bundles stay lean.
+    """
+    if not path.exists():
         return
-    quickstart = f"""{section_title}
-Run the following from this bundle directory.
-
-- Up (dsx-connect):
-  - `docker compose -p $(basename $(pwd)) -f docker/docker-compose-dsx-connect-all-services.yaml up -d`
-- Up (with local DSXA too, if included):
-  - `docker compose -p $(basename $(pwd)) -f docker/docker-compose-dsxa.yaml -f docker/docker-compose-dsx-connect-all-services.yaml up -d`
-- Up (a connector):
-  - `docker compose -p $(basename $(pwd)) -f <connector-dir>/docker/docker-compose-<connector>.yaml up -d`
-
-Stop everything:
-- `docker compose -p $(basename $(pwd)) down`
-"""
-    path.write_text(content + quickstart)
+    content = path.read_text()
+    marker = "## Bundle Quickstart"
+    if marker not in content:
+        return
+    # Remove the quickstart section and trim trailing whitespace; delete file if empty.
+    before_marker = content.split(marker)[0].rstrip()
+    if before_marker:
+        path.write_text(before_marker + "\n")
+    else:
+        path.unlink()
