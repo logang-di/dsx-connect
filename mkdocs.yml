@@ -1,6 +1,10 @@
 site_name: DSX-Connect
 site_description: Modular, scalable file scanning orchestration with pluggable connectors
-repo_url: https://github.com/your-org/dsx-connect
+repo_url: https://github.com/logang-di/dsx-connect
+extra:
+  social:
+    - icon: fontawesome/brands/docker
+      link: https://hub.docker.com/repositories/dsxconnect?_gl=1*19x8nn4*_gcl_au*MTgwNTA2MDE3LjE3NTc0NTQzNzc.*_ga*MTgxNzEzODA0NC4xNzExNDc0OTE4*_ga_XJWPQMJYHQ*czE3NjQ5NjE1NTYkbzEwMCRnMSR0MTc2NDk2MTczNSRqMTgkbDAkaDA.
 theme:
   name: material
   logo: assets/dsx-connect-icon-white.svg
@@ -53,7 +57,7 @@ nav:
               - Salesforce: deployment/docker/salesforce.md
               - M365 Email: deployment/docker/m365-mail.md
               - OneDrive: deployment/docker/onedrive.md
-      - Kubernetes (advanced) Deployment:
+      - Kubernetes Deployment:
           - General Tips: deployment/kubernetes/getting-started.md
           - Quick Tutorial: deployment/kubernetes/getting-started-quickstart.md
           - Quick Tutorial 2: deployment/kubernetes/getting-started-quickstart-azure.md
