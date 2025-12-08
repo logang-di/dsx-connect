@@ -13,3 +13,4 @@ dsxa_sdk/tests/assets/samples/
 
 # PyCharm / IntelliJ
 .idea/
+/devreporeleaseplan.md
