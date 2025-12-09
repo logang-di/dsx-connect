@@ -50,9 +50,11 @@ Benefits of decoupling: resiliency (queue persistence), scale (parallel workers)
 
 ![Filesystem Connector Example](assets/filesystem-connector-example.png)
 
-## Architecture Diagram
+## Architecture Overview
 
 ![DSX‑Connect Architecture](assets/drawio/dsx-connect-design.svg)
+
+Mermaid diagram:  
 
 ```mermaid
 flowchart LR
@@ -73,7 +75,30 @@ flowchart LR
     end
 
 %% Define Core System (right column)
-    DSX["DSX-Connect Core\n(FastAPI / Celery / Redis)"]
+    subgraph DSX["DSX-Connect Core"]
+      direction TB
+      API["API (FastAPI)"]
+      SRQ["Scan Request Queue"]
+      SRW["Scan Request Worker"]
+      VQ["Verdict Queue"]
+      VW["Verdict Worker"]
+      RQ["Scan Result Queue"]
+      RW["Scan Result Worker"]
+      RSYS["rsyslog / stdout"]
+      STATS["Stats"]
+      RDB["Results DB"]
+
+      %% Force a vertical flow
+      API --> SRQ
+      SRQ --> SRW
+      SRW --> VQ
+      VQ --> VW
+      VW --> RQ
+      RQ --> RW
+      RW --> RSYS
+      RW --> STATS
+      RW --> RDB
+    end
 
 %% Relationships (bidirectional)
     AWSRepo <--> AWSConn
@@ -81,15 +106,20 @@ flowchart LR
     GCPRepo <--> GCPConn
     FSRepo <--> FSConn
 
-    AWSConn <--> DSX
-    AzureConn <--> DSX
-    GCPConn <--> DSX
-    FSConn <--> DSX
+    AWSConn <--> API
+    AzureConn <--> API
+    GCPConn <--> API
+    FSConn <--> API
 
 %% Styling for clarity
     classDef repo fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:1px;
-    classDef conn fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:1px;
-    classDef core fill:#fff3e0,stroke:#ef6
+    classDef conn fill:#e3f2fd,stroke:#1565c0,color:#0d47a1,stroke-width:1px;
+    classDef core fill:#fff3e0,stroke:#ef6,color:#9c6a00,stroke-width:1px;
+    classDef queue fill:#ffe0b2,stroke:#ef6,color:#9c6a00,stroke-width:1px;
+    classDef worker fill:#e8f5e9,stroke:#2e7d32,color:#1b5e20,stroke-width:1px;
+    class AWSConn,AzureConn,GCPConn,FSConn conn;
+    class SRQ,VQ,RQ queue;
+    class SRW,VW,RW worker;
 
 ```
 
@@ -153,8 +183,9 @@ sequenceDiagram
 
 ## Deployment Models
 
-- **Docker Compose (Test/POV):** Quick, portable evaluation for demos and development (single VM/laptop). Minimal dependencies.
-- **Kubernetes + Helm (Production):** Scalable, resilient, and portable across AKS/EKS/GKE/OKE. Integrates with HA Redis, object storage, and logging.
+- **Docker Compose:** Ideal for evaluations and minimal production deployments.
+- **Kubernetes + Helm:** Scalable, resilient, and portable across AKS/EKS/GKE/OKE. Integrates with HA Redis, object storage, and logging.  Ideal for 
+   production environments connected to multiple repositories of the same or different types, high availability a necessity.
 
 Both models use the same container images and configuration patterns, easing promotion from test to prod.
 
@@ -163,20 +194,3 @@ Both models use the same container images and configuration patterns, easing pro
 - **Retries & DLQ:** Intelligent retries per failure type (connector/DSXA/timeouts/rate limits). DLQ preserves failed tasks for reprocessing.
 - **Graceful degradation:** Continue accepting/queuing when downstreams are degraded; resume automatically.
 - **HA patterns:** Stateless workers; shared queues; multiple API replicas; connectors operate independently.
-
-## Operational Guidance (Highlights)
-
-- Use HA Redis (cluster/sentinel); spread workers; load‑balance the API.
-- Monitor: queue depths, DLQ accumulation, failure rates, connector availability, scanner response times.
-- Idempotent operations: safe retries without duplication or corruption.
-
-## Writing a New Connector
-
-1) Define connector configuration (pydantic BaseSettings).
-2) Instantiate `DSXConnector(config)` and implement handlers:
-   - `@connector.startup` / `@connector.shutdown`
-   - `@connector.full_scan` / `@connector.read_file` / `@connector.item_action`
-   - `@connector.webhook_event` / `@connector.repo_check`
-3) Run with Uvicorn: `connectors.framework.dsx_connector:connector_api`.
-
-> Tip: stream wherever feasible (enumeration, downloads) to handle very large repositories efficiently.

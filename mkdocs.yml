@@ -35,7 +35,6 @@ theme:
         name: Switch to light mode
 
 nav:
-  - Home: index.md
   - Overview: overview.md
   - Quick Start: overview-quick-start.md
   - Connectors:
@@ -46,7 +45,7 @@ nav:
       - SharePoint vs OneDrive: connectors/sharepoint-vs-onedrive.md
   - Deployment:
       - Docker Deployment:
-          - Docker Quickstart: deployment/docker/quickstart.md
+          - Docker Best Practices: deployment/docker/intro.md
           - dsx-connect (Core): deployment/docker/dsx-connect.md
           - Connector Deployments:
               - AWS S3: deployment/docker/aws-s3.md

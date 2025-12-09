@@ -85,6 +85,15 @@ Worker commands follow `celery -A dsx_connect.celery_app.celery_app worker --log
 
 ## Deployment via Docker Compose
 
+### Env file and pinned image tags
+- Copy the sample env and pin tags:  
+  ```bash
+  cp docker-compose.env.sample .env
+  # edit .env to set DSXCONNECT_IMAGE=dsxconnect/dsx-connect:<release-tag>
+  # and any DSXA/connector tags you want to pin
+  ```
+- Compose will read `.env` automatically; `docker-compose-dsx-connect-all-services.yaml` uses `DSXCONNECT_IMAGE` for the core image.
+
 1. **Create shared network (once)**  
    ```bash
    docker network create dsx-connect-network --driver bridge

@@ -382,6 +382,76 @@ def release_all(
     helm_release(c, only=only, skip=skip, include_core=True, parallel=parallel, dry_run=dry_run)
 
 
+@task
+def build_all(
+        c,
+        extra_core: str = "",
+        extra_connectors: str = "",
+        only: str = "",
+        skip: str = "",
+        parallel: bool = False,
+        dry_run: bool = False,
+):
+    """
+    Build core + selected connectors locally (no push).
+    Pass extra args to underlying build via --extra-core/--extra-connectors.
+    """
+    print("=== Building core (dsx_connect) ===")
+    code = _run(
+        c,
+        _build_core_cmd(extra=extra_core.replace("release", "build").strip() or "invoke build"),
+        cwd=PROJECT_ROOT / "dsx_connect",
+        dry_run=dry_run,
+    )
+    if code != 0:
+        raise Exit(code)
+
+    chosen = _configured_names(include_disabled=False)
+    if only:
+        wanted = {n.strip() for n in only.split(",") if n.strip()}
+        unknown = wanted - set(_configured_names(include_disabled=True))
+        if unknown:
+            raise Exit(f"Unknown connector(s) in --only: {', '.join(sorted(unknown))}", code=2)
+        chosen = [n for n in chosen if n in wanted]
+    if skip:
+        banned = {n.strip() for n in skip.split(",") if n.strip()}
+        unknown = banned - set(_configured_names(include_disabled=True))
+        if unknown:
+            raise Exit(f"Unknown connector(s) in --skip: {', '.join(sorted(unknown))}", code=2)
+        chosen = [n for n in chosen if n not in banned]
+
+    if not chosen:
+        print("[build_all] No connectors selected.")
+        return
+
+    print("=== Building connectors ===")
+    errors: list[tuple[str, int]] = []
+
+    def _build_connector(name: str) -> int:
+        cmd = f"invoke build{(' ' + extra_connectors) if extra_connectors else ''}"
+        return _run(c, cmd, cwd=CONNECTORS_DIR / name, dry_run=dry_run)
+
+    if parallel:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=min(4, len(chosen))) as ex:
+            futs = {ex.submit(_build_connector, n): n for n in chosen}
+            for fut in as_completed(futs):
+                n = futs[fut]
+                code = fut.result()
+                if code != 0:
+                    print(f"[build_all] FAILED: {n} (exit {code})")
+                    errors.append((n, code))
+    else:
+        for n in chosen:
+            code = _build_connector(n)
+            if code != 0:
+                errors.append((n, code))
+
+    if errors:
+        bad = ", ".join([f\"{n}:{code}\" for n, code in errors])
+        raise Exit(f\"Some connector builds failed: {bad}\", code=1)
+
+
 @task(pre=[generate_manifest])
 def bundle(c):
     """

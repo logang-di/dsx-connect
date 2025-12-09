@@ -37,11 +37,23 @@ Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using 
      docker compose --env-file dsxa.env -f docker/docker-compose-dsxa.yaml up -d
      ```
 
-   The compose file binds DSXA to the shared `dsx-connect-network` and exposes port `8080` on the host. Adjust the environment values above as needed; no YAML edits are required.
-4. Start DSX-Connect core (API, workers, Redis, UI):
+   The compose file binds DSXA to the shared `dsx-connect-network` and exposes port `5000` on the host. Adjust the environment values above as needed; no YAML edits are required.
+
+4. Start DSX-Connect core (API, workers, Redis, UI). 
+
+    The supplied compose file should come preconfigured to the dsx-connect image to use, but this can be overriden with
+    the DSXCONNECT_IMAGE environment setting either within the compose file or as an environment setting (or file).
+
+    Run the compose as is:
    ```bash
    docker compose -f docker/docker-compose-dsx-connect-all-services.yaml up -d
    ```
+   or, overriding the image repository and tag:
+   ```bash
+   export DSXCONNECT_IMAGE="dsxconnect/dsx-connect:<version x.y.z>"
+   docker compose -f docker/docker-compose-dsx-connect-all-services.yaml up -d
+   ```
+
 5. Confirm the stack is healthy:
    ```bash
    docker compose -f docker/docker-compose-dsx-connect-all-services.yaml ps
