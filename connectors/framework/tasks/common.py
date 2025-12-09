@@ -103,6 +103,14 @@ def prepare_common_files(c: Context, project_slug: str, connector_name: str, ver
         f"rsync -av --exclude '__pycache__' {project_root_dir}/connectors/framework/ {export_folder}/connectors/framework/ --exclude 'tasks'")
     c.run(f"touch {export_folder}/connectors/__init__.py")
 
+    # Bring root-level Dockerfile/requirements into export if present (for connectors that keep build files at root)
+    root_dockerfile = Path(project_root_dir) / "connectors" / project_slug / "Dockerfile"
+    if root_dockerfile.exists():
+        shutil.copy2(root_dockerfile, Path(export_folder) / "Dockerfile")
+    root_requirements = Path(project_root_dir) / "connectors" / project_slug / "requirements.txt"
+    if root_requirements.exists():
+        shutil.copy2(root_requirements, Path(export_folder) / "requirements.txt")
+
     # Also surface certs at export root for convenience/visibility (not required by Dockerfile)
     # Prefer shared certs; fallback to framework certs
     c.run(f"mkdir -p {export_folder}/certs && rsync -av {project_root_dir}/shared/deploy/certs/ {export_folder}/certs/ 2>/dev/null || true")

@@ -524,6 +524,9 @@ def bundle(c):
                     if f.name == compose_primary.name:
                         continue
                     c.run(f"cp -f {f} {conn_docker_dir}/{f.name}")
+                # Copy env samples if present next to compose
+                for env_sample in export_dir.glob(".env*.sample"):
+                    c.run(f"cp -f {env_sample} {conn_docker_dir}/{env_sample.name}")
                 # Copy connector Helm chart (raw files) into the bundle
                 conn_helm_src = export_dir / "helm"
                 if conn_helm_src.exists():

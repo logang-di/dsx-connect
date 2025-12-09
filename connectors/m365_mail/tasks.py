@@ -44,35 +44,16 @@ def _export_folder(version: str) -> str:
 
 
 @task
-def clean(c):
-    version = _current_version()
-    export_folder = _export_folder(version)
-    print(f"Clean {export_folder}...")
-    clean_export(export_folder)
-
-
-@task(pre=[clean])
-def prepare(c):
-    """Prepare distribution folder with necessary files."""
-    version = _current_version()
-    export_folder = _export_folder(version)
-    print(f"Preparing release files for version {version}...")
-    prepare_shared_files(c, project_root=project_root_dir, export_folder=export_folder)
-    prepare_common_files(c, project_slug, name, version, project_root_dir, export_folder)
-
-
-@task(pre=[prepare])
-def zip(c):
-    version = _current_version()
-    export_folder = _export_folder(version)
-    zip_export(c, export_folder, build_dir)
-
-
-@task(pre=[zip])
 def build(c):
+    """Build the Docker image for the current version (in-place, no staging)."""
     version = _current_version()
-    export_folder = _export_folder(version)
-    build_image(c=c, name=name, version=version, export_folder=export_folder)
+    image_tag = f"{name}:{version}"
+    dockerfile = pathlib.Path(project_root_dir) / "connectors" / project_slug / "Dockerfile"
+    context = pathlib.Path(project_root_dir)
+    if c.run(f"docker images -q {image_tag}", hide=True).stdout.strip():
+        print(f"Image {image_tag} already exists. Skipping build.")
+        return
+    c.run(f"docker build -t {image_tag} -f {dockerfile} {context}")
 
 
 @task(pre=[build])
@@ -83,12 +64,9 @@ def push(c):
 
 @task
 def release(c):
-    """Bump version and perform full image release (clean → prepare → zip → build → push)."""
+    """Bump version and perform full image + chart release (bump → build → push → helm_release)."""
     new_version = bump_patch_version("version.py")
     print(f"Bumped connector version to {new_version}")
-    clean(c)
-    prepare(c)
-    zip(c)
     build(c)
     push(c)
     # Also package and push Helm chart for this connector
@@ -140,8 +118,16 @@ def helm_release(c, repo=None, out_dir=None, charts_dir=None, version=None, app_
         import os as _os
         repo = _os.environ.get("HELM_REPO", DEFAULT_HELM_REPO)
     if out_dir is None:
-        out_dir = f"connectors/{project_slug}/{_export_folder(version)}"
+        out_dir = f"/tmp/{project_slug}-chart-{version}"
     if charts_dir is None:
         charts_dir = out_dir
     helm_package(c, out_dir=out_dir, version=version, app_version=app_version)
     helm_push_oci(c, repo=repo, charts_dir=charts_dir, version=version)
+
+
+@task
+def bump(c):
+    """Bump the patch version in version.py (no build/push)."""
+    new_version = bump_patch_version("version.py")
+    print(f"Bumped connector version to {new_version}")
+    return new_version
