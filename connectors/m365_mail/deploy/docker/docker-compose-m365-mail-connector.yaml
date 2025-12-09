@@ -1,7 +1,7 @@
 version: "3.9"
 services:
   m365_mail_connector:
-    image: dsxconnect/m365-mail-connector:latest
+    image: ${M365_IMAGE:-dsxconnect/m365-mail-connector:latest}
     command: ["python","-m","connectors.m365_mail.start","--host","0.0.0.0","--port","8650","--workers","1"]
     environment:
       PYTHONUNBUFFERED: 1

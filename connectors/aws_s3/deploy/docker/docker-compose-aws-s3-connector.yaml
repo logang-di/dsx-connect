@@ -1,6 +1,6 @@
 services:
   aws_s3_connector:
-    image: dsxconnect/aws-s3-connector:__VERSION__
+    image: ${AWS_S3_IMAGE:-dsxconnect/aws-s3-connector:latest}
     # Uncomment if you want to use docker compose to build the image
     #build:
     #  context: .

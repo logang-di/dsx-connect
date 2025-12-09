@@ -205,11 +205,21 @@ def build_image(c: Context, name: str, version: str, export_folder: str):
     c.run(f"docker build {ba} -t {image_tag} -f {dockerfile_path} {export_folder}")
 
 
-def push_image(c: Context, repo: str, name: str, version: str):
-    versioned = f"{repo}/{name}:{version}"
-    print(f"Pushing {versioned}…")
-    c.run(f"docker tag {name}:{version} {versioned}")
-    c.run(f"docker push {versioned}")
+def push_image(c: Context, repo: str, name: str, version: str, push_latest: bool = True):
+    """Push a versioned image and (optionally) also update/push :latest."""
+    versioned_local = f"{name}:{version}"
+    versioned_remote = f"{repo}/{name}:{version}"
+    print(f"Pushing {versioned_remote}…")
+    c.run(f"docker tag {versioned_local} {versioned_remote}")
+    c.run(f"docker push {versioned_remote}")
+
+    if push_latest:
+        latest_local = f"{name}:latest"
+        latest_remote = f"{repo}/{name}:latest"
+        print(f"Tagging/pushing {latest_remote}…")
+        c.run(f"docker tag {versioned_local} {latest_local}")
+        c.run(f"docker tag {versioned_local} {latest_remote}")
+        c.run(f"docker push {latest_remote}")
 
 
 # -------------------- Version helpers --------------------

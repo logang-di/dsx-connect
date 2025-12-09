@@ -1,6 +1,6 @@
 services:
   azure_blob_storage_connector:
-    image: dsxconnect/azure-blob-storage-connector:__VERSION__
+    image: ${AZURE_BLOB_IMAGE:-dsxconnect/azure-blob-storage-connector:latest}
     ports:
       - "8610:8610"
     environment:

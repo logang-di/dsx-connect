@@ -8,7 +8,7 @@ x-common-env: &common-env
   DSXCONNECT_RESULTS_DB__RETAIN: 100
   PYTHONUNBUFFERED: 1
 
-x-core-image: &core-image ${DSXCONNECT_IMAGE:-dsxconnect/dsx-connect:__VERSION__}
+x-core-image: &core-image ${DSXCONNECT_IMAGE:-dsxconnect/dsx-connect:latest}
 
 services:
   dsx_connect_api:

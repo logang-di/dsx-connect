@@ -455,89 +455,56 @@ def build_all(
 @task(pre=[generate_manifest])
 def bundle(c):
     """
-    Bundle Docker Compose files for core and each connector into their respective dist directories.
+    Bundle Docker/Helm assets for core and each connector into dist/.
+    Uses files directly from the repo (no staging/export).
     """
-    def _emit_bundle_to(target_dir: Path):
-        # Core compose
-        core_version_local = read_version_file(CORE_VERSION_FILE)
-        core_export_dir = PROJECT_ROOT / "dsx_connect" / DEPLOYMENT_DIR / f"dsx-connect-{core_version_local}"
-        core_compose_src_l = core_export_dir / "docker-compose-dsx-connect-all-services.yaml"
-        dsxa_compose_src_l = core_export_dir / "docker-compose-dsxa.yaml"
-        docs_src = core_export_dir / "docs"
-        target_dir.mkdir(parents=True, exist_ok=True)
-        # Create a docker/ folder and copy compose + README there
-        docker_dir = target_dir / "docker"
-        docker_dir.mkdir(parents=True, exist_ok=True)
-        c.run(f"cp -f {core_compose_src_l} {docker_dir}/docker-compose-dsx-connect-all-services.yaml")
-        c.run(f"cp -f {dsxa_compose_src_l} {docker_dir}/docker-compose-dsxa.yaml")
-        # rsyslog config is embedded in the rsyslog service startup (no external rsyslog.conf needed)
-        # Append bundle quickstart to README
-        _append_bundle_readme(target_dir / "README.md")
-        # Copy core Helm chart (raw files) into the bundle
-        core_helm_src_l = core_export_dir / "helm"
-        if core_helm_src_l.exists():
-            c.run(f"mkdir -p {target_dir}/helm && rsync -av {core_helm_src_l}/ {target_dir}/helm/")
-        # Copy helper scripts and Makefile from the core export if present
-        core_scripts_src_l = core_export_dir / "scripts"
-        core_makefile_src_l = core_export_dir / "Makefile"
-        # if core_scripts_src_l.exists():
-        #     c.run(f"mkdir -p {target_dir}/scripts && rsync -av {core_scripts_src_l}/ {target_dir}/scripts/")
-        # if core_makefile_src_l.exists():
-        #     c.run(f"cp -f {core_makefile_src_l} {target_dir}/Makefile")
-        if docs_src.exists():
-            c.run(f"mkdir -p {target_dir}/docs && rsync -av {docs_src}/ {target_dir}/docs/")
-            # Hoist docs/README.md (site index) to bundle root for convenience
-            docs_readme = target_dir / "docs" / "README.md"
-            if docs_readme.exists():
-                c.run(f"mv -f {docs_readme} {target_dir}/README.md")
-        # Copy mkdocs config so mkdocs serve works from bundle root
-        mkdocs_src = PROJECT_ROOT / "mkdocs.yml"
-        if mkdocs_src.exists():
-            c.run(f"cp -f {mkdocs_src} {target_dir}/mkdocs.yml")
-
-        # Connector composes
-        if CONNECTORS_DIR.exists():
-            for connector_path in CONNECTORS_DIR.iterdir():
-                name = connector_path.name
-                connector_name = name.replace("_", "-") + "-connector"
-                version_file = connector_path / "version.py"
-                if not version_file.exists():
-                    continue
-                version = read_version_file(version_file)
-                export_dir = connector_path / DEPLOYMENT_DIR / f"{connector_name}-{version}"
-                compose_primary = export_dir / f"docker-compose-{connector_name}.yaml"
-                if not export_dir.exists():
-                    print(f"Warning: export dir not found for {name}: {export_dir}")
-                    continue
-                dest_dir = target_dir / f"{connector_name}-{version}"
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                # Create docker/ folder for each connector bundle
-                conn_docker_dir = dest_dir / "docker"
-                conn_docker_dir.mkdir(parents=True, exist_ok=True)
-                # Copy primary compose if present (into docker/ only)
-                if compose_primary.exists():
-                    c.run(f"cp -f {compose_primary} {conn_docker_dir}/{compose_primary.name}")
-                else:
-                    print(f"Warning: primary compose not found for {name}: {compose_primary}")
-                # Copy any additional compose variants (e.g., NFS examples) to docker/
-                for f in export_dir.glob("docker-compose-*.yaml"):
-                    if f.name == compose_primary.name:
-                        continue
-                    c.run(f"cp -f {f} {conn_docker_dir}/{f.name}")
-                # Copy env samples if present next to compose
-                for env_sample in export_dir.glob(".env*.sample"):
-                    c.run(f"cp -f {env_sample} {conn_docker_dir}/{env_sample.name}")
-                # Copy connector Helm chart (raw files) into the bundle
-                conn_helm_src = export_dir / "helm"
-                if conn_helm_src.exists():
-                    c.run(f"mkdir -p {dest_dir}/helm && rsync -av {conn_helm_src}/ {dest_dir}/helm/")
-                _append_bundle_readme(dest_dir / "README.md")
-
-    # Emit to versioned bundle directory only (no 'latest' alias)
     core_version = read_version_file(CORE_VERSION_FILE)
-    versioned_dir = PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"
-    _emit_bundle_to(versioned_dir)
-    print(f"Copied bundle to {versioned_dir}")
+    core_bundle = PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"
+    core_bundle.mkdir(parents=True, exist_ok=True)
+    docker_dir = core_bundle / "docker"
+    docker_dir.mkdir(parents=True, exist_ok=True)
+    # Core compose + env sample
+    core_compose_src = PROJECT_ROOT / "dsx_connect" / "deploy" / "docker" / "docker-compose-dsx-connect-all-services.yaml"
+    dsxa_compose_src = PROJECT_ROOT / "dsx_connect" / "deploy" / "docker" / "docker-compose-dsxa.yaml"
+    env_core = PROJECT_ROOT / "dsx_connect" / "deploy" / "docker" / ".env.core.sample"
+    for src in (core_compose_src, dsxa_compose_src, env_core):
+        if src.exists():
+            c.run(f"cp -f {src} {docker_dir}/{src.name}")
+    _append_bundle_readme(core_bundle / "README.md")
+    # Core Helm chart
+    core_helm_src = PROJECT_ROOT / "dsx_connect" / "deploy" / "helm"
+    if core_helm_src.exists():
+        c.run(f"mkdir -p {core_bundle}/helm && rsync -av {core_helm_src}/ {core_bundle}/helm/")
+
+    # Connectors
+    if CONNECTORS_DIR.exists():
+        for connector_path in CONNECTORS_DIR.iterdir():
+            version_file = connector_path / "version.py"
+            if not version_file.exists():
+                continue
+            version = read_version_file(version_file)
+            connector_slug = connector_path.name.replace("_", "-") + "-connector"
+            dest_dir = core_bundle / f"{connector_slug}-{version}"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            conn_docker_dir = dest_dir / "docker"
+            conn_docker_dir.mkdir(parents=True, exist_ok=True)
+            deploy_dir = connector_path / "deploy"
+            # Copy compose files and env samples from deploy/docker if present
+            docker_src_dir = deploy_dir / "docker"
+            if docker_src_dir.exists():
+                for f in docker_src_dir.glob("docker-compose-*.yaml"):
+                    c.run(f"cp -f {f} {conn_docker_dir}/{f.name}")
+                for env_sample in docker_src_dir.glob(".env*.sample"):
+                    c.run(f"cp -f {env_sample} {conn_docker_dir}/{env_sample.name}")
+            else:
+                for f in deploy_dir.glob("docker-compose-*.yaml"):
+                    c.run(f"cp -f {f} {conn_docker_dir}/{f.name}")
+            # Helm chart
+            helm_src = deploy_dir / "helm"
+            if helm_src.exists():
+                c.run(f"mkdir -p {dest_dir}/helm && rsync -av {helm_src}/ {dest_dir}/helm/")
+            _append_bundle_readme(dest_dir / "README.md")
+    print(f"Copied bundle to {core_bundle}")
 
 
 @task(pre=[generate_manifest])
@@ -555,25 +522,20 @@ def bundle_connector(c, name: str, zip_archive: bool = True):
     if not version_file.exists():
         raise Exit(f"No version.py found for connector '{name}'", code=2)
     version = read_version_file(version_file)
-    export_dir = CONNECTORS_DIR / name / DEPLOYMENT_DIR / f"{connector_slug}-{version}"
-
-    if not export_dir.exists():
-        print(f"[bundle-connector] Export directory {export_dir} missing; running connector prepare…")
-        code = _run(c, "invoke prepare", cwd=CONNECTORS_DIR / name)
-        if code != 0 or not export_dir.exists():
-            raise Exit(f"Failed to prepare connector '{name}'. Ensure invoke prepare succeeds.", code=code or 1)
+    deploy_dir = CONNECTORS_DIR / name / "deploy"
 
     def _copy_bundle_contents(dest_dir: Path):
         dest_dir.mkdir(parents=True, exist_ok=True)
-        docker_src = export_dir / "docker"
         docker_dest = dest_dir / "docker"
         docker_dest.mkdir(parents=True, exist_ok=True)
+        docker_src = deploy_dir / "docker"
         if docker_src.exists():
-            c.run(f'rsync -av "{docker_src}/" "{docker_dest}/"')
+            for f in docker_src.glob("*"):
+                shutil.copy2(f, docker_dest / f.name)
         else:
-            for compose in export_dir.glob("docker-compose-*.yaml"):
+            for compose in deploy_dir.glob("docker-compose-*.yaml"):
                 shutil.copy2(compose, docker_dest / compose.name)
-        helm_src = export_dir / "helm"
+        helm_src = deploy_dir / "helm"
         if helm_src.exists():
             helm_dest = dest_dir / "helm"
             helm_dest.mkdir(parents=True, exist_ok=True)

@@ -3,8 +3,6 @@
 This project implements a DSX Connector based on the DSX Connector framework.  This README is a guide for how to
 implement, debug and create releases.
 
-Documenation for deploying a release should be in file: deploy/README.md will
-
 ## Development
 Implement the following in `salesforce_connector.py`:
 - **Startup/Shutdown:** Initialize and clean up resources.
@@ -43,7 +41,7 @@ INFO:     Application startup complete.
 
 Leave `config.py` alone — it contains sane defaults. During development, override via:
 
-- Copy `.dev.env.example` to `.dev.env` (same directory). This file is sourced automatically via `shared.dev_env.load_devenv`.
+- Use a `.dev.env` file in the same directory. This file is sourced automatically via `shared.dev_env.load_devenv`.
   - Example overrides:
     - `DSXCONNECTOR_USE_TLS=false`
     - `DSXCONNECTOR_TLS_CERTFILE=../framework/deploy/certs/dev.localhost.crt`

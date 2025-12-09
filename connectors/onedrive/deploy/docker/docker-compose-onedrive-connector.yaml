@@ -1,6 +1,6 @@
 services:
   onedrive_connector:
-    image: dsxconnect/onedrive-connector:__VERSION__
+    image: ${ONEDRIVE_IMAGE:-dsxconnect/onedrive-connector:latest}
     ports:
       - "8660:8660"
     volumes:

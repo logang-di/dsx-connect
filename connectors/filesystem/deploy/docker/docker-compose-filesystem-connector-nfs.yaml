@@ -13,7 +13,7 @@ volumes:
 
 services:
   filesystem_connector:
-    image: dsxconnect/filesystem-connector:__VERSION__
+    image: ${FILESYSTEM_IMAGE:-dsxconnect/filesystem-connector:latest}
     # Uncomment if you want to use docker compose to build the image
     #build:
     #  context: .

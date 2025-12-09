@@ -1,6 +1,6 @@
 services:
   sharepoint_connector: # if deploying two of more of this service within a single docker, this name must be unique for each instance
-    image: dsxconnect/sharepoint-connector:__VERSION__
+    image: ${SHAREPOINT_IMAGE:-dsxconnect/sharepoint-connector:latest}
     # Uncomment if you want to use docker compose to build the image
     #build:
     #  context: .
