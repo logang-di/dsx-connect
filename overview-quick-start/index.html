@@ -345,6 +345,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#1-launch-dsxa-and-dsx-connect-core" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2060,6 +2071,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#1-launch-dsxa-and-dsx-connect-core" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2130,7 +2152,14 @@
 
 
 <h1 id="quick-start-docker-compose">Quick Start (Docker Compose)<a class="headerlink" href="#quick-start-docker-compose" title="Permanent link">&para;</a></h1>
-<p>Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using Docker Compose. The steps below assume you unpacked a release bundle (<code>dsx-connect-&lt;version&gt;.tar.gz</code>) that ships with the Compose files referenced here, and that Docker Desktop (or Docker Engine with the Compose plugin) is available locally.</p>
+<p>Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using Docker Compose. \
+The steps below assume you have access to and unpacked a release bundle (<code>dsx-connect-&lt;version&gt;.tar.gz</code>) \
+that ships with the Compose files referenced here, and that Docker Desktop (or Docker Engine with the Compose plugin) is available locally.</p>
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Docker Desktop (or Docker Engine with the Compose plugin) </li>
+<li>A bundle of the DSX-Connect docker compose files (<code>dsx-connect-&lt;version&gt;.tar.gz</code>)</li>
+</ul>
 <h2 id="1-launch-dsxa-and-dsx-connect-core">1. Launch DSXA and DSX-Connect core<a class="headerlink" href="#1-launch-dsxa-and-dsx-connect-core" title="Permanent link">&para;</a></h2>
 <ol>
 <li>Unpack the release bundle and <code>cd</code> into the extracted directory.</li>
@@ -2149,11 +2178,11 @@
 <span class="nb">export</span><span class="w"> </span><span class="nv">FLAVOR</span><span class="o">=</span><span class="s2">&quot;rest,config&quot;</span><span class="w">                       </span><span class="c1"># optional override</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">NO_SSL</span><span class="o">=</span><span class="s2">&quot;true&quot;</span><span class="w">                              </span><span class="c1"># optional override</span>
 
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker/docker-compose-dsxa.yaml<span class="w"> </span>up<span class="w"> </span>-d
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose-dsxa.yaml<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div></p>
 </li>
 <li>
-<p>Option B (env file you can hand off or re-use):
+<p>Option B (env file):
      <div class="highlight"><pre><span></span><code>cat<span class="w"> </span>&gt;<span class="w"> </span>dsxa.env<span class="w"> </span><span class="s">&lt;&lt;&#39;EOF&#39;</span>
 <span class="s">APPLIANCE_URL=https://&lt;di&gt;.customers.deepinstinctweb.com</span>
 <span class="s">TOKEN=&lt;DSXA token&gt;</span>
@@ -2163,7 +2192,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 <span class="s">NO_SSL=true                              # optional override</span>
 <span class="s">EOF</span>
 
-docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>dsxa.env<span class="w"> </span>-f<span class="w"> </span>docker/docker-compose-dsxa.yaml<span class="w"> </span>up<span class="w"> </span>-d
+docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span class="w"> </span>dsxa.env<span class="w"> </span>-f<span class="w"> </span>docker-compose-dsxa.yaml<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div></p>
 </li>
 </ol>
@@ -2174,16 +2203,16 @@ docker<span class="w"> </span>compose<span class="w"> </span>--env-file<span cla
 <p>The supplied compose file should come preconfigured to the dsx-connect image to use, but this can be overriden with
 the DSXCONNECT_IMAGE environment setting either within the compose file or as an environment setting (or file).</p>
 <p>Run the compose as is:
-   <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker/docker-compose-dsx-connect-all-services.yaml<span class="w"> </span>up<span class="w"> </span>-d
+   <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose-dsx-connect-all-services.yaml<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
    or, overriding the image repository and tag:
    <div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">DSXCONNECT_IMAGE</span><span class="o">=</span><span class="s2">&quot;dsxconnect/dsx-connect:&lt;version x.y.z&gt;&quot;</span>
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker/docker-compose-dsx-connect-all-services.yaml<span class="w"> </span>up<span class="w"> </span>-d
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose-dsx-connect-all-services.yaml<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div></p>
 </li>
 <li>
 <p>Confirm the stack is healthy:
-   <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker/docker-compose-dsx-connect-all-services.yaml<span class="w"> </span>ps
+   <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose-dsx-connect-all-services.yaml<span class="w"> </span>ps
 </code></pre></div>
    You should see containers for the API (<code>dsx-connect-api</code>), workers, Redis, and supporting services. The UI becomes available at <code>http://localhost:8586/</code>.</p>
 </li>
@@ -2207,7 +2236,7 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </li>
 <li>
 <p>Bring up the connector on the shared network:
-   <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>filesystem-connector-&lt;version&gt;/docker/docker-compose-filesystem-connector.yaml<span class="w"> </span>up<span class="w"> </span>-d
+   <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>filesystem-connector-&lt;version&gt;/docker-compose-filesystem-connector.yaml<span class="w"> </span>up<span class="w"> </span>-d
 </code></pre></div>
    Within a few seconds the connector registers with DSX-Connect and starts monitoring the folder (composition sets <code>DSXCONNECTOR_MONITOR=true</code> and enables polling by default).</p>
 </li>
@@ -2233,9 +2262,9 @@ docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> 
 </ol>
 <p>Done!  You can click on scan results to see more details, or click <strong>Full Scan</strong> again to re-run the scan.</p>
 <h2 id="4-tear-down">4. Tear down<a class="headerlink" href="#4-tear-down" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker/docker-compose-dsx-connect-all-services.yaml<span class="w"> </span>down
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker/docker-compose-dsxa.yaml<span class="w"> </span>down
-docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>filesystem-connector-&lt;version&gt;/docker/docker-compose-filesystem-connector.yaml<span class="w"> </span>down
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose-dsx-connect-all-services.yaml<span class="w"> </span>down
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>docker-compose-dsxa.yaml<span class="w"> </span>down
+docker<span class="w"> </span>compose<span class="w"> </span>-f<span class="w"> </span>filesystem-connector-&lt;version&gt;/docker-compose-filesystem-connector.yaml<span class="w"> </span>down
 </code></pre></div>
 
 
