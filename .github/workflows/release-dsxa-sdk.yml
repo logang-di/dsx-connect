@@ -6,11 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag name to create/update release for (e.g., v1.2.3)"
+        description: "Tag name to create/update release for (e.g., v1.2.3). Leave blank to use dsxa-sdk-<version from pyproject.toml>."
         required: false
 
 jobs:
   build-and-upload:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -44,7 +46,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: dsxa_sdk/dist/*
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && (inputs.tag != '' && inputs.tag || format('dsxa-sdk.v{0}', steps.version.outputs.version)) || github.ref_name }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && (inputs.tag != '' && inputs.tag || format('dsxa-sdk-{0}', steps.version.outputs.version)) || github.ref_name }}
           name: ${{ github.event_name == 'workflow_dispatch' && format('dsxa-sdk {0}', steps.version.outputs.version) || github.event.release.name }}
           generate_release_notes: true
         env:

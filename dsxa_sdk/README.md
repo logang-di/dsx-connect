@@ -136,7 +136,7 @@ dsxa --context default scan-binary --file sample.pdf
 - Build artifacts: from `dsxa_sdk/` run `python -m build` to produce `dist/dsxa_sdk-<ver>-py3-none-any.whl` and `dist/dsxa_sdk-<ver>.tar.gz`.
 - Publish to PyPI/TestPyPI with `python -m twine upload dist/*` (adjust repository URL for TestPyPI or private index).
 - Direct/offline install: share the wheel (or both files) and install with `pip install /path/to/dsxa_sdk-<ver>-py3-none-any.whl`. For fully offline installs (including deps), pre-download deps via `pip download --dest vendor dsxa-sdk` and then install with `pip install --no-index --find-links vendor dsxa-sdk`.
-- GitHub Releases (optional): when you publish a GitHub release, the workflow in `.github/workflows/release-dsxa-sdk.yml` builds the wheel/sdist and attaches them to the release. You can also trigger it manually via the `workflow_dispatch` action; if you omit a tag it will default to `dsxa-sdk.v<version from pyproject.toml>`.
+- GitHub Releases (optional): when you publish a GitHub release, the workflow in `.github/workflows/release-dsxa-sdk.yml` builds the wheel/sdist and attaches them to the release. You can also trigger it manually via the `workflow_dispatch` action; if you omit a tag it will default to `dsxa-sdk-<version from pyproject.toml>`.
 
 ## Features
 - Token-based authentication (Bearer header) when enabled; omit tokens for DSXA deployments that allow anonymous access.
