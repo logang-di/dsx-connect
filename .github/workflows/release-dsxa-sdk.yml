@@ -32,12 +32,13 @@ jobs:
       - name: Read project version
         id: version
         run: |
-          python - <<'PY'
-          import tomllib, pathlib
-          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
-          print(f"version={data['project']['version']}")
-          PY | tee /tmp/version.out
-          echo "version=$(cut -d= -f2 /tmp/version.out)" >> "$GITHUB_OUTPUT"
+          version=$(python - <<'PY'
+import tomllib, pathlib
+data = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+print(data["project"]["version"])
+PY
+          )
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build wheel and sdist
         run: python -m build
