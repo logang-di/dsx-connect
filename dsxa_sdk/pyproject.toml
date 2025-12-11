@@ -1,7 +1,7 @@
 [project]
 name = "dsxa-sdk"
 version = "0.1.3"
-description = "Python SDK for Deep Instinct DSX Application Scanner (DSXA) REST APIs"
+description = "Python SDK/CLI for Deep Instinct DSX Application Scanner (DSXA) REST APIs"
 authors = [
     {name = "Deep Instinct"}
 ]

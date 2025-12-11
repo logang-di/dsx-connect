@@ -31,6 +31,7 @@ from connectors.framework.tasks.common import (  # noqa: E402
     read_connector_version,
     helm_package_connector,
     helm_push_oci_connector,
+    update_env_sample_image,
 )
 
 
@@ -66,6 +67,9 @@ def release(c):
     """Bump version and perform full image + chart release (bump → build → push → helm_release)."""
     new_version = bump_patch_version("version.py")
     print(f"Bumped connector version to {new_version}")
+    docker_env_dir = pathlib.Path(project_root_dir) / "connectors" / project_slug / "deploy" / "docker"
+    for env_sample in docker_env_dir.glob(".sample*.env"):
+        update_env_sample_image(env_sample, f"{repo_uname}/{name}", new_version)
     build(c)
     push(c)
     helm_release(c)

@@ -3,10 +3,16 @@ x-common-env: &common-env
   DSXCONNECT_WORKERS__BROKER: "redis://redis:6379/5"
   DSXCONNECT_WORKERS__BACKEND: "redis://redis:6379/6"
   DSXCONNECT_REDIS_URL: "redis://redis:6379/3"
+  DSXCONNECT_SKIP_DEVENV: "true"
+  # Syslog defaults (collector provided below)
+  DSXCONNECT_SYSLOG__SYSLOG_SERVER_URL: "syslog"
+  DSXCONNECT_SYSLOG__SYSLOG_SERVER_PORT: "514"
+  DSXCONNECT_SYSLOG__TRANSPORT: "tcp"
   # Results/stats DB config (Redis by default)
   DSXCONNECT_RESULTS_DB: "redis://redis:6379/3"
   DSXCONNECT_RESULTS_DB__RETAIN: 100
   PYTHONUNBUFFERED: 1
+  DSXCONNECT_AUTH__ENABLED: "false"
 
 x-core-image: &core-image ${DSXCONNECT_IMAGE:-dsxconnect/dsx-connect:latest}
 
@@ -36,9 +42,14 @@ services:
           - dsx-connect-api
     # Updated uvicorn command with SSE-friendly settings
     command: ["python", "dsx_connect/dsx-connect-api-start.py"]
-    # Health check for the API service
+    # Health check for the API service (liveness + readiness)
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8586/dsx-connect/test/connection"]
+      test: >
+        CMD python -c "import os,sys,urllib.request,ssl; \
+        base='https://localhost:8586' if os.environ.get('DSXCONNECT_USE_TLS','false').lower() in ('1','true','yes') else 'http://localhost:8586'; \
+        ctx=ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE; \
+        urllib.request.urlopen(base + '/dsx-connect/api/v1/test/connection', context=ctx); \
+        urllib.request.urlopen(base + '/dsx-connect/api/v1/test/dsxa-connection', context=ctx)"
       interval: 30s
       timeout: 10s
       retries: 3
@@ -89,11 +100,7 @@ services:
     environment:
       <<: *common-env
       LOG_LEVEL: debug
-      # Point workers at the in-Compose collector via the shared alias 'syslog'.
-      # If you don't run a collector (no profile enabled), unset these or point to your external collector.
-      DSXCONNECT_SYSLOG__SYSLOG_SERVER_URL: syslog
-      DSXCONNECT_SYSLOG__SYSLOG_SERVER_PORT: 514
-      DSXCONNECT_SYSLOG__TRANSPORT: tcp
+      DSX_WORKER_ROLE: "results"
       DSXCONNECT_FRONTEND__URL: "http://dsx-connect-api:8586"
     depends_on:
       redis:
@@ -145,55 +152,9 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
-    ## Uncomment for persistence if needed
-    # volumes:
-    #  - redis-data:/data
-    # command: [ "redis-server", "--appendonly", "yes" ]
-
-#  # Optional: Add nginx reverse proxy for SSE (recommended for production)
-#  nginx:
-#    image: nginx:alpine
-#    ports:
-#      - "80:80"
-#    volumes:
-#      - ./nginx-sse.conf:/etc/nginx/nginx.conf:ro
-#    depends_on:
-#      dsx_connect_api:
-#        condition: service_healthy
-#    networks:
-#      - dsx-network
-#    restart: unless-stopped
-#    # Only include if you create the nginx-sse.conf file
-
-  # Syslog collectors (choose exactly one profile: 'syslog-ng' or 'rsyslog').
-  # Both expose a network alias 'syslog' so workers can always use host 'syslog'.
-#  syslog_ng:
-#    image: balabit/syslog-ng:latest
-#    profiles: ["syslog-ng"]
-#    networks:
-#      dsx-network:
-#        aliases: ["syslog", "syslog-ng"]
-#    restart: unless-stopped
-#    user: "0:0"
-#    cap_add: ["NET_BIND_SERVICE"]
-#    entrypoint: ["/bin/sh","-lc"]
-#    command:
-#      - |
-#        cat > /etc/syslog-ng/syslog-ng.conf << 'EOF'
-#        @version: 3.38
-#        options { chain-hostnames(no); flush-lines(1); keep-hostname(yes); create-dirs(yes); };
-#        source s_net {
-#          syslog(ip("0.0.0.0") transport("tcp") port(514));
-#          syslog(ip("0.0.0.0") transport("udp") port(514));
-#        };
-#        destination d_stdout { file("/dev/stdout"); };
-#        log { source(s_net); destination(d_stdout); };
-#        EOF
-#        exec syslog-ng -F -f /etc/syslog-ng/syslog-ng.conf
 
   rsyslog:
     image: rsyslog/rsyslog
-    profiles: ["rsyslog"]
     networks:
       dsx-network:
         aliases: ["syslog", "rsyslog"]

@@ -115,6 +115,29 @@ DSXA_AUTH_TOKEN=token  # optional
 DSXA_PROTECTED_ENTITY=3  # defaults to 1 when omitted
 ```
 
+### Contexts (persisted profiles)
+
+The CLI can store multiple contexts in `~/.dsxa/config.json` (keyed under `contexts`) and fall back to the current context when flags/envs are omitted:
+
+```bash
+# Add a context (interactive prompts for base URL, token, protected entity)
+dsxa context add --name default
+
+# List and switch
+dsxa context list
+dsxa context set default
+
+# Use a specific context for a single command
+dsxa --context default scan-binary --file sample.pdf
+```
+
+## Distribution (PyPI or direct)
+
+- Build artifacts: from `dsxa_sdk/` run `python -m build` to produce `dist/dsxa_sdk-<ver>-py3-none-any.whl` and `dist/dsxa_sdk-<ver>.tar.gz`.
+- Publish to PyPI/TestPyPI with `python -m twine upload dist/*` (adjust repository URL for TestPyPI or private index).
+- Direct/offline install: share the wheel (or both files) and install with `pip install /path/to/dsxa_sdk-<ver>-py3-none-any.whl`. For fully offline installs (including deps), pre-download deps via `pip download --dest vendor dsxa-sdk` and then install with `pip install --no-index --find-links vendor dsxa-sdk`.
+- GitHub Releases (optional): when you publish a GitHub release, the workflow in `.github/workflows/release-dsxa-sdk.yml` builds the wheel/sdist and attaches them to the release. You can also trigger it manually via the `workflow_dispatch` action.
+
 ## Features
 - Token-based authentication (Bearer header) when enabled; omit tokens for DSXA deployments that allow anonymous access.
 - Optional headers: `protected_entity`, `X-Custom-Metadata`, `scan_password` (auto base64).

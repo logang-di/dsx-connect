@@ -205,7 +205,8 @@ from functools import lru_cache
 
 @lru_cache
 def get_config() -> DSXConnectConfig:
-    load_devenv(Path(__file__).with_name('.dev.env'))
+    if os.getenv("DSXCONNECT_SKIP_DEVENV", "").lower() not in ("1", "true", "yes"):
+        load_devenv(Path(__file__).with_name('.dev.env'))
     return DSXConnectConfig()
 
 @lru_cache

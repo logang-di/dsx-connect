@@ -123,7 +123,10 @@ def init_syslog_handler(syslog_host: str = "localhost", syslog_port: int = 514,
             )
         else:
             raise ValueError(f"Unsupported syslog transport: {transport}")
-        _syslog_handler.setFormatter(logging.Formatter('%(message)s'))
+        # Prefix with a static tag and newline for UDP/TCP so downstream collectors/SIEMs
+        # can easily spot dsx-connect scan events. TLS handler already appends a newline on write.
+        fmt = "dsx-connect %(message)s\n" if transport.lower() in ("udp", "tcp") else "dsx-connect %(message)s"
+        _syslog_handler.setFormatter(logging.Formatter(fmt))
         syslog_logger.addHandler(_syslog_handler)
 
         # Emit the initial “workers initialized” message to remote syslog
@@ -173,17 +176,13 @@ def log_verdict_chain(
         except Exception:
             rid = None
 
+        # Only emit the parts operators care about: the request, verdict, and action.
         log_data = {
-            "scan_request_task_id": scan_request_task_id,
-            "final_task_id": current_task_id,
             "timestamp": datetime.utcnow().isoformat(),
-            "event": "scan_result",
-            "job_id": job_id,
-            "status": status,
-            "id": rid,
+            "source": "dsx-connect",
             "scan_request": scan_result.scan_request.model_dump(),
             "verdict": scan_result.verdict.model_dump(),
-            "item_action": scan_result.item_action.model_dump()
+            "item_action": scan_result.item_action.model_dump(),
         }
         syslog_message = json.dumps(jsonable_encoder(log_data))
         syslog_logger.info(syslog_message)

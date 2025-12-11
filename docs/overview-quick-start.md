@@ -1,6 +1,12 @@
 # Quick Start (Docker Compose)
 
-Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using Docker Compose. The steps below assume you unpacked a release bundle (`dsx-connect-<version>.tar.gz`) that ships with the Compose files referenced here, and that Docker Desktop (or Docker Engine with the Compose plugin) is available locally.
+Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using Docker Compose. \
+The steps below assume you have access to and unpacked a release bundle (`dsx-connect-<version>.tar.gz`) \
+that ships with the Compose files referenced here, and that Docker Desktop (or Docker Engine with the Compose plugin) is available locally.
+
+## Prerequisites
+* Docker Desktop (or Docker Engine with the Compose plugin) 
+* A bundle of the DSX-Connect docker compose files (`dsx-connect-<version>.tar.gz`)
 
 ## 1. Launch DSXA and DSX-Connect core
 
@@ -20,10 +26,10 @@ Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using 
      export FLAVOR="rest,config"                       # optional override
      export NO_SSL="true"                              # optional override
 
-     docker compose -f docker/docker-compose-dsxa.yaml up -d
+     docker compose -f docker-compose-dsxa.yaml up -d
      ```
 
-   - Option B (env file you can hand off or re-use):
+   - Option B (env file):
      ```bash
      cat > dsxa.env <<'EOF'
      APPLIANCE_URL=https://<di>.customers.deepinstinctweb.com
@@ -34,7 +40,7 @@ Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using 
      NO_SSL=true                              # optional override
      EOF
 
-     docker compose --env-file dsxa.env -f docker/docker-compose-dsxa.yaml up -d
+     docker compose --env-file dsxa.env -f docker-compose-dsxa.yaml up -d
      ```
 
    The compose file binds DSXA to the shared `dsx-connect-network` and exposes port `5000` on the host. Adjust the environment values above as needed; no YAML edits are required.
@@ -46,17 +52,17 @@ Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using 
 
     Run the compose as is:
    ```bash
-   docker compose -f docker/docker-compose-dsx-connect-all-services.yaml up -d
+   docker compose -f docker-compose-dsx-connect-all-services.yaml up -d
    ```
    or, overriding the image repository and tag:
    ```bash
    export DSXCONNECT_IMAGE="dsxconnect/dsx-connect:<version x.y.z>"
-   docker compose -f docker/docker-compose-dsx-connect-all-services.yaml up -d
+   docker compose -f docker-compose-dsx-connect-all-services.yaml up -d
    ```
 
 5. Confirm the stack is healthy:
    ```bash
-   docker compose -f docker/docker-compose-dsx-connect-all-services.yaml ps
+   docker compose -f docker-compose-dsx-connect-all-services.yaml ps
    ```
    You should see containers for the API (`dsx-connect-api`), workers, Redis, and supporting services. The UI becomes available at `http://localhost:8586/`.
 
@@ -81,7 +87,7 @@ Spin up DSX-Connect, DSXA, and a filesystem connector on a single machine using 
 
 3. Bring up the connector on the shared network:
    ```bash
-   docker compose -f filesystem-connector-<version>/docker/docker-compose-filesystem-connector.yaml up -d
+   docker compose -f filesystem-connector-<version>/docker-compose-filesystem-connector.yaml up -d
    ```
    Within a few seconds the connector registers with DSX-Connect and starts monitoring the folder (composition sets `DSXCONNECTOR_MONITOR=true` and enables polling by default).
 
@@ -105,7 +111,7 @@ Done!  You can click on scan results to see more details, or click **Full Scan**
 ## 4. Tear down
 
 ```bash
-docker compose -f docker/docker-compose-dsx-connect-all-services.yaml down
-docker compose -f docker/docker-compose-dsxa.yaml down
-docker compose -f filesystem-connector-<version>/docker/docker-compose-filesystem-connector.yaml down
+docker compose -f docker-compose-dsx-connect-all-services.yaml down
+docker compose -f docker-compose-dsxa.yaml down
+docker compose -f filesystem-connector-<version>/docker-compose-filesystem-connector.yaml down
 ```

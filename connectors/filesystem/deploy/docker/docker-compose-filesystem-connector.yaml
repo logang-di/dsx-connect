@@ -24,6 +24,7 @@ services:
     environment:
       PYTHONUNBUFFERED: 1
       LOG_LEVEL: debug
+      DSXCONNECTOR_AUTH__ENABLED: "false"
       # Enable realtime monitoring of the asset path for new/modified files
       # Set to "true" to watch and enqueue on changes (default: false)
       DSXCONNECTOR_MONITOR: "true"

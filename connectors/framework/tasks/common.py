@@ -222,6 +222,17 @@ def push_image(c: Context, repo: str, name: str, version: str, push_latest: bool
         c.run(f"docker push {latest_remote}")
 
 
+def update_env_sample_image(env_path: Path, image_repo: str, version: str):
+    """Update an env sample file to pin the image tag to the given version."""
+    if not env_path.exists():
+        return
+    text = env_path.read_text()
+    pattern = re.compile(rf"^(?P<prefix>\s*\w*IMAGE\s*=\s*{re.escape(image_repo)}:)(?P<tag>[^\s]+)", flags=re.MULTILINE)
+    new_text, count = pattern.subn(rf"\g<prefix>{version}", text, count=1)
+    if count:
+        env_path.write_text(new_text)
+
+
 # -------------------- Version helpers --------------------
 _CONNECTOR_VERSION_RE = re.compile(r"CONNECTOR_VERSION\s*=\s*[\"'](\d+\.\d+\.\d+)[\"']")
 

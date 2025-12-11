@@ -6,6 +6,7 @@ services:
     environment:
       PYTHONUNBUFFERED: 1
       LOG_LEVEL: debug
+      DSXCONNECTOR_AUTH__ENABLED: "false"
 
       # TLS for connector server
       # DSXCONNECTOR_USE_TLS: "false"

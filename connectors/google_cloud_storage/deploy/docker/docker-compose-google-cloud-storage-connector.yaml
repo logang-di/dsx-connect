@@ -21,6 +21,7 @@ services:
     environment:
       PYTHONUNBUFFERED: 1
       LOG_LEVEL: debug
+      DSXCONNECTOR_AUTH__ENABLED: "false"
       DSXCONNECTOR_CONNECTOR_URL: http://google-cloud-storage-connector:8630 # see aliases below
       DSXCONNECTOR_DSX_CONNECT_URL: http://dsx-connect-api:8586 # note, this works if running on the same internal network on Docker as the dsx_connect_core...
       DSXCONNECTOR_ITEM_ACTION: nothing # defines what action, if any, for a connector to take on malicious files (nothing, delete, tag, move, move_tag)

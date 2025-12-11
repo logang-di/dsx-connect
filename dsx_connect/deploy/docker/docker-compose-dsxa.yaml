@@ -9,7 +9,7 @@ services:
       FLAVOR: ${FLAVOR:-rest,config}
       NO_SSL: ${NO_SSL:-true}
     ports:
-      - "5000:5000"
+      - "15000:5000"
     networks:
       - dsx-network
 

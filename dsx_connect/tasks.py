@@ -46,6 +46,16 @@ def _update_chart_yaml(chart_path: pathlib.Path, version: str):
     chart_path.write_text("\n".join(lines) + "\n")
 
 
+def _update_env_image_pin(env_path: pathlib.Path, image_repo: str, version: str):
+    if not env_path.exists():
+        return
+    text = env_path.read_text()
+    pattern = re.compile(rf"^(?P<prefix>\s*\w*IMAGE\s*=\s*{re.escape(image_repo)}:)(?P<tag>[^\s]+)", flags=re.MULTILINE)
+    new_text, count = pattern.subn(rf"\g<prefix>{version}", text, count=1)
+    if count:
+        env_path.write_text(new_text)
+
+
 @task
 def bump(c):
     """Increment the patch version in dsx_connect/version.py."""
@@ -60,6 +70,8 @@ def bump(c):
     new_line = f"{m.group(1)}{new_version}{m.group(5)}"
     filename.write_text(re.sub(pat, new_line, content))
     print(f"Bumped version to {new_version}")
+    env_sample = PROJECT_ROOT / "deploy" / "docker" / ".sample.core.env"
+    _update_env_image_pin(env_sample, f"{REPO_UNAME}/{IMAGE_NAME}", new_version)
 
 
 @task

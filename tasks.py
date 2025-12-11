@@ -30,7 +30,7 @@ VERSION_PATTERN = re.compile(r"(?:VERSION|DSX_CONNECT_VERSION|CONNECTOR_VERSION)
 PROJECT_ROOT = Path(__file__).parent.resolve()
 CORE_VERSION_FILE = PROJECT_ROOT / "dsx_connect" / "version.py"
 CONNECTORS_DIR = PROJECT_ROOT / "connectors"
-DEPLOYMENT_DIR = "dist"
+DEPLOYMENT_DIR = "docker_bundle"
 
 
 def read_version_file(path: Path) -> str:
@@ -448,33 +448,29 @@ def build_all(
                 errors.append((n, code))
 
     if errors:
-        bad = ", ".join([f\"{n}:{code}\" for n, code in errors])
-        raise Exit(f\"Some connector builds failed: {bad}\", code=1)
+        bad = ", ".join([f"{n}:{code}" for n, code in errors])
+        raise Exit(f"Some connector builds failed: {bad}", code=1)
 
 
 @task(pre=[generate_manifest])
 def bundle(c):
     """
-    Bundle Docker/Helm assets for core and each connector into dist/.
+    Bundle Docker assets for core and each connector into docker_bundle/.
     Uses files directly from the repo (no staging/export).
     """
     core_version = read_version_file(CORE_VERSION_FILE)
     core_bundle = PROJECT_ROOT / DEPLOYMENT_DIR / f"dsx-connect-{core_version}"
+    if core_bundle.exists():
+        shutil.rmtree(core_bundle)
     core_bundle.mkdir(parents=True, exist_ok=True)
-    docker_dir = core_bundle / "docker"
-    docker_dir.mkdir(parents=True, exist_ok=True)
     # Core compose + env sample
     core_compose_src = PROJECT_ROOT / "dsx_connect" / "deploy" / "docker" / "docker-compose-dsx-connect-all-services.yaml"
     dsxa_compose_src = PROJECT_ROOT / "dsx_connect" / "deploy" / "docker" / "docker-compose-dsxa.yaml"
-    env_core = PROJECT_ROOT / "dsx_connect" / "deploy" / "docker" / ".env.core.sample"
+    env_core = PROJECT_ROOT / "dsx_connect" / "deploy" / "docker" / ".sample.core.env"
     for src in (core_compose_src, dsxa_compose_src, env_core):
         if src.exists():
-            c.run(f"cp -f {src} {docker_dir}/{src.name}")
+            c.run(f"cp -f {src} {core_bundle}/{src.name}")
     _append_bundle_readme(core_bundle / "README.md")
-    # Core Helm chart
-    core_helm_src = PROJECT_ROOT / "dsx_connect" / "deploy" / "helm"
-    if core_helm_src.exists():
-        c.run(f"mkdir -p {core_bundle}/helm && rsync -av {core_helm_src}/ {core_bundle}/helm/")
 
     # Connectors
     if CONNECTORS_DIR.exists():
@@ -485,32 +481,34 @@ def bundle(c):
             version = read_version_file(version_file)
             connector_slug = connector_path.name.replace("_", "-") + "-connector"
             dest_dir = core_bundle / f"{connector_slug}-{version}"
+            if dest_dir.exists():
+                shutil.rmtree(dest_dir)
             dest_dir.mkdir(parents=True, exist_ok=True)
-            conn_docker_dir = dest_dir / "docker"
-            conn_docker_dir.mkdir(parents=True, exist_ok=True)
             deploy_dir = connector_path / "deploy"
             # Copy compose files and env samples from deploy/docker if present
             docker_src_dir = deploy_dir / "docker"
             if docker_src_dir.exists():
                 for f in docker_src_dir.glob("docker-compose-*.yaml"):
-                    c.run(f"cp -f {f} {conn_docker_dir}/{f.name}")
-                for env_sample in docker_src_dir.glob(".env*.sample"):
-                    c.run(f"cp -f {env_sample} {conn_docker_dir}/{env_sample.name}")
+                    c.run(f"cp -f {f} {dest_dir}/{f.name}")
+                for env_sample in docker_src_dir.glob(".sample.*.env"):
+                    c.run(f"cp -f {env_sample} {dest_dir}/{env_sample.name}")
             else:
                 for f in deploy_dir.glob("docker-compose-*.yaml"):
-                    c.run(f"cp -f {f} {conn_docker_dir}/{f.name}")
-            # Helm chart
-            helm_src = deploy_dir / "helm"
-            if helm_src.exists():
-                c.run(f"mkdir -p {dest_dir}/helm && rsync -av {helm_src}/ {dest_dir}/helm/")
+                    c.run(f"cp -f {f} {dest_dir}/{f.name}")
             _append_bundle_readme(dest_dir / "README.md")
+    # Tarball the whole bundle for convenience
+    tarball = core_bundle.parent / f"{core_bundle.name}.tar.gz"
+    if tarball.exists():
+        tarball.unlink()
+    c.run(f"cd {core_bundle.parent} && tar -czf {tarball.name} {core_bundle.name}")
     print(f"Copied bundle to {core_bundle}")
+    print(f"Created archive {tarball}")
 
 
 @task(pre=[generate_manifest])
 def bundle_connector(c, name: str, zip_archive: bool = True):
     """
-    Bundle a single connector's prepared export (docker compose, docs, etc.) into dist/<connector>-bundle-<version>.
+    Bundle a single connector's docker assets into docker_bundle/<connector>-bundle-<version>.
     e.g. `inv bundle-connector --name filesystem`
     """
     available = set(_configured_names(include_disabled=True))
@@ -525,21 +523,16 @@ def bundle_connector(c, name: str, zip_archive: bool = True):
     deploy_dir = CONNECTORS_DIR / name / "deploy"
 
     def _copy_bundle_contents(dest_dir: Path):
+        if dest_dir.exists():
+            shutil.rmtree(dest_dir)
         dest_dir.mkdir(parents=True, exist_ok=True)
-        docker_dest = dest_dir / "docker"
-        docker_dest.mkdir(parents=True, exist_ok=True)
         docker_src = deploy_dir / "docker"
         if docker_src.exists():
             for f in docker_src.glob("*"):
-                shutil.copy2(f, docker_dest / f.name)
+                shutil.copy2(f, dest_dir / f.name)
         else:
             for compose in deploy_dir.glob("docker-compose-*.yaml"):
-                shutil.copy2(compose, docker_dest / compose.name)
-        helm_src = deploy_dir / "helm"
-        if helm_src.exists():
-            helm_dest = dest_dir / "helm"
-            helm_dest.mkdir(parents=True, exist_ok=True)
-            c.run(f'rsync -av "{helm_src}/" "{helm_dest}/"')
+                shutil.copy2(compose, dest_dir / compose.name)
         _append_bundle_readme(dest_dir / "README.md")
 
     target_dir = PROJECT_ROOT / DEPLOYMENT_DIR / f"{connector_slug}-bundle-{version}"
