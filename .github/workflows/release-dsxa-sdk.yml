@@ -33,10 +33,10 @@ jobs:
         id: version
         run: |
           version=$(python - <<'PY'
-import tomllib, pathlib
-data = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
-print(data["project"]["version"])
-PY
+          import tomllib, pathlib
+          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text())
+          print(data["project"]["version"])
+          PY
           )
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
